@@ -1,6 +1,6 @@
 {
   "name": "@voidmob/mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Mobile proxies, non-VoIP SMS verifications, and global eSIMs for AI agents and MCP clients.",
   "mcpName": "io.github.voidmobcom/voidmob-mcp",
   "type": "module",
