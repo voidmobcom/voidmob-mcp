@@ -1,95 +1,166 @@
 import { generateId } from "../utils/validation.js";
 
+// ── SMS ──
+
 export interface SmsMessage {
-  from: string;
-  text: string;
-  receivedAt: number;
+  id: string;
+  message_text: string;
+  code: string | null;
+  received_at: number;
+  read_at: number | null;
 }
 
 export interface SmsRental {
-  rentalId: string;
-  number: string;
+  id: string;
+  displayId: string;
+  phoneNumber: string;
   service: string;
-  country: string;
+  serviceName: string;
+  rentalType: "verification" | "rental" | "dedicated";
+  duration: string | null;
+  autoRenew: boolean;
+  paidUntil: number | null;
   status: "active" | "completed" | "cancelled" | "expired";
   messages: SmsMessage[];
-  expiry: number;
+  expiresAt: number;
   createdAt: number;
-  price: number;
+  priceCents: number;
+  reuseCounter: number;
 }
+
+// ── eSIM ──
 
 export interface EsimOrder {
-  orderId: string;
+  id: string;
+  displayId: string;
   planId: string;
-  planName: string;
-  country: string;
-  dataTotal: number;
-  dataUsed: number;
+  planTitle: string;
+  countries: string[];
+  dataLimitGb: number | null;
+  dataUnlimited: boolean;
+  validityDays: number;
+  dataUsedMb: number;
   status: "active" | "completed" | "expired";
-  qrUrl: string;
-  apn: string;
-  expiry: number;
+  retailPriceUsd: number;
+  qrCodeData: string;
+  activationCode: string;
+  iccid: string;
+  isTopup: boolean;
+  parentOrderId: string | null;
+  supportsTopup: boolean;
+  expiresAt: number;
   createdAt: number;
-  price: number;
 }
 
+// ── Proxy ──
+
+export type ProxyType = "shared" | "dedicated_standard" | "dedicated_premium";
+
 export interface ProxyEntry {
-  proxyId: string;
-  type: "gb" | "dedicated";
-  country: string;
-  carrier: string;
-  credentials: { host: string; port: number; username: string; password: string };
-  bandwidthUsed: number;
-  bandwidthTotal: number;
+  id: string;
+  displayId: string;
+  type: ProxyType;
   status: "active" | "expired";
-  ip: string;
+  proxyHost: string;
+  proxyPort: number;
+  socksPort: number | null;
+  proxyUsername: string;
+  proxyPassword: string;
+  protocol: "http" | "socks5" | "vless";
+  country: string;
+  countryName: string;
+  carrier: string;
+  carrierName: string;
+  currentIp: string;
+  isOnline: boolean;
+  dataTotal: number | null;
+  dataUsed: number | null;
+  rotationInterval: number | null;
+  lastRotatedAt: number | null;
+  autoRenew: boolean;
+  expiresAt: number;
   createdAt: number;
-  price: number;
+  priceCents: number;
+  features: string[];
+  lists: ProxyList[];
 }
+
+export interface ProxyList {
+  id: string;
+  name: string;
+  login: string;
+  password: string;
+  country: string | null;
+  region: string | null;
+  city: string | null;
+  isp: string | null;
+  locationPreset: string;
+  countries: string[] | null;
+  rotationPeriod: number;
+}
+
+// ── Wallet ──
 
 export interface Deposit {
   invoiceId: string;
   amount: number;
   currency: string;
+  walletAddress: string;
+  qrCodeUrl: string;
+  cryptoAmount: string;
   status: "pending" | "completed";
+  expiresAt: number;
   createdAt: number;
 }
 
+export type TransactionType =
+  | "deposit"
+  | "sms_verification"
+  | "sms_rental"
+  | "sms_dedicated"
+  | "sms_reuse"
+  | "esim_purchase"
+  | "esim_topup"
+  | "proxy_purchase"
+  | "refund";
+
 export interface Transaction {
   id: string;
-  type: "deposit" | "sms_rental" | "esim_purchase" | "proxy_purchase" | "refund" | "topup";
-  amount: number;
+  type: TransactionType;
+  amountCents: number;
   description: string;
   createdAt: number;
 }
 
+// ── State ──
+
 class SandboxState {
-  balance = 50.0;
+  balanceCents = 5000;
   transactions: Transaction[] = [];
   smsRentals = new Map<string, SmsRental>();
   esimOrders = new Map<string, EsimOrder>();
   proxies = new Map<string, ProxyEntry>();
   deposits = new Map<string, Deposit>();
 
-  deductBalance(amount: number, type: Transaction["type"], description: string): boolean {
-    if (this.balance < amount) return false;
-    this.balance = Math.round((this.balance - amount) * 100) / 100;
+  deductBalance(cents: number, type: TransactionType, description: string): boolean {
+    if (this.balanceCents < cents) return false;
+    this.balanceCents -= cents;
     this.transactions.push({
       id: generateId("tx"),
       type,
-      amount: -amount,
+      amountCents: -cents,
       description,
       createdAt: Date.now(),
     });
     return true;
   }
 
-  addBalance(amount: number, type: Transaction["type"], description: string): void {
-    this.balance = Math.round((this.balance + amount) * 100) / 100;
+  addBalance(cents: number, type: TransactionType, description: string): void {
+    this.balanceCents += cents;
     this.transactions.push({
       id: generateId("tx"),
       type,
-      amount,
+      amountCents: cents,
       description,
       createdAt: Date.now(),
     });
@@ -100,7 +171,8 @@ class SandboxState {
     for (const deposit of this.deposits.values()) {
       if (deposit.status === "pending" && now - deposit.createdAt > 5000) {
         deposit.status = "completed";
-        this.addBalance(deposit.amount, "deposit", `Crypto deposit (${deposit.currency})`);
+        const cents = Math.round(deposit.amount * 100);
+        this.addBalance(cents, "deposit", `Crypto deposit (${deposit.currency})`);
       }
     }
   }
