@@ -131,11 +131,25 @@ export const Esim = z.object({
 });
 export type Esim = z.infer<typeof Esim>;
 
-export const EsimUsage = z.object({
-  data_used_mb: z.number(),
-  data_total_mb: z.number().nullable(),
-  expires_at: z.string(),
+export const EsimUsagePackage = z.object({
+  name: z.string(),
+  total_mb: z.number(),
+  total_gb: z.number(),
+  used_mb: z.number(),
+  used_gb: z.number(),
+  remaining_mb: z.number(),
+  remaining_gb: z.number(),
+  percent_used: z.number(),
+  activation_date: z.string().nullable(),
+  expiration_date: z.string().nullable(),
 });
+
+export const EsimUsage = z.object({
+  esim_id: z.string(),
+  esim_status: z.string(),
+  packages: z.array(EsimUsagePackage),
+});
+export type EsimUsage = z.infer<typeof EsimUsage>;
 
 // ── Proxies ──────────────────────────────────────────────────────────────────
 

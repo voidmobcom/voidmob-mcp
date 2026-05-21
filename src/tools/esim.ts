@@ -101,13 +101,14 @@ export const getEsimStatusHandler = (http: HttpClient) =>
     try {
       const [esimRaw, usageRaw] = await Promise.all([
         callApi<{ esim: unknown }>(http, "GET", `/v1/esims/${args.esim_id}`),
-        callApi<unknown>(http, "GET", `/v1/esims/${args.esim_id}/usage`).catch((e) => {
+        callApi<{ usage: unknown }>(http, "GET", `/v1/esims/${args.esim_id}/usage`).catch((e) => {
           if (e instanceof HttpError && e.code === "USAGE_UNAVAILABLE") return null;
           throw e;
         }),
       ]);
       const esim = Esim.parse(esimRaw.esim);
-      const usage = usageRaw ? EsimUsage.parse(usageRaw) : null;
+      const usage = usageRaw ? EsimUsage.parse(usageRaw.usage) : null;
+      const primaryPkg = usage?.packages[0] ?? null;
       const text = [
         `eSIM ${esim.id}`,
         ``,
@@ -115,8 +116,8 @@ export const getEsimStatusHandler = (http: HttpClient) =>
         `  Status:      ${esim.status}`,
         `  Validity:    ${esim.validity_days} days`,
         `  Expires:     ${esim.expires_at}`,
-        usage
-          ? `  Usage:       ${usage.data_used_mb.toFixed(0)} MB${usage.data_total_mb !== null ? ` / ${usage.data_total_mb.toFixed(0)} MB` : ""}`
+        primaryPkg
+          ? `  Usage:       ${primaryPkg.used_mb.toFixed(0)} MB / ${primaryPkg.total_mb.toFixed(0)} MB (${primaryPkg.percent_used}%)`
           : `  Usage:       (not yet available)`,
       ].join("\n");
       return structuredOk(text, { esim, usage });

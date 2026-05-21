@@ -53,9 +53,22 @@ function esimFixture(overrides: Partial<Record<string, unknown>> = {}) {
 
 function usageFixture(overrides: Partial<Record<string, unknown>> = {}) {
   return {
-    data_used_mb: 250,
-    data_total_mb: 5120,
-    expires_at: "2026-05-28T00:00:00Z",
+    esim_id: "esim_abc",
+    esim_status: "active",
+    packages: [
+      {
+        name: "Plan A",
+        total_mb: 5120,
+        total_gb: 5,
+        used_mb: 250,
+        used_gb: 0.24,
+        remaining_mb: 4870,
+        remaining_gb: 4.8,
+        percent_used: 4.9,
+        activation_date: "2026-05-21T00:00:00Z",
+        expiration_date: "2026-05-28T00:00:00Z",
+      },
+    ],
     ...overrides,
   };
 }
@@ -199,15 +212,20 @@ describe("get_esim_status", () => {
     http.expect("GET", "/v1/esims/esim_abc/usage", {
       status: 200,
       headers: new Headers(),
-      body: { success: true, data: usageFixture() },
+      body: { success: true, data: { usage: usageFixture() } },
     });
     const res = await getEsimStatusHandler(http)({ esim_id: "esim_abc" });
     expect(res.isError).toBeFalsy();
     expect(res.structuredContent?.esim).toMatchObject({ id: "esim_abc" });
-    expect(res.structuredContent?.usage).toMatchObject({ data_used_mb: 250 });
+    expect(res.structuredContent?.usage).toMatchObject({
+      esim_id: "esim_abc",
+      esim_status: "active",
+    });
+    expect((res.structuredContent?.usage as { packages: unknown[] }).packages).toHaveLength(1);
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
     expect(t.text).toContain("250 MB");
+    expect(t.text).toContain("5120 MB");
   });
 
   it("USAGE_UNAVAILABLE: degrades gracefully with usage=null", async () => {
