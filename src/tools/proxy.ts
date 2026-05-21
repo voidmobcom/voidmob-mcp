@@ -4,7 +4,7 @@ import { z } from "zod";
 import { HttpClient, HttpError, NetworkError } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
-import { Proxy, ProxyPlan } from "../client/types.js";
+import { Proxy, ProxyPlan, ProxyList } from "../client/types.js";
 import { mapApiError } from "../client/errors.js";
 import { structuredOk, toolError, type ToolResult } from "../utils/render.js";
 import { formatUsd } from "../utils/format.js";
@@ -219,6 +219,74 @@ export const regenerateProxyPasswordHandler = (http: HttpClient) =>
     }
   };
 
+// ── list_proxy_lists ────────────────────────────────────────────────────────
+
+export const listProxyListsHandler = (http: HttpClient) =>
+  async (args: { proxy_id: string }): Promise<ToolResult> => {
+    try {
+      const data = await callApi<{ lists: unknown[] }>(http, "GET", `/v1/proxies/${args.proxy_id}/lists`);
+      const lists = z.array(ProxyList).parse(data.lists);
+      if (lists.length === 0) return toolError(`No proxy lists on ${args.proxy_id}.`);
+      const text = [
+        `Lists for ${args.proxy_id}:`,
+        ``,
+        ...lists.map((l) =>
+          `  ${l.name} (${l.id}) preset=${l.location_preset} rotation=${l.rotation_period === 0 ? "per-request" : l.rotation_period === -1 ? "sticky" : `${l.rotation_period}s`}`,
+        ),
+      ].join("\n");
+      return structuredOk(text, { lists });
+    } catch (e) {
+      if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
+      throw e;
+    }
+  };
+
+// ── create_proxy_list ───────────────────────────────────────────────────────
+
+export const createProxyListHandler = (http: HttpClient) =>
+  async (args: {
+    proxy_id: string;
+    name: string;
+    location_preset: "world_mix" | "north_america" | "europe" | "asia" | "latin_america" | "custom";
+    countries?: string[];
+    rotation_period: number;
+  }): Promise<ToolResult> => {
+    if (args.location_preset === "custom" && (!args.countries || args.countries.length === 0)) {
+      return toolError("countries is required when location_preset='custom'.");
+    }
+    try {
+      const out = await callApi<{ list: unknown }>(http, "POST", `/v1/proxies/${args.proxy_id}/lists`, {
+        body: {
+          name: args.name,
+          location_preset: args.location_preset,
+          countries: args.countries ?? null,
+          rotation_period: args.rotation_period,
+        },
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const list = ProxyList.parse(out.list);
+      return structuredOk(`Created list ${list.id}.\n  Login: ${list.login}\n  Password: ${list.password}`, { list });
+    } catch (e) {
+      if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
+      throw e;
+    }
+  };
+
+// ── delete_proxy_list ───────────────────────────────────────────────────────
+
+export const deleteProxyListHandler = (http: HttpClient) =>
+  async (args: { proxy_id: string; list_id: string }): Promise<ToolResult> => {
+    try {
+      await callApi<unknown>(http, "DELETE", `/v1/proxies/${args.proxy_id}/lists/${args.list_id}`, {
+        idempotencyKey: newIdempotencyKey(),
+      });
+      return structuredOk(`List ${args.list_id} deleted.`, { proxy_id: args.proxy_id, list_id: args.list_id });
+    } catch (e) {
+      if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
+      throw e;
+    }
+  };
+
 // ── registration ────────────────────────────────────────────────────────────
 
 export function registerProxyTools(server: McpServer, http: HttpClient) {
@@ -278,5 +346,33 @@ export function registerProxyTools(server: McpServer, http: HttpClient) {
     regenerateProxyPasswordHandler(http),
   );
 
-  // List management tools (list_proxy_lists, create_proxy_list, delete_proxy_list) land in Task 13.
+  server.tool(
+    "list_proxy_lists",
+    "List proxy lists for a shared proxy (geo-targeted sub-pools that share the proxy's bandwidth).",
+    { proxy_id: z.string() },
+    listProxyListsHandler(http),
+  );
+
+  server.tool(
+    "create_proxy_list",
+    "Create a new geo-targeted proxy list on a shared proxy. To edit an existing list, delete it and create a new one.",
+    {
+      proxy_id: z.string(),
+      name: z.string(),
+      location_preset: z.enum(["world_mix", "north_america", "europe", "asia", "latin_america", "custom"]).default("world_mix"),
+      countries: z.array(z.string()).optional().describe("Required when location_preset='custom'."),
+      rotation_period: z.number().int().default(0).describe("0=per-request, -1=sticky, N=seconds"),
+    },
+    createProxyListHandler(http),
+  );
+
+  server.tool(
+    "delete_proxy_list",
+    "Delete a proxy list. The list's credentials stop working immediately.",
+    {
+      proxy_id: z.string(),
+      list_id: z.string(),
+    },
+    deleteProxyListHandler(http),
+  );
 }

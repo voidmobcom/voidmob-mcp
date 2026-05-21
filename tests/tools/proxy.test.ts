@@ -7,6 +7,9 @@ import {
   renewProxyHandler,
   topupProxyHandler,
   regenerateProxyPasswordHandler,
+  listProxyListsHandler,
+  createProxyListHandler,
+  deleteProxyListHandler,
 } from "../../src/tools/proxy.js";
 import { createMockHttpClient } from "../../src/testing/mock-http.js";
 
@@ -425,5 +428,132 @@ describe("regenerate_proxy_password", () => {
     expect(t.text).toContain("n3wP4ssw0rd");
     expect(t.text).toContain("proxy_xyz");
     expect(res.structuredContent?.proxy).toMatchObject({ id: "proxy_xyz" });
+  });
+});
+
+// ── list_proxy_lists ────────────────────────────────────────────────────────
+
+describe("list_proxy_lists", () => {
+  it("GET /v1/proxies/:id/lists returns the lists", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/prx_abc/lists", {
+      status: 200, headers: new Headers(),
+      body: { success: true, data: { lists: [{
+        id: "lst_1", name: "Default", login: "u", password: "p",
+        country: null, region: null, city: null, isp: null,
+        location_preset: "world_mix", countries: null, rotation_period: 0,
+      }] } },
+    });
+    const res = await listProxyListsHandler(http)({ proxy_id: "prx_abc" });
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent?.lists).toHaveLength(1);
+  });
+
+  it("empty lists → toolError", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/prx_abc/lists", {
+      status: 200, headers: new Headers(),
+      body: { success: true, data: { lists: [] } },
+    });
+    const res = await listProxyListsHandler(http)({ proxy_id: "prx_abc" });
+    expect(res.isError).toBe(true);
+  });
+
+  it("propagates request_id on PROXY_NOT_FOUND", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/prx_missing/lists", {
+      status: 404, headers: new Headers(),
+      body: { success: false, error: { code: "PROXY_NOT_FOUND", message: "Proxy not found.", request_id: "req_listmissing", docs_url: "" } },
+    });
+    const res = await listProxyListsHandler(http)({ proxy_id: "prx_missing" });
+    expect(res.isError).toBe(true);
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("req_listmissing");
+  });
+});
+
+// ── create_proxy_list ───────────────────────────────────────────────────────
+
+describe("create_proxy_list", () => {
+  function listFixture(id: string, preset = "world_mix") {
+    return {
+      id, name: "Test", login: "u", password: "p",
+      country: null, region: null, city: null, isp: null,
+      location_preset: preset, countries: null, rotation_period: 0,
+    };
+  }
+
+  it("non-custom preset → POST /v1/proxies/:id/lists with idempotency key", async () => {
+    const http = createMockHttpClient();
+    http.expect("POST", "/v1/proxies/prx_abc/lists", {
+      status: 201, headers: new Headers(),
+      body: { success: true, data: { list: listFixture("lst_new", "europe") } },
+    });
+    const res = await createProxyListHandler(http)({
+      proxy_id: "prx_abc",
+      name: "Test",
+      location_preset: "europe",
+      rotation_period: 0,
+    });
+    expect(res.isError).toBeFalsy();
+    expect(http.history[0].body).toMatchObject({ name: "Test", location_preset: "europe" });
+    expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("custom preset without countries → toolError (no HTTP call)", async () => {
+    const http = createMockHttpClient();
+    const res = await createProxyListHandler(http)({
+      proxy_id: "prx_abc",
+      name: "Test",
+      location_preset: "custom",
+      rotation_period: 0,
+    });
+    expect(res.isError).toBe(true);
+    expect(http.history).toHaveLength(0);
+  });
+
+  it("custom preset with empty countries array → toolError (no HTTP call)", async () => {
+    const http = createMockHttpClient();
+    const res = await createProxyListHandler(http)({
+      proxy_id: "prx_abc",
+      name: "Test",
+      location_preset: "custom",
+      countries: [],
+      rotation_period: 0,
+    });
+    expect(res.isError).toBe(true);
+    expect(http.history).toHaveLength(0);
+  });
+
+  it("custom preset with countries → POST", async () => {
+    const http = createMockHttpClient();
+    http.expect("POST", "/v1/proxies/prx_abc/lists", {
+      status: 201, headers: new Headers(),
+      body: { success: true, data: { list: listFixture("lst_new", "custom") } },
+    });
+    const res = await createProxyListHandler(http)({
+      proxy_id: "prx_abc",
+      name: "Test",
+      location_preset: "custom",
+      countries: ["US", "GB"],
+      rotation_period: 0,
+    });
+    expect(res.isError).toBeFalsy();
+    expect(http.history[0].body).toMatchObject({ location_preset: "custom", countries: ["US", "GB"] });
+  });
+});
+
+// ── delete_proxy_list ───────────────────────────────────────────────────────
+
+describe("delete_proxy_list", () => {
+  it("DELETE /v1/proxies/:id/lists/:lid with idempotency key", async () => {
+    const http = createMockHttpClient();
+    http.expect("DELETE", "/v1/proxies/prx_abc/lists/lst_xyz", {
+      status: 204, headers: new Headers(),
+      body: { success: true, data: null },
+    });
+    const res = await deleteProxyListHandler(http)({ proxy_id: "prx_abc", list_id: "lst_xyz" });
+    expect(res.isError).toBeFalsy();
+    expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
   });
 });
