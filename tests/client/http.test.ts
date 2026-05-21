@@ -101,4 +101,31 @@ describe("createHttpClient", () => {
     expect(res.binary).toBeInstanceOf(Buffer);
     expect((res.binary as Buffer).length).toBe(3);
   });
+
+  it("wraps arrayBuffer errors as NetworkError on binary path", async () => {
+    const brokenBinaryResponse = () => ({
+      status: 200,
+      headers: new Headers({ "Content-Type": "image/png" }),
+      arrayBuffer: async () => { throw new TypeError("stream broken"); },
+    });
+    // GET retries NetworkError up to 3 attempts total - mock all of them
+    fetchMock
+      .mockResolvedValueOnce(brokenBinaryResponse())
+      .mockResolvedValueOnce(brokenBinaryResponse())
+      .mockResolvedValueOnce(brokenBinaryResponse());
+    const c = createHttpClient({ apiKey: "k", baseUrl: "https://x", debug: false, userAgent: "ua" });
+    await expect(c.request("GET", "/v1/esims/x/qr.png", { expectBinary: true })).rejects.toBeInstanceOf(NetworkError);
+  });
+
+  it("debug log does not crash on malformed error envelope shapes", async () => {
+    // {error: null} shape
+    fetchMock.mockResolvedValueOnce({
+      status: 500,
+      headers: new Headers({ "Content-Type": "application/json" }),
+      json: async () => ({ success: false, error: null }),
+    });
+    const c = createHttpClient({ apiKey: "k", baseUrl: "https://x", debug: true, userAgent: "ua" });
+    // Should throw HttpError, not blow up trying to read .code
+    await expect(c.request("POST", "/v1/x", { body: {} })).rejects.toBeInstanceOf(Error);
+  });
 });

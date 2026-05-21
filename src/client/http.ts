@@ -89,7 +89,12 @@ export function createHttpClient(opts: ClientOpts): HttpClient {
     const elapsed = Date.now() - startMs;
 
     if (ropts.expectBinary && res.status >= 200 && res.status < 300) {
-      const ab = await res.arrayBuffer();
+      let ab: ArrayBuffer;
+      try {
+        ab = await res.arrayBuffer();
+      } catch (e) {
+        throw new NetworkError(e);
+      }
       dbg(`${method} ${path} ${res.status} (${elapsed}ms) [binary ${ab.byteLength}b]`);
       return { status: res.status, binary: Buffer.from(ab), headers: res.headers };
     }
@@ -102,9 +107,14 @@ export function createHttpClient(opts: ClientOpts): HttpClient {
     }
 
     const idem = ropts.idempotencyKey ? ` idem=${ropts.idempotencyKey.slice(0, 8)}...` : "";
-    const codeOrEmpty =
+    const errObj =
       body && typeof body === "object" && "error" in body
-        ? ` ${(body as { error: { code: string } }).error.code}`
+        ? (body as Record<string, unknown>).error
+        : undefined;
+    const codeOrEmpty =
+      errObj && typeof errObj === "object" && "code" in errObj &&
+      typeof (errObj as Record<string, unknown>).code === "string"
+        ? ` ${(errObj as { code: string }).code}`
         : "";
     dbg(`${method} ${path}${idem} ${res.status}${codeOrEmpty} (${elapsed}ms)`);
 
