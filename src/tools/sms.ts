@@ -105,21 +105,25 @@ export const rentNumberHandler = (http: HttpClient) =>
         quotedCents = svc.dedicated_price_cents;
       }
       // Commit
-      const path = kind === "verification" ? "/v1/verifications" : "/v1/rentals";
       const body: Record<string, unknown> = { service_id: args.service_id, max_price_cents: quotedCents };
       if (kind !== "verification") {
         body.kind = kind;
         if (args.duration) body.duration = args.duration;
       }
-      const created = await callApi<{ verification?: unknown; rental?: unknown }>(http, "POST", path, {
-        body,
-        idempotencyKey: newIdempotencyKey(),
-      });
       if (kind === "verification") {
+        const created = await callApi<{ verification: unknown }>(http, "POST", "/v1/verifications", {
+          body,
+          idempotencyKey: newIdempotencyKey(),
+        });
         const v = Verification.parse(created.verification);
         return structuredOk(`Verification ${v.id} created.\n\n${renderVerification(v)}`, { verification: v });
       }
-      const r = Rental.parse(created.rental);
+      // /v1/rentals returns the rental object flat (no { rental: ... } wrapper)
+      const created = await callApi<unknown>(http, "POST", "/v1/rentals", {
+        body,
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const r = Rental.parse(created);
       return structuredOk(`Rental ${r.id} created.\n\n${renderRental(r)}`, { rental: r });
     } catch (e) {
       if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
@@ -184,11 +188,11 @@ export const reRentRentalHandler = (http: HttpClient) =>
       return toolError(`re_rent_rental requires ren_xxx. Got '${id}'.`);
     }
     try {
-      const out = await callApi<{ rental: unknown }>(http, "POST", `/v1/rentals/${id}/re_rent`, {
+      const out = await callApi<unknown>(http, "POST", `/v1/rentals/${id}/re_rent`, {
         body: { duration: args.duration },
         idempotencyKey: newIdempotencyKey(),
       });
-      const r = Rental.parse(out.rental);
+      const r = Rental.parse(out);
       return structuredOk(`Re-rented ${r.id}.\n\n${renderRental(r)}`, { rental: r });
     } catch (e) {
       if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
@@ -205,11 +209,11 @@ export const toggleAutoRenewHandler = (http: HttpClient) =>
       return toolError(`toggle_auto_renew requires ren_xxx. Got '${id}'.`);
     }
     try {
-      const out = await callApi<{ rental: unknown }>(http, "POST", `/v1/rentals/${id}/auto_renew`, {
+      const out = await callApi<unknown>(http, "POST", `/v1/rentals/${id}/auto_renew`, {
         body: { auto_renew: args.auto_renew },
         idempotencyKey: newIdempotencyKey(),
       });
-      const r = Rental.parse(out.rental);
+      const r = Rental.parse(out);
       return structuredOk(`Auto-renew on ${r.id} is now ${r.auto_renew ? "on" : "off"}.`, { rental: r });
     } catch (e) {
       if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));

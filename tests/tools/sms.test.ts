@@ -217,12 +217,10 @@ describe("rent_number (rental + dedicated paths)", () => {
       body: {
         success: true,
         data: {
-          rental: {
-            id: "ren_new", kind: "rental", status: "active", phone_number: "+1...",
-            service_id: "svc_tg", service_name: "Telegram", duration: "7d",
-            charged_price_cents: 500, auto_renew: false, paid_until: "x", expires_at: "x",
-            created_at: "x", messages: [],
-          },
+          id: "ren_new", kind: "rental", status: "active", phone_number: "+1...",
+          service_id: "svc_tg", service_name: "Telegram", duration: "7d",
+          charged_price_cents: 500, auto_renew: false, paid_until: "x", expires_at: "x",
+          created_at: "x", messages: [],
         },
       },
     });
@@ -279,7 +277,7 @@ describe("reuse_number, re_rent_rental, toggle_auto_renew", () => {
     return { success: true, data: { verification: { id, status: "waiting_for_code", phone_number: "x", service_id: "x", service_name: "x", charged_price_cents: 0, expires_at: "x", can_cancel: true, created_at: "x", reuse_counter: 1, allow_reuse: false, allow_paid_reuse: false, paid_reuse_price_cents: 50, messages: [] } } };
   }
   function rntResp(id: string, auto_renew = false) {
-    return { success: true, data: { rental: { id, kind: "rental", status: "active", phone_number: "x", service_id: "x", service_name: "x", duration: "7d", charged_price_cents: 500, auto_renew, paid_until: "x", expires_at: "x", created_at: "x" } } };
+    return { success: true, data: { id, kind: "rental", status: "active", phone_number: "x", service_id: "x", service_name: "x", duration: "7d", charged_price_cents: 500, auto_renew, paid_until: "x", expires_at: "x", created_at: "x" } };
   }
 
   it("reuse_number free path → POST /v1/verifications/:id/reuse", async () => {
