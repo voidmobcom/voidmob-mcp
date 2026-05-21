@@ -136,7 +136,7 @@ describe("purchase_esim", () => {
     http.expect("GET", "/v1/esim_products/esim_product_jp7d", {
       status: 200,
       headers: new Headers(),
-      body: { success: true, data: productFixture() },
+      body: { success: true, data: { product: productFixture() } },
     });
     http.expect("POST", "/v1/esims", {
       status: 201,
@@ -160,7 +160,7 @@ describe("purchase_esim", () => {
     http.expect("GET", "/v1/esim_products/esim_product_jp7d", {
       status: 200,
       headers: new Headers(),
-      body: { success: true, data: productFixture() },
+      body: { success: true, data: { product: productFixture() } },
     });
     http.expect("POST", "/v1/esims", {
       status: 409,
@@ -282,7 +282,7 @@ describe("topup_esim", () => {
       headers: new Headers(),
       body: {
         success: true,
-        data: productFixture({ id: "esim_topup_jp_3gb", title: "Japan +3GB", retail_price_cents: 599, data_gb: 3 }),
+        data: { product: productFixture({ id: "esim_topup_jp_3gb", title: "Japan +3GB", retail_price_cents: 599, data_gb: 3 }) },
       },
     });
     http.expect("POST", "/v1/esims/esim_abc/topups", {

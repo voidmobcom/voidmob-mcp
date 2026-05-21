@@ -67,8 +67,8 @@ export const searchEsimPlansHandler = (http: HttpClient) =>
 export const purchaseEsimHandler = (http: HttpClient) =>
   async (args: { plan_id: string }): Promise<ToolResult> => {
     try {
-      const productRaw = await callApi<unknown>(http, "GET", `/v1/esim_products/${args.plan_id}`);
-      const product = EsimProduct.parse(productRaw);
+      const productResp = await callApi<{ product: unknown }>(http, "GET", `/v1/esim_products/${args.plan_id}`);
+      const product = EsimProduct.parse(productResp.product);
       const out = await callApi<{ esim: unknown }>(http, "POST", "/v1/esims", {
         body: { product_id: args.plan_id, max_price_cents: product.retail_price_cents },
         idempotencyKey: newIdempotencyKey(),
@@ -155,12 +155,12 @@ export const topupEsimHandler = (http: HttpClient) =>
         return structuredOk(text, { topups });
       }
       // Purchase path: quote-then-commit
-      const productRaw = await callApi<unknown>(
+      const productResp = await callApi<{ product: unknown }>(
         http,
         "GET",
         `/v1/esim_products/${args.topup_product_id}`,
       );
-      const product = EsimProduct.parse(productRaw);
+      const product = EsimProduct.parse(productResp.product);
       const created = await callApi<{ esim: unknown }>(
         http,
         "POST",
