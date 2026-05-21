@@ -1,30 +1,32 @@
 #!/usr/bin/env node
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+// src/index.ts
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerWalletTools } from "./sandbox/tools/wallet.js";
-import { registerSmsTools } from "./sandbox/tools/sms.js";
-import { registerEsimTools } from "./sandbox/tools/esim.js";
-import { registerProxyTools } from "./sandbox/tools/proxy.js";
-import { registerOrdersTools } from "./sandbox/tools/orders.js";
-
-function createServer() {
-  const server = new McpServer({ name: "@voidmob/mcp", version: "1.0.0" });
-  registerWalletTools(server);
-  registerSmsTools(server);
-  registerEsimTools(server);
-  registerProxyTools(server);
-  registerOrdersTools(server);
-  return server;
-}
-
-export function createSandboxServer() {
-  return createServer();
-}
+import { parseEnv, ConfigError } from "./config.js";
+import { buildLiveServer } from "./modes/live.js";
+import { buildSandboxServer } from "./modes/sandbox.js";
 
 async function main() {
-  const server = createServer();
+  let cfg;
+  try {
+    cfg = parseEnv();
+  } catch (e) {
+    if (e instanceof ConfigError) {
+      process.stderr.write(`[voidmob-mcp] config error: ${e.message}\n`);
+      process.exit(1);
+    }
+    throw e;
+  }
+
+  const server = cfg.sandbox ? buildSandboxServer() : buildLiveServer(cfg);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  process.stderr.write(`[voidmob-mcp] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+  process.exit(1);
+});
+
+// Test exports (used by tests/sandbox.smoke.test.ts in Task 15)
+export { buildSandboxServer } from "./modes/sandbox.js";
+export { buildLiveServer } from "./modes/live.js";
