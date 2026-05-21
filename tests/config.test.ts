@@ -46,10 +46,10 @@ describe("parseEnv", () => {
   });
 
   it("error message points the user to the docs URL", () => {
-    try {
-      parseEnv({});
-    } catch (e) {
-      expect((e as ConfigError).message).toContain("dashboard.voidmob.com");
-    }
+    expect(() => parseEnv({})).toThrowError(/dashboard\.voidmob\.com/);
+  });
+
+  it("empty VOIDMOB_API_KEY in live mode is treated as missing", () => {
+    expect(() => parseEnv({ VOIDMOB_API_KEY: "" })).toThrow(ConfigError);
   });
 });

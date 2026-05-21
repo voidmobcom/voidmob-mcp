@@ -22,7 +22,7 @@ export function parseEnv(env: NodeJS.ProcessEnv | Record<string, string | undefi
   const sandbox = env.VOIDMOB_SANDBOX === "1";
   const debug = env.VOIDMOB_DEBUG === "1";
   const baseUrl = env.VOIDMOB_BASE_URL ?? DEFAULT_BASE_URL;
-  const rawKey = env.VOIDMOB_API_KEY ?? null;
+  const rawKey = env.VOIDMOB_API_KEY?.trim() || null;
 
   if (sandbox) {
     return { sandbox: true, apiKey: null, baseUrl, debug };
