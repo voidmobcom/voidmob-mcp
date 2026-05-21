@@ -374,8 +374,24 @@ describe("renew_proxy", () => {
 // ── topup_proxy ─────────────────────────────────────────────────────────────
 
 describe("topup_proxy", () => {
-  it("happy path with body {data_gb} + idempotency", async () => {
+  it("quote-then-commit: GET proxy + plans, POST topup with additional_gb + tied max_price_cents + idempotency", async () => {
     const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/proxy_xyz", {
+      status: 200,
+      headers: new Headers(),
+      body: {
+        success: true,
+        data: { proxy: proxyResp("proxy_xyz") },
+      },
+    });
+    http.expect("GET", "/v1/proxy_plans", {
+      status: 200,
+      headers: new Headers(),
+      body: {
+        success: true,
+        data: { proxy_plans: [planFixture()] },
+      },
+    });
     http.expect("POST", "/v1/proxies/proxy_xyz/topup", {
       status: 200,
       headers: new Headers(),
@@ -383,20 +399,22 @@ describe("topup_proxy", () => {
         success: true,
         data: {
           proxy: proxyResp("proxy_xyz", { data_gb_total: 10 }),
-          charged_price_cents: 599,
+          charged_price_cents: 1499,
         },
       },
     });
-    const res = await topupProxyHandler(http)({ proxy_id: "proxy_xyz", data_gb: 5 });
+    const res = await topupProxyHandler(http)({ proxy_id: "proxy_xyz", additional_gb: 5 });
     expect(res.isError).toBeFalsy();
-    expect(http.history).toHaveLength(1);
-    expect(http.history[0].method).toBe("POST");
-    expect(http.history[0].body).toMatchObject({ data_gb: 5 });
-    expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(http.history).toHaveLength(3);
+    expect(http.history[2].method).toBe("POST");
+    expect(http.history[2].path).toBe("/v1/proxies/proxy_xyz/topup");
+    // Plan: quoted=1499c for 5GB → perGb=299.8 → 5GB topup = round(1499) = 1499
+    expect(http.history[2].body).toMatchObject({ additional_gb: 5, max_price_cents: 1499 });
+    expect(http.history[2].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
     expect(t.text).toContain("5 GB");
-    expect(t.text).toContain("$5.99");
+    expect(t.text).toContain("$14.99");
     expect(res.structuredContent?.proxy).toMatchObject({ id: "proxy_xyz", data_gb_total: 10 });
   });
 });

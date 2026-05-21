@@ -177,21 +177,44 @@ export const renewProxyHandler = (http: HttpClient) =>
 // ── topup_proxy ─────────────────────────────────────────────────────────────
 
 export const topupProxyHandler = (http: HttpClient) =>
-  async (args: { proxy_id: string; data_gb: number }): Promise<ToolResult> => {
+  async (args: { proxy_id: string; additional_gb: number }): Promise<ToolResult> => {
     try {
+      // Quote: derive per-GB price from the proxy's original plan, then tie
+      // max_price_cents to (perGb * additional_gb) so we never pay above quote.
+      const coreRaw = await callApi<{ proxy: unknown }>(
+        http,
+        "GET",
+        `/v1/proxies/${args.proxy_id}`,
+      );
+      const proxy = Proxy.parse(coreRaw.proxy);
+      if (!proxy.plan_id) {
+        return toolError(`Proxy ${args.proxy_id} has no plan_id; top-up not available.`);
+      }
+      const plansData = await callApi<{ proxy_plans: unknown[] }>(
+        http,
+        "GET",
+        `/v1/proxy_plans`,
+      );
+      const plans = z.array(ProxyPlan).parse(plansData.proxy_plans);
+      const plan = plans.find((p) => p.id === proxy.plan_id);
+      if (!plan) return toolError(`Original plan ${proxy.plan_id} no longer available.`);
+      if (!plan.data_gb || plan.data_gb <= 0) {
+        return toolError(`Plan ${plan.id} has no GB allowance; top-up not available.`);
+      }
+      const maxPriceCents = Math.round((plan.quoted_price_cents / plan.data_gb) * args.additional_gb);
       const out = await callApi<{ proxy: unknown; charged_price_cents: number }>(
         http,
         "POST",
         `/v1/proxies/${args.proxy_id}/topup`,
         {
-          body: { data_gb: args.data_gb },
+          body: { additional_gb: args.additional_gb, max_price_cents: maxPriceCents },
           idempotencyKey: newIdempotencyKey(),
         },
       );
-      const proxy = Proxy.parse(out.proxy);
+      const refreshed = Proxy.parse(out.proxy);
       return structuredOk(
-        `Topped up ${args.proxy_id} by ${args.data_gb} GB (${formatUsd(out.charged_price_cents)}).`,
-        { proxy },
+        `Topped up ${args.proxy_id} by ${args.additional_gb} GB (${formatUsd(out.charged_price_cents)}).`,
+        { proxy: refreshed },
       );
     } catch (e) {
       if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
@@ -331,10 +354,10 @@ export function registerProxyTools(server: McpServer, http: HttpClient) {
 
   server.tool(
     "topup_proxy",
-    "Add more data to a shared proxy plan.",
+    "Add more data to a shared proxy plan. Quote-then-commit: derives per-GB price from the proxy's original plan and ties max_price_cents to (per_gb * additional_gb).",
     {
       proxy_id: z.string(),
-      data_gb: z.number().int().positive(),
+      additional_gb: z.number().int().positive(),
     },
     topupProxyHandler(http),
   );
