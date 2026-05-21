@@ -13,6 +13,13 @@ import {
 import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { formatUsd, formatTimeRemaining } from "../utils/format.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
+import {
+  VER_PREFIX,
+  REN_PREFIX,
+  isVerificationId,
+  isRentalId,
+  INVALID_RENTAL_ID,
+} from "../constants/rental-id.js";
 
 // ── search_sms_services ─────────────────────────────────────────────────────
 
@@ -43,17 +50,17 @@ export const searchSmsServicesHandler = (http: HttpClient) =>
 export const getRentalHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { rental_id: string }): Promise<ToolResult> => {
     const id = args.rental_id;
-    if (id.startsWith("ver_")) {
+    if (isVerificationId(id)) {
       const raw = await callApi<{ verification: unknown }>(http, "GET", `/v1/verifications/${id}`);
       const v = Verification.parse(raw.verification);
       return structuredOk(renderVerification(v), { verification: v });
     }
-    if (id.startsWith("ren_")) {
+    if (isRentalId(id)) {
       const raw = await callApi<unknown>(http, "GET", `/v1/rentals/${id}`);
       const r = Rental.parse(raw);
       return structuredOk(renderRental(r), { rental: r });
     }
-    return toolError(`Invalid rental_id '${id}'. Expected ver_xxx (verification) or ren_xxx (long-term/dedicated).`);
+    return toolError(INVALID_RENTAL_ID(id));
   });
 
 // ── rent_number ─────────────────────────────────────────────────────────────
@@ -115,21 +122,21 @@ export const rentNumberHandler = (http: HttpClient) =>
 export const cancelRentalHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { rental_id: string }): Promise<ToolResult> => {
     const id = args.rental_id;
-    if (id.startsWith("ver_")) {
+    if (isVerificationId(id)) {
       const out = await callApi<{ verification: unknown }>(http, "POST", `/v1/verifications/${id}/cancel`, {
         idempotencyKey: newIdempotencyKey(),
       });
       const v = Verification.parse(out.verification);
       return structuredOk(`Verification ${v.id} cancelled.`, { verification: v });
     }
-    if (id.startsWith("ren_")) {
+    if (isRentalId(id)) {
       const out = await callApi<unknown>(http, "DELETE", `/v1/rentals/${id}`, {
         idempotencyKey: newIdempotencyKey(),
       });
       const r = Rental.parse(out);
       return structuredOk(`Rental ${r.id} cancelled.`, { rental: r });
     }
-    return toolError(`Invalid rental_id '${id}'. Expected ver_xxx or ren_xxx.`);
+    return toolError(INVALID_RENTAL_ID(id));
   });
 
 // ── reuse_number ────────────────────────────────────────────────────────────
@@ -137,8 +144,8 @@ export const cancelRentalHandler = (http: HttpClient) =>
 export const reuseNumberHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { rental_id: string; paid?: boolean }): Promise<ToolResult> => {
     const id = args.rental_id;
-    if (!id.startsWith("ver_")) {
-      return toolError(`reuse_number requires a verification id (ver_xxx). Got '${id}'.`);
+    if (!isVerificationId(id)) {
+      return toolError(`reuse_number requires a verification id (${VER_PREFIX}xxx). Got '${id}'.`);
     }
     const path = args.paid ? `/v1/verifications/${id}/reuse/paid` : `/v1/verifications/${id}/reuse`;
     const out = await callApi<{ verification: unknown }>(http, "POST", path, {
@@ -153,8 +160,8 @@ export const reuseNumberHandler = (http: HttpClient) =>
 export const reRentRentalHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { rental_id: string; duration: "3d" | "7d" | "14d" | "30d" }): Promise<ToolResult> => {
     const id = args.rental_id;
-    if (!id.startsWith("ren_")) {
-      return toolError(`re_rent_rental requires ren_xxx. Got '${id}'.`);
+    if (!isRentalId(id)) {
+      return toolError(`re_rent_rental requires ${REN_PREFIX}xxx. Got '${id}'.`);
     }
     const out = await callApi<unknown>(http, "POST", `/v1/rentals/${id}/re_rent`, {
       body: { duration: args.duration },
@@ -169,8 +176,8 @@ export const reRentRentalHandler = (http: HttpClient) =>
 export const toggleAutoRenewHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { rental_id: string; auto_renew: boolean }): Promise<ToolResult> => {
     const id = args.rental_id;
-    if (!id.startsWith("ren_")) {
-      return toolError(`toggle_auto_renew requires ren_xxx. Got '${id}'.`);
+    if (!isRentalId(id)) {
+      return toolError(`toggle_auto_renew requires ${REN_PREFIX}xxx. Got '${id}'.`);
     }
     const out = await callApi<unknown>(http, "POST", `/v1/rentals/${id}/auto_renew`, {
       body: { auto_renew: args.auto_renew },
