@@ -6,6 +6,40 @@ import { callApi } from "../client/call-api.js";
 import { GeoCountry, GeoRegion, GeoCity, GeoIsp } from "../client/types.js";
 import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 
+interface GeoKind {
+  key: "isps" | "cities" | "regions" | "countries";
+  schema: z.ZodTypeAny;
+  label: string;
+  fmt: (item: never) => string;
+}
+
+const KINDS: ReadonlyArray<GeoKind> = [
+  {
+    key: "isps",
+    schema: GeoIsp,
+    label: "ISP(s)",
+    fmt: ((i: z.infer<typeof GeoIsp>) => `  ${i.name} (${i.available_nodes} nodes)`) as (item: never) => string,
+  },
+  {
+    key: "cities",
+    schema: GeoCity,
+    label: "cities",
+    fmt: ((c: z.infer<typeof GeoCity>) => `  ${c.name} (${c.code}) ${c.available_nodes} nodes`) as (item: never) => string,
+  },
+  {
+    key: "regions",
+    schema: GeoRegion,
+    label: "regions",
+    fmt: ((r: z.infer<typeof GeoRegion>) => `  ${r.name} (${r.code}) ${r.available_nodes} nodes`) as (item: never) => string,
+  },
+  {
+    key: "countries",
+    schema: GeoCountry,
+    label: "countries",
+    fmt: ((c: z.infer<typeof GeoCountry>) => `  ${c.name} (${c.code}) ${c.available_nodes} nodes`) as (item: never) => string,
+  },
+];
+
 export const getGeoHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { country?: string; region?: string; city?: string }): Promise<ToolResult> => {
     const q = new URLSearchParams();
@@ -15,33 +49,14 @@ export const getGeoHandler = (http: HttpClient) =>
     const path = `/v1/geo${q.toString() ? `?${q}` : ""}`;
     const data = await callApi<Record<string, unknown[]>>(http, "GET", path);
 
-    if (data.isps) {
-      const isps = z.array(GeoIsp).parse(data.isps);
-      return structuredOk(
-        `${isps.length} ISP(s):\n${isps.map((i) => `  ${i.name} (${i.available_nodes} nodes)`).join("\n")}`,
-        { isps },
-      );
-    }
-    if (data.cities) {
-      const cities = z.array(GeoCity).parse(data.cities);
-      return structuredOk(
-        `${cities.length} cities:\n${cities.map((c) => `  ${c.name} (${c.code}) ${c.available_nodes} nodes`).join("\n")}`,
-        { cities },
-      );
-    }
-    if (data.regions) {
-      const regions = z.array(GeoRegion).parse(data.regions);
-      return structuredOk(
-        `${regions.length} regions:\n${regions.map((r) => `  ${r.name} (${r.code}) ${r.available_nodes} nodes`).join("\n")}`,
-        { regions },
-      );
-    }
-    if (data.countries) {
-      const countries = z.array(GeoCountry).parse(data.countries);
-      return structuredOk(
-        `${countries.length} countries:\n${countries.map((c) => `  ${c.name} (${c.code}) ${c.available_nodes} nodes`).join("\n")}`,
-        { countries },
-      );
+    for (const kind of KINDS) {
+      if (data[kind.key]) {
+        const items = z.array(kind.schema).parse(data[kind.key]);
+        return structuredOk(
+          `${items.length} ${kind.label}:\n${items.map((i) => kind.fmt(i as never)).join("\n")}`,
+          { [kind.key]: items },
+        );
+      }
     }
     return toolError("Unexpected geo response shape.");
   });
