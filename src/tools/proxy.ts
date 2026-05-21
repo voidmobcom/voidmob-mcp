@@ -63,10 +63,14 @@ export const getProxyStatusHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
     const [coreRaw, usageRaw, nolistRaw] = await Promise.all([
       callApi<{ proxy: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}`),
-      callApi<unknown>(http, "GET", `/v1/proxies/${args.proxy_id}/usage`).catch(() => null),
-      callApi<unknown>(http, "GET", `/v1/proxies/${args.proxy_id}/nolist_credentials`).catch(
-        () => null,
-      ),
+      callApi<unknown>(http, "GET", `/v1/proxies/${args.proxy_id}/usage`).catch((e) => {
+        if (e instanceof HttpError && (e.code === "PROXY_NOT_READY" || e.code === "USAGE_UNAVAILABLE")) return null;
+        throw e;
+      }),
+      callApi<unknown>(http, "GET", `/v1/proxies/${args.proxy_id}/nolist_credentials`).catch((e) => {
+        if (e instanceof HttpError && (e.code === "PROXY_NOT_READY" || e.code === "PROXY_NOT_FOUND")) return null;
+        throw e;
+      }),
     ]);
     const proxy = Proxy.parse(coreRaw.proxy);
     const lines = [

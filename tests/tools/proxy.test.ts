@@ -258,7 +258,7 @@ describe("get_proxy_status", () => {
       body: {
         success: false,
         error: {
-          code: "NOLIST_UNAVAILABLE",
+          code: "PROXY_NOT_READY",
           message: "not provisioned yet",
           request_id: "req_nolist_503",
           docs_url: "",
