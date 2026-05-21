@@ -1,11 +1,10 @@
 // src/tools/orders.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { HttpClient, HttpError, NetworkError } from "../client/http.js";
+import { HttpClient } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
 import { Rental, Esim, Proxy } from "../client/types.js";
-import { mapApiError } from "../client/errors.js";
-import { structuredOk, toolError, type ToolResult } from "../utils/render.js";
+import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { formatUsd } from "../utils/format.js";
 
 interface OrderRow {
@@ -18,43 +17,38 @@ interface OrderRow {
 }
 
 export const listOrdersHandler = (http: HttpClient) =>
-  async (args: { kind?: "sms" | "esim" | "proxy"; limit?: number }): Promise<ToolResult> => {
+  wrapToolErrors(async (args: { kind?: "sms" | "esim" | "proxy"; limit?: number }): Promise<ToolResult> => {
     const limit = args.limit ?? 20;
-    try {
-      const tasks: Promise<OrderRow[]>[] = [];
-      if (!args.kind || args.kind === "sms") tasks.push(fetchRentals(http));
-      if (!args.kind || args.kind === "esim") tasks.push(fetchEsims(http));
-      if (!args.kind || args.kind === "proxy") tasks.push(fetchProxies(http));
-      const settled = await Promise.allSettled(tasks);
-      const rows: OrderRow[] = [];
-      const warnings: string[] = [];
-      for (const r of settled) {
-        if (r.status === "fulfilled") rows.push(...r.value);
-        else {
-          const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
-          warnings.push(`(partial: ${msg})`);
-        }
+    const tasks: Promise<OrderRow[]>[] = [];
+    if (!args.kind || args.kind === "sms") tasks.push(fetchRentals(http));
+    if (!args.kind || args.kind === "esim") tasks.push(fetchEsims(http));
+    if (!args.kind || args.kind === "proxy") tasks.push(fetchProxies(http));
+    const settled = await Promise.allSettled(tasks);
+    const rows: OrderRow[] = [];
+    const warnings: string[] = [];
+    for (const r of settled) {
+      if (r.status === "fulfilled") rows.push(...r.value);
+      else {
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        warnings.push(`(partial: ${msg})`);
       }
-      rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
-      const page = rows.slice(0, limit);
-      if (page.length === 0) return toolError("No orders found.");
-      const text = [
-        `${rows.length} order(s)${rows.length > limit ? ` (showing ${limit})` : ""}:`,
-        ``,
-        ...page.map(
-          (r) =>
-            `  [${r.kind.toUpperCase().padEnd(5)}] ${r.id.padEnd(20)} ${r.status.padEnd(14)} ${formatUsd(r.charged_price_cents).padStart(8)} ${r.created_at.slice(0, 16)}  ${r.summary}`,
-        ),
-        warnings.length ? `\n${warnings.join("\n")}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-      return structuredOk(text, { orders: page });
-    } catch (e) {
-      if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
-      throw e;
     }
-  };
+    rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const page = rows.slice(0, limit);
+    if (page.length === 0) return toolError("No orders found.");
+    const text = [
+      `${rows.length} order(s)${rows.length > limit ? ` (showing ${limit})` : ""}:`,
+      ``,
+      ...page.map(
+        (r) =>
+          `  [${r.kind.toUpperCase().padEnd(5)}] ${r.id.padEnd(20)} ${r.status.padEnd(14)} ${formatUsd(r.charged_price_cents).padStart(8)} ${r.created_at.slice(0, 16)}  ${r.summary}`,
+      ),
+      warnings.length ? `\n${warnings.join("\n")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return structuredOk(text, { orders: page });
+  });
 
 async function fetchRentals(http: HttpClient): Promise<OrderRow[]> {
   const data = await callApi<unknown[]>(http, "GET", "/v1/rentals");

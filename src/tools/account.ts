@@ -1,16 +1,15 @@
 // src/tools/account.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { HttpClient, HttpError, NetworkError } from "../client/http.js";
+import { HttpClient } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
 import { MePayload } from "../client/types.js";
-import { mapApiError } from "../client/errors.js";
-import { structuredOk, toolError, type ToolResult } from "../utils/render.js";
+import { structuredOk, wrapToolErrors, type ToolResult } from "../utils/render.js";
 
 // Exported as a factory for test direct-invocation. registerAccountTools wires
 // it onto the McpServer; tests can call getAccountHandler(mockHttp)() without
 // going through the SDK private internals.
-export const getAccountHandler = (http: HttpClient) => async (): Promise<ToolResult> => {
-  try {
+export const getAccountHandler = (http: HttpClient) =>
+  wrapToolErrors(async (): Promise<ToolResult> => {
     const raw = await callApi<unknown>(http, "GET", "/v1/me");
     const me = MePayload.parse(raw);
     const text = [
@@ -25,11 +24,7 @@ export const getAccountHandler = (http: HttpClient) => async (): Promise<ToolRes
       ),
     ].join("\n");
     return structuredOk(text, { account: me });
-  } catch (e) {
-    if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
-    throw e;
-  }
-};
+  });
 
 export function registerAccountTools(server: McpServer, http: HttpClient) {
   server.tool(
