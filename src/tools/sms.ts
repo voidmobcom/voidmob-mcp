@@ -13,6 +13,7 @@ import {
 import { mapApiError } from "../client/errors.js";
 import { structuredOk, toolError, type ToolResult } from "../utils/render.js";
 import { formatUsd, formatTimeRemaining } from "../utils/format.js";
+import { newIdempotencyKey } from "../client/idempotency.js";
 
 // ── search_sms_services ─────────────────────────────────────────────────────
 
@@ -71,23 +72,150 @@ export const getRentalHandler = (http: HttpClient) =>
     return toolError(`Invalid rental_id '${id}'. Expected ver_xxx (verification) or rnt_xxx (long-term/dedicated).`);
   };
 
-// ── registration (write tools added in Task 10) ─────────────────────────────
+// ── rent_number ─────────────────────────────────────────────────────────────
 
-export function registerSmsTools(server: McpServer, http: HttpClient) {
-  server.tool(
-    "search_sms_services",
-    "Search available US non-VoIP SMS services with prices per row. Returns each service's verification price plus LTR/dedicated tiers when offered.",
-    { query: z.string().optional().describe("Substring filter on service name (e.g. 'telegram').") },
-    searchSmsServicesHandler(http),
-  );
+export const rentNumberHandler = (http: HttpClient) =>
+  async (args: { service_id: string; kind?: "verification" | "rental" | "dedicated"; duration?: "3d" | "7d" | "14d" | "30d" }): Promise<ToolResult> => {
+    const kind = args.kind ?? "verification";
+    if (kind === "rental" && !args.duration) {
+      return toolError("rent_number kind='rental' requires a duration (3d|7d|14d|30d).");
+    }
+    try {
+      // Quote
+      const services = await callApi<unknown>(http, "GET", "/v1/services");
+      const parsed = ServicesResponse.parse(services);
+      const svc = parsed.services.find((s) => s.id === args.service_id);
+      if (!svc) {
+        return toolError(`Service '${args.service_id}' not found. Use search_sms_services to list available services.`);
+      }
+      let quotedCents: number;
+      if (kind === "verification") {
+        quotedCents = svc.quoted_price_cents;
+      } else if (kind === "rental") {
+        const k = args.duration as "3d" | "7d" | "14d" | "30d";
+        const v = svc.ltr_prices_cents?.[k];
+        if (v === undefined) {
+          return toolError(`Long-term rental ${args.duration} is not offered for ${svc.name}. Try a different duration or kind='dedicated'.`);
+        }
+        quotedCents = v;
+      } else {
+        if (svc.dedicated_price_cents === undefined) {
+          return toolError(`Dedicated numbers are not offered for ${svc.name}.`);
+        }
+        quotedCents = svc.dedicated_price_cents;
+      }
+      // Commit
+      const path = kind === "verification" ? "/v1/verifications" : "/v1/rentals";
+      const body: Record<string, unknown> = { service_id: args.service_id, max_price_cents: quotedCents };
+      if (kind !== "verification") {
+        body.kind = kind;
+        if (args.duration) body.duration = args.duration;
+      }
+      const created = await callApi<{ verification?: unknown; rental?: unknown }>(http, "POST", path, {
+        body,
+        idempotencyKey: newIdempotencyKey(),
+      });
+      if (kind === "verification") {
+        const v = Verification.parse(created.verification);
+        return structuredOk(`Verification ${v.id} created.\n\n${renderVerification(v)}`, { verification: v });
+      }
+      const r = Rental.parse(created.rental);
+      return structuredOk(`Rental ${r.id} created.\n\n${renderRental(r)}`, { rental: r });
+    } catch (e) {
+      if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
+      throw e;
+    }
+  };
 
-  server.tool(
-    "get_rental",
-    "Read a rental's current status and any messages received. Pass the ID you got from rent_number (ver_xxx for verifications, rnt_xxx for long-term/dedicated). SMS codes typically arrive 10-60s after rent_number; poll this tool until status changes.",
-    { rental_id: z.string().describe("ver_xxx or rnt_xxx") },
-    getRentalHandler(http),
-  );
-}
+// ── cancel_rental ───────────────────────────────────────────────────────────
+
+export const cancelRentalHandler = (http: HttpClient) =>
+  async (args: { rental_id: string }): Promise<ToolResult> => {
+    const id = args.rental_id;
+    try {
+      if (id.startsWith("ver_")) {
+        const out = await callApi<{ verification: unknown }>(http, "POST", `/v1/verifications/${id}/cancel`, {
+          idempotencyKey: newIdempotencyKey(),
+        });
+        const v = Verification.parse(out.verification);
+        return structuredOk(`Verification ${v.id} cancelled.`, { verification: v });
+      }
+      if (id.startsWith("rnt_")) {
+        const out = await callApi<{ rental: unknown }>(http, "DELETE", `/v1/rentals/${id}`, {
+          idempotencyKey: newIdempotencyKey(),
+        });
+        const r = Rental.parse(out.rental);
+        return structuredOk(`Rental ${r.id} cancelled.`, { rental: r });
+      }
+      return toolError(`Invalid rental_id '${id}'. Expected ver_xxx or rnt_xxx.`);
+    } catch (e) {
+      if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
+      throw e;
+    }
+  };
+
+// ── reuse_number ────────────────────────────────────────────────────────────
+
+export const reuseNumberHandler = (http: HttpClient) =>
+  async (args: { rental_id: string; paid?: boolean }): Promise<ToolResult> => {
+    const id = args.rental_id;
+    if (!id.startsWith("ver_")) {
+      return toolError(`reuse_number requires a verification id (ver_xxx). Got '${id}'.`);
+    }
+    try {
+      const path = args.paid ? `/v1/verifications/${id}/reuse/paid` : `/v1/verifications/${id}/reuse`;
+      const out = await callApi<{ verification: unknown }>(http, "POST", path, {
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const v = Verification.parse(out.verification);
+      return structuredOk(renderVerification(v), { verification: v });
+    } catch (e) {
+      if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
+      throw e;
+    }
+  };
+
+// ── re_rent_rental ──────────────────────────────────────────────────────────
+
+export const reRentRentalHandler = (http: HttpClient) =>
+  async (args: { rental_id: string; duration: "3d" | "7d" | "14d" | "30d" }): Promise<ToolResult> => {
+    const id = args.rental_id;
+    if (!id.startsWith("rnt_")) {
+      return toolError(`re_rent_rental requires rnt_xxx. Got '${id}'.`);
+    }
+    try {
+      const out = await callApi<{ rental: unknown }>(http, "POST", `/v1/rentals/${id}/re_rent`, {
+        body: { duration: args.duration },
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const r = Rental.parse(out.rental);
+      return structuredOk(`Re-rented ${r.id}.\n\n${renderRental(r)}`, { rental: r });
+    } catch (e) {
+      if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
+      throw e;
+    }
+  };
+
+// ── toggle_auto_renew ───────────────────────────────────────────────────────
+
+export const toggleAutoRenewHandler = (http: HttpClient) =>
+  async (args: { rental_id: string; auto_renew: boolean }): Promise<ToolResult> => {
+    const id = args.rental_id;
+    if (!id.startsWith("rnt_")) {
+      return toolError(`toggle_auto_renew requires rnt_xxx. Got '${id}'.`);
+    }
+    try {
+      const out = await callApi<{ rental: unknown }>(http, "POST", `/v1/rentals/${id}/auto_renew`, {
+        body: { auto_renew: args.auto_renew },
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const r = Rental.parse(out.rental);
+      return structuredOk(`Auto-renew on ${r.id} is now ${r.auto_renew ? "on" : "off"}.`, { rental: r });
+    } catch (e) {
+      if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
+      throw e;
+    }
+  };
 
 // ── render helpers (also used by Task 10 write tools) ───────────────────────
 
@@ -134,4 +262,70 @@ export function renderRental(r: RentalT): string {
     }
   }
   return lines.join("\n");
+}
+
+// ── registration ────────────────────────────────────────────────────────────
+
+export function registerSmsTools(server: McpServer, http: HttpClient) {
+  server.tool(
+    "search_sms_services",
+    "Search available US non-VoIP SMS services with prices per row. Returns each service's verification price plus LTR/dedicated tiers when offered.",
+    { query: z.string().optional().describe("Substring filter on service name (e.g. 'telegram').") },
+    searchSmsServicesHandler(http),
+  );
+
+  server.tool(
+    "get_rental",
+    "Read a rental's current status and any messages received. Pass the ID you got from rent_number (ver_xxx for verifications, rnt_xxx for long-term/dedicated). SMS codes typically arrive 10-60s after rent_number; poll this tool until status changes.",
+    { rental_id: z.string().describe("ver_xxx or rnt_xxx") },
+    getRentalHandler(http),
+  );
+
+  server.tool(
+    "rent_number",
+    "Rent a US non-VoIP phone number. kind='verification' (single SMS, 20min); kind='rental' (timed LTR with duration); kind='dedicated' (28-day all-services number). Quote-then-commit: the tool fetches the live price and ties max_price_cents to the quote so you never pay above what you saw.",
+    {
+      service_id: z.string().describe("svc_xxx from search_sms_services"),
+      kind: z.enum(["verification", "rental", "dedicated"]).default("verification"),
+      duration: z.enum(["3d", "7d", "14d", "30d"]).optional().describe("Required when kind='rental'"),
+    },
+    rentNumberHandler(http),
+  );
+
+  server.tool(
+    "cancel_rental",
+    "Cancel a rental. For verifications (ver_xxx) the API may refund if no message arrived. For long-term/dedicated rentals (rnt_xxx) cancellation is typically non-refundable - check the response.",
+    { rental_id: z.string() },
+    cancelRentalHandler(http),
+  );
+
+  server.tool(
+    "reuse_number",
+    "Reuse a completed/expired verification to receive another SMS. Free reuse is available when allow_reuse is true on the verification. Paid reuse ($0.50) is available when allow_paid_reuse is true.",
+    {
+      rental_id: z.string().describe("ver_xxx from a verification"),
+      paid: z.boolean().default(false),
+    },
+    reuseNumberHandler(http),
+  );
+
+  server.tool(
+    "re_rent_rental",
+    "Re-rent the same number for another LTR period. Use before the rental expires/releases to keep the same phone number across periods.",
+    {
+      rental_id: z.string().describe("rnt_xxx from a completed LTR"),
+      duration: z.enum(["3d", "7d", "14d", "30d"]),
+    },
+    reRentRentalHandler(http),
+  );
+
+  server.tool(
+    "toggle_auto_renew",
+    "Turn auto-renewal on/off for an LTR or dedicated rental.",
+    {
+      rental_id: z.string().describe("rnt_xxx"),
+      auto_renew: z.boolean(),
+    },
+    toggleAutoRenewHandler(http),
+  );
 }

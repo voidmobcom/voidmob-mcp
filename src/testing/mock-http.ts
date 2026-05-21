@@ -21,7 +21,12 @@ export function createMockHttpClient(): MockHttpClient {
       queue.push({ method, path, respond });
     },
     async request(method, path, opts) {
-      const recordedHeaders = (opts?.headers as Record<string, string>) ?? {};
+      const recordedHeaders: Record<string, string> = {
+        ...((opts?.headers as Record<string, string>) ?? {}),
+      };
+      if (opts?.idempotencyKey) {
+        recordedHeaders["Idempotency-Key"] = opts.idempotencyKey;
+      }
       history.push({ method, path, body: opts?.body, headers: recordedHeaders });
       const exp = queue.shift();
       if (!exp) throw new Error(`No expectation for ${method} ${path}`);
