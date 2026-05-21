@@ -1,4 +1,7 @@
 export interface ToolResult {
+  // SDK CallToolResult includes a string index signature; mirroring it here lets
+  // factory handlers be passed straight to server.tool() without a cast.
+  [x: string]: unknown;
   content: Array<
     | { type: "text"; text: string }
     | { type: "image"; mimeType: string; data: string }
