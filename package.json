@@ -21,7 +21,8 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run build && npm test"
+    "version-sync": "node scripts/check-version-sync.mjs",
+    "prepublishOnly": "npm run version-sync && npm run build && npm test"
   },
   "keywords": [
     "mcp",
