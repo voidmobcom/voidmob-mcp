@@ -1,0 +1,29 @@
+{
+  "tools": [
+    "cancel_rental",
+    "create_proxy_list",
+    "delete_proxy_list",
+    "get_account",
+    "get_esim_qr",
+    "get_esim_status",
+    "get_geo",
+    "get_proxy_status",
+    "get_rental",
+    "list_orders",
+    "list_proxy_lists",
+    "purchase_esim",
+    "purchase_proxy",
+    "re_rent_rental",
+    "regenerate_proxy_password",
+    "renew_proxy",
+    "rent_number",
+    "reuse_number",
+    "rotate_proxy_ip",
+    "search_esim_plans",
+    "search_proxies",
+    "search_sms_services",
+    "toggle_auto_renew",
+    "topup_esim",
+    "topup_proxy"
+  ]
+}
