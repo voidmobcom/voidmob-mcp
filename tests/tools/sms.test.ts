@@ -76,7 +76,7 @@ describe("get_rental", () => {
   }
   function rntFixture() {
     return {
-      id: "rnt_xyz",
+      id: "ren_xyz",
       kind: "rental",
       status: "active",
       phone_number: "+14155550123",
@@ -103,15 +103,15 @@ describe("get_rental", () => {
     expect(res.structuredContent?.verification).toMatchObject({ id: "ver_abc" });
   });
 
-  it("routes rnt_ ID to /v1/rentals/:id", async () => {
+  it("routes ren_ ID to /v1/rentals/:id", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/rentals/rnt_xyz", {
+    http.expect("GET", "/v1/rentals/ren_xyz", {
       status: 200,
       headers: new Headers(),
       body: { success: true, data: { rental: rntFixture() } },
     });
-    const res = await getRentalHandler(http)({ rental_id: "rnt_xyz" });
-    expect(res.structuredContent?.rental).toMatchObject({ id: "rnt_xyz" });
+    const res = await getRentalHandler(http)({ rental_id: "ren_xyz" });
+    expect(res.structuredContent?.rental).toMatchObject({ id: "ren_xyz" });
   });
 
   it("rejects bad ID prefix without an HTTP call", async () => {
@@ -119,7 +119,7 @@ describe("get_rental", () => {
     const res = await getRentalHandler(http)({ rental_id: "bad_id" });
     expect(res.isError).toBe(true);
     const t = res.content[0]; if (t.type !== "text") throw new Error("text");
-    expect(t.text).toMatch(/ver_|rnt_/);
+    expect(t.text).toMatch(/ver_|ren_/);
     expect(http.history).toHaveLength(0); // no HTTP call made
   });
 
@@ -218,7 +218,7 @@ describe("rent_number (rental + dedicated paths)", () => {
         success: true,
         data: {
           rental: {
-            id: "rnt_new", kind: "rental", status: "active", phone_number: "+1...",
+            id: "ren_new", kind: "rental", status: "active", phone_number: "+1...",
             service_id: "svc_tg", service_name: "Telegram", duration: "7d",
             charged_price_cents: 500, auto_renew: false, paid_until: "x", expires_at: "x",
             created_at: "x", messages: [],
@@ -228,7 +228,7 @@ describe("rent_number (rental + dedicated paths)", () => {
     });
     const res = await rentNumberHandler(http)({ service_id: "svc_tg", kind: "rental", duration: "7d" });
     expect(http.history[1].body).toMatchObject({ service_id: "svc_tg", kind: "rental", duration: "7d", max_price_cents: 500 });
-    expect(res.structuredContent?.rental).toMatchObject({ id: "rnt_new" });
+    expect(res.structuredContent?.rental).toMatchObject({ id: "ren_new" });
   });
 
   it("rental kind without duration → toolError without HTTP call", async () => {
@@ -262,13 +262,13 @@ describe("cancel_rental", () => {
     expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it("rnt_ ID → DELETE /v1/rentals/:id with idempotency", async () => {
+  it("ren_ ID → DELETE /v1/rentals/:id with idempotency", async () => {
     const http = createMockHttpClient();
-    http.expect("DELETE", "/v1/rentals/rnt_xyz", {
+    http.expect("DELETE", "/v1/rentals/ren_xyz", {
       status: 200, headers: new Headers(),
-      body: { success: true, data: { rental: { id: "rnt_xyz", kind: "rental", status: "cancelled", phone_number: "x", service_id: "x", service_name: "x", duration: null, charged_price_cents: 0, auto_renew: false, paid_until: null, expires_at: "x", created_at: "x" } } },
+      body: { success: true, data: { rental: { id: "ren_xyz", kind: "rental", status: "cancelled", phone_number: "x", service_id: "x", service_name: "x", duration: null, charged_price_cents: 0, auto_renew: false, paid_until: null, expires_at: "x", created_at: "x" } } },
     });
-    const res = await cancelRentalHandler(http)({ rental_id: "rnt_xyz" });
+    const res = await cancelRentalHandler(http)({ rental_id: "ren_xyz" });
     expect(res.isError).toBeFalsy();
     expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
   });
@@ -296,19 +296,19 @@ describe("reuse_number, re_rent_rental, toggle_auto_renew", () => {
     expect(http.history[0].path).toBe("/v1/verifications/ver_abc/reuse/paid");
   });
 
-  it("reuse_number rejects rnt_ prefix", async () => {
+  it("reuse_number rejects ren_ prefix", async () => {
     const http = createMockHttpClient();
-    const res = await reuseNumberHandler(http)({ rental_id: "rnt_xyz", paid: false });
+    const res = await reuseNumberHandler(http)({ rental_id: "ren_xyz", paid: false });
     expect(res.isError).toBe(true);
     expect(http.history).toHaveLength(0);
   });
 
   it("re_rent_rental → POST /v1/rentals/:id/re_rent", async () => {
     const http = createMockHttpClient();
-    http.expect("POST", "/v1/rentals/rnt_xyz/re_rent", { status: 201, headers: new Headers(), body: rntResp("rnt_new") });
-    const res = await reRentRentalHandler(http)({ rental_id: "rnt_xyz", duration: "7d" });
+    http.expect("POST", "/v1/rentals/ren_xyz/re_rent", { status: 201, headers: new Headers(), body: rntResp("ren_new") });
+    const res = await reRentRentalHandler(http)({ rental_id: "ren_xyz", duration: "7d" });
     expect(http.history[0].body).toMatchObject({ duration: "7d" });
-    expect(res.structuredContent?.rental).toMatchObject({ id: "rnt_new" });
+    expect(res.structuredContent?.rental).toMatchObject({ id: "ren_new" });
   });
 
   it("re_rent_rental rejects ver_ prefix", async () => {
@@ -320,8 +320,8 @@ describe("reuse_number, re_rent_rental, toggle_auto_renew", () => {
 
   it("toggle_auto_renew → POST /v1/rentals/:id/auto_renew", async () => {
     const http = createMockHttpClient();
-    http.expect("POST", "/v1/rentals/rnt_xyz/auto_renew", { status: 200, headers: new Headers(), body: rntResp("rnt_xyz", true) });
-    await toggleAutoRenewHandler(http)({ rental_id: "rnt_xyz", auto_renew: true });
+    http.expect("POST", "/v1/rentals/ren_xyz/auto_renew", { status: 200, headers: new Headers(), body: rntResp("ren_xyz", true) });
+    await toggleAutoRenewHandler(http)({ rental_id: "ren_xyz", auto_renew: true });
     expect(http.history[0].body).toMatchObject({ auto_renew: true });
   });
 });

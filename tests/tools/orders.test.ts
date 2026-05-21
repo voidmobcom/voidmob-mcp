@@ -6,7 +6,7 @@ import { createMockHttpClient } from "../../src/testing/mock-http.js";
 
 function rentalFixture(overrides: Partial<Record<string, unknown>> = {}) {
   return {
-    id: "rnt_old",
+    id: "ren_old",
     kind: "rental",
     status: "active",
     phone_number: "+14155550123",
@@ -109,7 +109,7 @@ describe("list_orders", () => {
     // Sorted by created_at desc: proxy(2026-05-20) > esim(2026-05-10) > rental(2026-05-01)
     expect(orders[0]).toMatchObject({ kind: "proxy", id: "px_new" });
     expect(orders[1]).toMatchObject({ kind: "esim", id: "esim_mid" });
-    expect(orders[2]).toMatchObject({ kind: "sms", id: "rnt_old" });
+    expect(orders[2]).toMatchObject({ kind: "sms", id: "ren_old" });
 
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
@@ -133,7 +133,7 @@ describe("list_orders", () => {
     expect(http.history[0].path).toBe("/v1/rentals");
     const orders = res.structuredContent?.orders as Array<Record<string, unknown>>;
     expect(orders).toHaveLength(1);
-    expect(orders[0]).toMatchObject({ kind: "sms", id: "rnt_old" });
+    expect(orders[0]).toMatchObject({ kind: "sms", id: "ren_old" });
   });
 
   it("surfaces results from successful fan-out branches when one fails, with partial warning", async () => {
@@ -180,10 +180,10 @@ describe("list_orders", () => {
         success: true,
         data: {
           rentals: [
-            rentalFixture({ id: "rnt_1", created_at: "2026-05-01T00:00:00Z" }),
-            rentalFixture({ id: "rnt_2", created_at: "2026-05-02T00:00:00Z" }),
-            rentalFixture({ id: "rnt_3", created_at: "2026-05-03T00:00:00Z" }),
-            rentalFixture({ id: "rnt_4", created_at: "2026-05-04T00:00:00Z" }),
+            rentalFixture({ id: "ren_1", created_at: "2026-05-01T00:00:00Z" }),
+            rentalFixture({ id: "ren_2", created_at: "2026-05-02T00:00:00Z" }),
+            rentalFixture({ id: "ren_3", created_at: "2026-05-03T00:00:00Z" }),
+            rentalFixture({ id: "ren_4", created_at: "2026-05-04T00:00:00Z" }),
           ],
         },
       },
@@ -194,8 +194,8 @@ describe("list_orders", () => {
     const orders = res.structuredContent?.orders as Array<Record<string, unknown>>;
     expect(orders).toHaveLength(2);
     // Newest first
-    expect(orders[0]).toMatchObject({ id: "rnt_4" });
-    expect(orders[1]).toMatchObject({ id: "rnt_3" });
+    expect(orders[0]).toMatchObject({ id: "ren_4" });
+    expect(orders[1]).toMatchObject({ id: "ren_3" });
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
     expect(t.text).toContain("4 order(s)");

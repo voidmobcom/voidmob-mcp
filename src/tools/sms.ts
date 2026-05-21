@@ -59,7 +59,7 @@ export const getRentalHandler = (http: HttpClient) =>
         throw e;
       }
     }
-    if (id.startsWith("rnt_")) {
+    if (id.startsWith("ren_")) {
       try {
         const raw = await callApi<{ rental: unknown }>(http, "GET", `/v1/rentals/${id}`);
         const r = Rental.parse(raw.rental);
@@ -69,7 +69,7 @@ export const getRentalHandler = (http: HttpClient) =>
         throw e;
       }
     }
-    return toolError(`Invalid rental_id '${id}'. Expected ver_xxx (verification) or rnt_xxx (long-term/dedicated).`);
+    return toolError(`Invalid rental_id '${id}'. Expected ver_xxx (verification) or ren_xxx (long-term/dedicated).`);
   };
 
 // ── rent_number ─────────────────────────────────────────────────────────────
@@ -140,14 +140,14 @@ export const cancelRentalHandler = (http: HttpClient) =>
         const v = Verification.parse(out.verification);
         return structuredOk(`Verification ${v.id} cancelled.`, { verification: v });
       }
-      if (id.startsWith("rnt_")) {
+      if (id.startsWith("ren_")) {
         const out = await callApi<{ rental: unknown }>(http, "DELETE", `/v1/rentals/${id}`, {
           idempotencyKey: newIdempotencyKey(),
         });
         const r = Rental.parse(out.rental);
         return structuredOk(`Rental ${r.id} cancelled.`, { rental: r });
       }
-      return toolError(`Invalid rental_id '${id}'. Expected ver_xxx or rnt_xxx.`);
+      return toolError(`Invalid rental_id '${id}'. Expected ver_xxx or ren_xxx.`);
     } catch (e) {
       if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
       throw e;
@@ -180,8 +180,8 @@ export const reuseNumberHandler = (http: HttpClient) =>
 export const reRentRentalHandler = (http: HttpClient) =>
   async (args: { rental_id: string; duration: "3d" | "7d" | "14d" | "30d" }): Promise<ToolResult> => {
     const id = args.rental_id;
-    if (!id.startsWith("rnt_")) {
-      return toolError(`re_rent_rental requires rnt_xxx. Got '${id}'.`);
+    if (!id.startsWith("ren_")) {
+      return toolError(`re_rent_rental requires ren_xxx. Got '${id}'.`);
     }
     try {
       const out = await callApi<{ rental: unknown }>(http, "POST", `/v1/rentals/${id}/re_rent`, {
@@ -201,8 +201,8 @@ export const reRentRentalHandler = (http: HttpClient) =>
 export const toggleAutoRenewHandler = (http: HttpClient) =>
   async (args: { rental_id: string; auto_renew: boolean }): Promise<ToolResult> => {
     const id = args.rental_id;
-    if (!id.startsWith("rnt_")) {
-      return toolError(`toggle_auto_renew requires rnt_xxx. Got '${id}'.`);
+    if (!id.startsWith("ren_")) {
+      return toolError(`toggle_auto_renew requires ren_xxx. Got '${id}'.`);
     }
     try {
       const out = await callApi<{ rental: unknown }>(http, "POST", `/v1/rentals/${id}/auto_renew`, {
@@ -276,8 +276,8 @@ export function registerSmsTools(server: McpServer, http: HttpClient) {
 
   server.tool(
     "get_rental",
-    "Read a rental's current status and any messages received. Pass the ID you got from rent_number (ver_xxx for verifications, rnt_xxx for long-term/dedicated). SMS codes typically arrive 10-60s after rent_number; poll this tool until status changes.",
-    { rental_id: z.string().describe("ver_xxx or rnt_xxx") },
+    "Read a rental's current status and any messages received. Pass the ID you got from rent_number (ver_xxx for verifications, ren_xxx for long-term/dedicated). SMS codes typically arrive 10-60s after rent_number; poll this tool until status changes.",
+    { rental_id: z.string().describe("ver_xxx or ren_xxx") },
     getRentalHandler(http),
   );
 
@@ -294,7 +294,7 @@ export function registerSmsTools(server: McpServer, http: HttpClient) {
 
   server.tool(
     "cancel_rental",
-    "Cancel a rental. For verifications (ver_xxx) the API may refund if no message arrived. For long-term/dedicated rentals (rnt_xxx) cancellation is typically non-refundable - check the response.",
+    "Cancel a rental. For verifications (ver_xxx) the API may refund if no message arrived. For long-term/dedicated rentals (ren_xxx) cancellation is typically non-refundable - check the response.",
     { rental_id: z.string() },
     cancelRentalHandler(http),
   );
@@ -313,7 +313,7 @@ export function registerSmsTools(server: McpServer, http: HttpClient) {
     "re_rent_rental",
     "Re-rent the same number for another LTR period. Use before the rental expires/releases to keep the same phone number across periods.",
     {
-      rental_id: z.string().describe("rnt_xxx from a completed LTR"),
+      rental_id: z.string().describe("ren_xxx from a completed LTR"),
       duration: z.enum(["3d", "7d", "14d", "30d"]),
     },
     reRentRentalHandler(http),
@@ -323,7 +323,7 @@ export function registerSmsTools(server: McpServer, http: HttpClient) {
     "toggle_auto_renew",
     "Turn auto-renewal on/off for an LTR or dedicated rental.",
     {
-      rental_id: z.string().describe("rnt_xxx"),
+      rental_id: z.string().describe("ren_xxx"),
       auto_renew: z.boolean(),
     },
     toggleAutoRenewHandler(http),
