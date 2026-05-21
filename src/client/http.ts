@@ -1,6 +1,7 @@
 import { makeDebugLogger } from "./debug.js";
 
-const TIMEOUT_MS = 30_000;
+const GET_TIMEOUT_MS = 10_000;
+const WRITE_TIMEOUT_MS = 30_000;
 const GET_RETRIES = 2;
 const RETRY_DELAY_MS = 250;
 
@@ -62,7 +63,8 @@ export function createHttpClient(opts: ClientOpts): HttpClient {
 
   async function doOnce(method: string, path: string, ropts: HttpRequestOpts): Promise<HttpResponse> {
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
+    const timeoutMs = method.toUpperCase() === "GET" ? GET_TIMEOUT_MS : WRITE_TIMEOUT_MS;
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
     const headers = new Headers({
       Authorization: `Bearer ${opts.apiKey}`,
       "User-Agent": opts.userAgent,
