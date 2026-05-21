@@ -31,7 +31,7 @@ export async function callApi<T>(
       env.error.code,
       env.error.request_id,
       env.error.details,
-      env.error.message,
+      env.error.message ?? env.error.code,
     );
   }
   throw new HttpError(res.status, "UNKNOWN_ERROR", "", undefined, "Unexpected response shape");
