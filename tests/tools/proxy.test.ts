@@ -279,31 +279,33 @@ describe("get_proxy_status", () => {
 // ── rotate_proxy_ip ─────────────────────────────────────────────────────────
 
 describe("rotate_proxy_ip", () => {
-  it("happy path with idempotency, surfaces old_ip/new_ip", async () => {
+  it("happy path with idempotency, surfaces proxy_id/rotated_at/current_ip", async () => {
     const http = createMockHttpClient();
-    http.expect("POST", "/v1/proxies/proxy_xyz/rotate_ip", {
+    http.expect("POST", "/v1/proxies/PRX-abc/rotate_ip", {
       status: 200,
       headers: new Headers(),
       body: {
         success: true,
         data: {
-          proxy: proxyResp("proxy_xyz"),
-          old_ip: "203.0.113.5",
-          new_ip: "203.0.113.99",
+          proxy_id: "PRX-abc",
+          rotated_at: "2026-01-01T00:00:00Z",
+          current_ip: "1.2.3.4",
         },
       },
     });
-    const res = await rotateProxyIpHandler(http)({ proxy_id: "proxy_xyz" });
+    const res = await rotateProxyIpHandler(http)({ proxy_id: "PRX-abc" });
     expect(res.isError).toBeFalsy();
     expect(http.history).toHaveLength(1);
     expect(http.history[0].method).toBe("POST");
     expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
-    expect(t.text).toContain("203.0.113.5");
-    expect(t.text).toContain("203.0.113.99");
-    expect(res.structuredContent?.old_ip).toBe("203.0.113.5");
-    expect(res.structuredContent?.new_ip).toBe("203.0.113.99");
+    expect(t.text).toContain("PRX-abc");
+    expect(t.text).toContain("2026-01-01T00:00:00Z");
+    expect(t.text).toContain("1.2.3.4");
+    expect(res.structuredContent?.proxy_id).toBe("PRX-abc");
+    expect(res.structuredContent?.rotated_at).toBe("2026-01-01T00:00:00Z");
+    expect(res.structuredContent?.current_ip).toBe("1.2.3.4");
   });
 });
 

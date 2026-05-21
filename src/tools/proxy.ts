@@ -119,16 +119,15 @@ export const getProxyStatusHandler = (http: HttpClient) =>
 export const rotateProxyIpHandler = (http: HttpClient) =>
   async (args: { proxy_id: string }): Promise<ToolResult> => {
     try {
-      const out = await callApi<{ proxy: unknown; old_ip?: string; new_ip?: string }>(
+      const out = await callApi<{ proxy_id: string; rotated_at: string; current_ip: string | null }>(
         http,
         "POST",
         `/v1/proxies/${args.proxy_id}/rotate_ip`,
         { idempotencyKey: newIdempotencyKey() },
       );
-      const proxy = Proxy.parse(out.proxy);
       return structuredOk(
-        `Rotated ${proxy.id}: ${out.old_ip ?? "?"} -> ${out.new_ip ?? "?"}`,
-        { proxy, old_ip: out.old_ip ?? null, new_ip: out.new_ip ?? null },
+        `Rotated ${out.proxy_id} at ${out.rotated_at}. New IP: ${out.current_ip ?? "(unknown)"}`,
+        { proxy_id: out.proxy_id, rotated_at: out.rotated_at, current_ip: out.current_ip },
       );
     } catch (e) {
       if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
