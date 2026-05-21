@@ -1,8 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { state } from "../sandbox/state.js";
-import type { ProxyList } from "../sandbox/state.js";
-import { validateCountry, ToolError, generateId } from "../utils/validation.js";
+import { state } from "../state.js";
+import type { ProxyList } from "../state.js";
+import { validateCountry, ToolError, generateId } from "../../utils/validation.js";
 import {
   formatUsd,
   formatGb,
@@ -13,8 +13,8 @@ import {
   generateConnectionString,
   generateOpenvpnConfig,
   generateVlessUri,
-} from "../utils/format.js";
-import { errorResponse, textResponse } from "../utils/response.js";
+} from "../../utils/format.js";
+import { errorResponse, textResponse } from "../../utils/response.js";
 import { searchProducts, getProduct } from "../mock-data/proxy.js";
 
 export function registerProxyTools(server: McpServer) {

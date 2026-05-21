@@ -1,15 +1,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { state, SmsRental } from "../sandbox/state.js";
-import { generateId } from "../utils/validation.js";
+import { state, SmsRental } from "../state.js";
+import { generateId } from "../../utils/validation.js";
 import {
   formatUsd,
   generatePhoneNumber,
   generateVerificationCode,
   generateDisplayId,
   formatTimeRemaining,
-} from "../utils/format.js";
-import { errorResponse, textResponse } from "../utils/response.js";
+} from "../../utils/format.js";
+import { errorResponse, textResponse } from "../../utils/response.js";
 import { searchServices, getService, smsServices } from "../mock-data/sms.js";
 
 const DURATION_DAYS: Record<string, number> = {

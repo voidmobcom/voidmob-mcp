@@ -1,13 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { state } from "../sandbox/state.js";
-import { generateId } from "../utils/validation.js";
+import { state } from "../state.js";
+import { generateId } from "../../utils/validation.js";
 import {
   formatUsd,
   generateMockWalletAddress,
   generateMockCryptoAmount,
-} from "../utils/format.js";
-import { textResponse } from "../utils/response.js";
+} from "../../utils/format.js";
+import { textResponse } from "../../utils/response.js";
 
 export function registerWalletTools(server: McpServer) {
   server.tool(

@@ -1,4 +1,4 @@
-import type { ProxyType } from "../sandbox/state.js";
+import type { ProxyType } from "../state.js";
 
 export interface ProxyProduct {
   id: string;
