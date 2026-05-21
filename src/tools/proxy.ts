@@ -1,4 +1,3 @@
-// src/tools/proxy.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { HttpClient, HttpError } from "../client/http.js";

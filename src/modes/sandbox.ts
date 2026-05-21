@@ -1,4 +1,3 @@
-// src/modes/sandbox.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerWalletTools } from "../sandbox/tools/wallet.js";
 import { registerSmsTools } from "../sandbox/tools/sms.js";

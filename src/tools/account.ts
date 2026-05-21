@@ -1,4 +1,3 @@
-// src/tools/account.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { HttpClient } from "../client/http.js";
 import { callApi } from "../client/call-api.js";

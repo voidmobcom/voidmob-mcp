@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// src/index.ts
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { parseEnv, ConfigError } from "./config.js";
 import { buildLiveServer } from "./modes/live.js";
@@ -27,6 +26,5 @@ main().catch((err) => {
   process.exit(1);
 });
 
-// Test exports (used by tests/sandbox.smoke.test.ts in Task 15)
 export { buildSandboxServer } from "./modes/sandbox.js";
 export { buildLiveServer } from "./modes/live.js";

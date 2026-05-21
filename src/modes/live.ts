@@ -1,4 +1,3 @@
-// src/modes/live.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -25,8 +24,6 @@ export function buildLiveServer(cfg: Config): McpServer {
   });
   const server = new McpServer({ name: "@voidmob/mcp", version: pkg.version });
 
-  // Tool registrations land here. Tasks 9-14 add more registrations alongside
-  // registerAccountTools using the same factory-handler pattern.
   registerAccountTools(server, http);
   registerSmsTools(server, http);
   registerEsimTools(server, http);

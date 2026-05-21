@@ -1,4 +1,3 @@
-// src/tools/sms.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { HttpClient } from "../client/http.js";
@@ -187,7 +186,7 @@ export const toggleAutoRenewHandler = (http: HttpClient) =>
     return structuredOk(`Auto-renew on ${r.id} is now ${r.auto_renew ? "on" : "off"}.`, { rental: r });
   });
 
-// ── render helpers (also used by Task 10 write tools) ───────────────────────
+// ── render helpers ──────────────────────────────────────────────────────────
 
 export function renderVerification(v: VerificationT): string {
   const lines = [
