@@ -4,9 +4,15 @@ import { z } from "zod";
 import { HttpClient, HttpError } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
-import { Proxy, ProxyPlan, ProxyList } from "../client/types.js";
+import { Proxy, ProxyPlan, ProxyList, type ProxyPlan as ProxyPlanT } from "../client/types.js";
 import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { formatUsd } from "../utils/format.js";
+
+async function fetchProxyPlan(http: HttpClient, planId: string): Promise<ProxyPlanT | null> {
+  const plansData = await callApi<{ plans: unknown[] }>(http, "GET", `/v1/proxy_plans`);
+  const plans = z.array(ProxyPlan).parse(plansData.plans);
+  return plans.find((p) => p.id === planId) ?? null;
+}
 
 // ── search_proxies ──────────────────────────────────────────────────────────
 
@@ -38,9 +44,7 @@ export const searchProxiesHandler = (http: HttpClient) =>
 
 export const purchaseProxyHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { plan_id: string }): Promise<ToolResult> => {
-    const plansData = await callApi<{ plans: unknown[] }>(http, "GET", `/v1/proxy_plans`);
-    const plans = z.array(ProxyPlan).parse(plansData.plans);
-    const plan = plans.find((p) => p.id === args.plan_id);
+    const plan = await fetchProxyPlan(http, args.plan_id);
     if (!plan) {
       return toolError(
         `Plan '${args.plan_id}' not found. Use search_proxies to list available plans.`,
@@ -131,13 +135,7 @@ export const renewProxyHandler = (http: HttpClient) =>
     if (!proxy.plan_id) {
       return toolError(`Proxy ${args.proxy_id} has no plan_id; renewal not available.`);
     }
-    const plansData = await callApi<{ plans: unknown[] }>(
-      http,
-      "GET",
-      `/v1/proxy_plans`,
-    );
-    const plans = z.array(ProxyPlan).parse(plansData.plans);
-    const plan = plans.find((p) => p.id === proxy.plan_id);
+    const plan = await fetchProxyPlan(http, proxy.plan_id);
     if (!plan) return toolError(`Original plan ${proxy.plan_id} no longer available.`);
     const out = await callApi<{ proxy: unknown }>(
       http,
@@ -166,13 +164,7 @@ export const topupProxyHandler = (http: HttpClient) =>
     if (!proxy.plan_id) {
       return toolError(`Proxy ${args.proxy_id} has no plan_id; top-up not available.`);
     }
-    const plansData = await callApi<{ plans: unknown[] }>(
-      http,
-      "GET",
-      `/v1/proxy_plans`,
-    );
-    const plans = z.array(ProxyPlan).parse(plansData.plans);
-    const plan = plans.find((p) => p.id === proxy.plan_id);
+    const plan = await fetchProxyPlan(http, proxy.plan_id);
     if (!plan) return toolError(`Original plan ${proxy.plan_id} no longer available.`);
     if (!plan.data_gb || plan.data_gb <= 0) {
       return toolError(`Plan ${plan.id} has no GB allowance; top-up not available.`);
