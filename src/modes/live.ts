@@ -8,6 +8,7 @@ import { createHttpClient } from "../client/http.js";
 import { registerAccountTools } from "../tools/account.js";
 import { registerSmsTools } from "../tools/sms.js";
 import { registerEsimTools } from "../tools/esim.js";
+import { registerProxyTools } from "../tools/proxy.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, "../../package.json"), "utf8")) as { version: string };
@@ -27,6 +28,7 @@ export function buildLiveServer(cfg: Config): McpServer {
   registerAccountTools(server, http);
   registerSmsTools(server, http);
   registerEsimTools(server, http);
+  registerProxyTools(server, http);
 
   return server;
 }
