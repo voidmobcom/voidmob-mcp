@@ -454,15 +454,15 @@ describe("regenerate_proxy_password", () => {
 // ── list_proxy_lists ────────────────────────────────────────────────────────
 
 describe("list_proxy_lists", () => {
-  it("GET /v1/proxies/:id/lists returns the lists", async () => {
+  it("reads lists from GET /v1/proxies/:id (no list collection endpoint)", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/proxies/prx_abc/lists", {
+    http.expect("GET", "/v1/proxies/prx_abc", {
       status: 200, headers: new Headers(),
-      body: { success: true, data: { lists: [{
+      body: { success: true, data: { proxy: proxyResp("prx_abc", { lists: [{
         id: "lst_1", name: "Default", login: "u", password: "p",
         country: null, region: null, city: null, isp: null,
         location_preset: "world_mix", countries: null, rotation_period: 0,
-      }] } },
+      }] }) } },
     });
     const res = await listProxyListsHandler(http)({ proxy_id: "prx_abc" });
     expect(res.isError).toBeFalsy();
@@ -471,9 +471,9 @@ describe("list_proxy_lists", () => {
 
   it("empty lists → toolError", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/proxies/prx_abc/lists", {
+    http.expect("GET", "/v1/proxies/prx_abc", {
       status: 200, headers: new Headers(),
-      body: { success: true, data: { lists: [] } },
+      body: { success: true, data: { proxy: proxyResp("prx_abc", { lists: [] }) } },
     });
     const res = await listProxyListsHandler(http)({ proxy_id: "prx_abc" });
     expect(res.isError).toBe(true);
@@ -481,7 +481,7 @@ describe("list_proxy_lists", () => {
 
   it("propagates request_id on PROXY_NOT_FOUND", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/proxies/prx_missing/lists", {
+    http.expect("GET", "/v1/proxies/prx_missing", {
       status: 404, headers: new Headers(),
       body: { success: false, error: { code: "PROXY_NOT_FOUND", message: "Proxy not found.", request_id: "req_listmissing", docs_url: "" } },
     });

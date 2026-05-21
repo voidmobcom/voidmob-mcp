@@ -246,8 +246,9 @@ export const regenerateProxyPasswordHandler = (http: HttpClient) =>
 export const listProxyListsHandler = (http: HttpClient) =>
   async (args: { proxy_id: string }): Promise<ToolResult> => {
     try {
-      const data = await callApi<{ lists: unknown[] }>(http, "GET", `/v1/proxies/${args.proxy_id}/lists`);
-      const lists = z.array(ProxyList).parse(data.lists);
+      const coreRaw = await callApi<{ proxy: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}`);
+      const proxy = Proxy.parse(coreRaw.proxy);
+      const lists = proxy.lists;
       if (lists.length === 0) return toolError(`No proxy lists on ${args.proxy_id}.`);
       const text = [
         `Lists for ${args.proxy_id}:`,
