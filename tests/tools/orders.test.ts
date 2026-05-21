@@ -81,7 +81,7 @@ describe("list_orders", () => {
     http.expect("GET", "/v1/rentals", {
       status: 200,
       headers: new Headers(),
-      body: { success: true, data: { rentals: [rentalFixture()] } },
+      body: { success: true, data: [rentalFixture()] },
     });
     http.expect("GET", "/v1/esims", {
       status: 200,
@@ -124,7 +124,7 @@ describe("list_orders", () => {
     http.expect("GET", "/v1/rentals", {
       status: 200,
       headers: new Headers(),
-      body: { success: true, data: { rentals: [rentalFixture()] } },
+      body: { success: true, data: [rentalFixture()] },
     });
 
     const res = await listOrdersHandler(http)({ kind: "sms" });
@@ -141,7 +141,7 @@ describe("list_orders", () => {
     http.expect("GET", "/v1/rentals", {
       status: 200,
       headers: new Headers(),
-      body: { success: true, data: { rentals: [rentalFixture()] } },
+      body: { success: true, data: [rentalFixture()] },
     });
     http.expect("GET", "/v1/esims", {
       status: 200,
@@ -178,14 +178,12 @@ describe("list_orders", () => {
       headers: new Headers(),
       body: {
         success: true,
-        data: {
-          rentals: [
-            rentalFixture({ id: "ren_1", created_at: "2026-05-01T00:00:00Z" }),
-            rentalFixture({ id: "ren_2", created_at: "2026-05-02T00:00:00Z" }),
-            rentalFixture({ id: "ren_3", created_at: "2026-05-03T00:00:00Z" }),
-            rentalFixture({ id: "ren_4", created_at: "2026-05-04T00:00:00Z" }),
-          ],
-        },
+        data: [
+          rentalFixture({ id: "ren_1", created_at: "2026-05-01T00:00:00Z" }),
+          rentalFixture({ id: "ren_2", created_at: "2026-05-02T00:00:00Z" }),
+          rentalFixture({ id: "ren_3", created_at: "2026-05-03T00:00:00Z" }),
+          rentalFixture({ id: "ren_4", created_at: "2026-05-04T00:00:00Z" }),
+        ],
       },
     });
 

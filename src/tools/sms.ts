@@ -61,8 +61,8 @@ export const getRentalHandler = (http: HttpClient) =>
     }
     if (id.startsWith("ren_")) {
       try {
-        const raw = await callApi<{ rental: unknown }>(http, "GET", `/v1/rentals/${id}`);
-        const r = Rental.parse(raw.rental);
+        const raw = await callApi<unknown>(http, "GET", `/v1/rentals/${id}`);
+        const r = Rental.parse(raw);
         return structuredOk(renderRental(r), { rental: r });
       } catch (e) {
         if (e instanceof HttpError || e instanceof NetworkError) return toolError(mapApiError(e));
@@ -141,10 +141,10 @@ export const cancelRentalHandler = (http: HttpClient) =>
         return structuredOk(`Verification ${v.id} cancelled.`, { verification: v });
       }
       if (id.startsWith("ren_")) {
-        const out = await callApi<{ rental: unknown }>(http, "DELETE", `/v1/rentals/${id}`, {
+        const out = await callApi<unknown>(http, "DELETE", `/v1/rentals/${id}`, {
           idempotencyKey: newIdempotencyKey(),
         });
-        const r = Rental.parse(out.rental);
+        const r = Rental.parse(out);
         return structuredOk(`Rental ${r.id} cancelled.`, { rental: r });
       }
       return toolError(`Invalid rental_id '${id}'. Expected ver_xxx or ren_xxx.`);

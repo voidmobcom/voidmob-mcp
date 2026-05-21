@@ -57,8 +57,8 @@ export const listOrdersHandler = (http: HttpClient) =>
   };
 
 async function fetchRentals(http: HttpClient): Promise<OrderRow[]> {
-  const data = await callApi<{ rentals: unknown[] }>(http, "GET", "/v1/rentals");
-  const items = z.array(Rental).parse(data.rentals);
+  const data = await callApi<unknown[]>(http, "GET", "/v1/rentals");
+  const items = z.array(Rental).parse(data);
   return items.map((r) => ({
     kind: "sms" as const,
     id: r.id,

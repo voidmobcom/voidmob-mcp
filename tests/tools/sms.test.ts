@@ -108,7 +108,7 @@ describe("get_rental", () => {
     http.expect("GET", "/v1/rentals/ren_xyz", {
       status: 200,
       headers: new Headers(),
-      body: { success: true, data: { rental: rntFixture() } },
+      body: { success: true, data: rntFixture() },
     });
     const res = await getRentalHandler(http)({ rental_id: "ren_xyz" });
     expect(res.structuredContent?.rental).toMatchObject({ id: "ren_xyz" });
@@ -266,7 +266,7 @@ describe("cancel_rental", () => {
     const http = createMockHttpClient();
     http.expect("DELETE", "/v1/rentals/ren_xyz", {
       status: 200, headers: new Headers(),
-      body: { success: true, data: { rental: { id: "ren_xyz", kind: "rental", status: "cancelled", phone_number: "x", service_id: "x", service_name: "x", duration: null, charged_price_cents: 0, auto_renew: false, paid_until: null, expires_at: "x", created_at: "x" } } },
+      body: { success: true, data: { id: "ren_xyz", kind: "rental", status: "cancelled", phone_number: "x", service_id: "x", service_name: "x", duration: null, charged_price_cents: 0, auto_renew: false, paid_until: null, expires_at: "x", created_at: "x" } },
     });
     const res = await cancelRentalHandler(http)({ rental_id: "ren_xyz" });
     expect(res.isError).toBeFalsy();
