@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import type { Config } from "../config.js";
 import { createHttpClient } from "../client/http.js";
 import { registerAccountTools } from "../tools/account.js";
+import { registerSmsTools } from "../tools/sms.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, "../../package.json"), "utf8")) as { version: string };
@@ -23,6 +24,7 @@ export function buildLiveServer(cfg: Config): McpServer {
   // Tool registrations land here. Tasks 9-14 add more registrations alongside
   // registerAccountTools using the same factory-handler pattern.
   registerAccountTools(server, http);
+  registerSmsTools(server, http);
 
   return server;
 }
