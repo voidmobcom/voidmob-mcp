@@ -67,7 +67,7 @@ describe("search_proxies", () => {
       headers: new Headers(),
       body: {
         success: true,
-        data: { proxy_plans: [planFixture()] },
+        data: { plans: [planFixture()] },
       },
     });
     const res = await searchProxiesHandler(http)({
@@ -96,7 +96,7 @@ describe("search_proxies", () => {
     http.expect("GET", "/v1/proxy_plans?country=ZZ", {
       status: 200,
       headers: new Headers(),
-      body: { success: true, data: { proxy_plans: [] } },
+      body: { success: true, data: { plans: [] } },
     });
     const res = await searchProxiesHandler(http)({ country: "ZZ" });
     expect(res.isError).toBe(true);
@@ -135,7 +135,7 @@ describe("purchase_proxy", () => {
       headers: new Headers(),
       body: {
         success: true,
-        data: { proxy_plans: [planFixture()] },
+        data: { plans: [planFixture()] },
       },
     });
     http.expect("POST", "/v1/proxies", {
@@ -175,7 +175,7 @@ describe("purchase_proxy", () => {
       headers: new Headers(),
       body: {
         success: true,
-        data: { proxy_plans: [planFixture()] },
+        data: { plans: [planFixture()] },
       },
     });
     const res = await purchaseProxyHandler(http)({ plan_id: "proxy_plan_does_not_exist" });
@@ -325,7 +325,7 @@ describe("renew_proxy", () => {
       headers: new Headers(),
       body: {
         success: true,
-        data: { proxy_plans: [planFixture()] },
+        data: { plans: [planFixture()] },
       },
     });
     http.expect("POST", "/v1/proxies/proxy_xyz/renew", {
@@ -389,7 +389,7 @@ describe("topup_proxy", () => {
       headers: new Headers(),
       body: {
         success: true,
-        data: { proxy_plans: [planFixture()] },
+        data: { plans: [planFixture()] },
       },
     });
     http.expect("POST", "/v1/proxies/proxy_xyz/topup", {
