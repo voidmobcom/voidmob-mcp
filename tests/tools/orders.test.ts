@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { listOrdersHandler } from "../../src/tools/orders.js";
-import { createMockHttpClient } from "../../src/testing/mock-http.js";
+import { createMockHttpClient } from "../mock-http.js";
 
 // ── Fixture builders ────────────────────────────────────────────────────────
 

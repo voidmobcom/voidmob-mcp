@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { getAccountHandler } from "../../src/tools/account.js";
-import { createMockHttpClient } from "../../src/testing/mock-http.js";
+import { createMockHttpClient } from "../mock-http.js";
 
 describe("get_account", () => {
   it("calls GET /v1/me and renders balance + rate limits", async () => {

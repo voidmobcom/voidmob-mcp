@@ -8,7 +8,7 @@ import {
   reRentRentalHandler,
   toggleAutoRenewHandler,
 } from "../../src/tools/sms.js";
-import { createMockHttpClient } from "../../src/testing/mock-http.js";
+import { createMockHttpClient } from "../mock-http.js";
 
 describe("search_sms_services", () => {
   it("calls GET /v1/services and renders a table", async () => {

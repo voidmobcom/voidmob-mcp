@@ -11,7 +11,7 @@ import {
   createProxyListHandler,
   deleteProxyListHandler,
 } from "../../src/tools/proxy.js";
-import { createMockHttpClient } from "../../src/testing/mock-http.js";
+import { createMockHttpClient } from "../mock-http.js";
 
 // ── Fixture builders ────────────────────────────────────────────────────────
 

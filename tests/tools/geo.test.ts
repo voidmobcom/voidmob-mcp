@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { getGeoHandler } from "../../src/tools/geo.js";
-import { createMockHttpClient } from "../../src/testing/mock-http.js";
+import { createMockHttpClient } from "../mock-http.js";
 
 // ── Fixture builders ────────────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-import type { HttpClient, HttpResponse } from "../client/http.js";
+import type { HttpClient, HttpResponse } from "../src/client/http.js";
 
 interface Expectation {
   method: string;
