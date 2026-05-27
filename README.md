@@ -148,5 +148,5 @@ Multiple MCP clients running simultaneously (Claude Code + Cursor + Desktop) all
 ---
 
 <p align="center">
-  <a href="https://voidmob.com">Website</a> · <a href="https://voidmob.com/mcp">MCP</a> · <a href="https://github.com/voidmobcom/voidmob-mcp">GitHub</a> · <a href="https://x.com/voidmob_com">X (Twitter)</a> · MIT License
+  <a href="https://voidmob.com">Website</a> · <a href="https://voidmob.com/mcp">MCP</a> · <a href="https://github.com/voidmobcom/voidmob-mcp">GitHub</a> · MIT License
 </p>
