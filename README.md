@@ -72,40 +72,57 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 
 ## Tools
 
+25 tools across five domains.
+
 ### Account (1)
-- `get_account` - balance, rate limits, account id
+
+| Tool | Description |
+|---|---|
+| `get_account` | Balance, rate limits, and account id |
 
 ### SMS (7)
-- `search_sms_services` - list services with prices
-- `rent_number` - rent a US number (verification / rental / dedicated)
-- `get_rental` - read status + messages
-- `cancel_rental` - cancel a verification or LTR
-- `reuse_number` - free or paid reuse of a completed verification
-- `re_rent_rental` - extend an LTR for another period
-- `toggle_auto_renew` - turn auto-renewal on/off
+
+| Tool | Description |
+|---|---|
+| `search_sms_services` | List services with prices |
+| `rent_number` | Rent a US number (verification / rental / dedicated) |
+| `get_rental` | Read status and received messages |
+| `cancel_rental` | Cancel a verification or long-term rental |
+| `reuse_number` | Free or paid reuse of a completed verification |
+| `re_rent_rental` | Extend a long-term rental for another period |
+| `toggle_auto_renew` | Turn auto-renewal on or off |
 
 ### eSIM (5)
-- `search_esim_plans` - find global data plans
-- `purchase_esim` - buy a plan
-- `get_esim_status` - status + usage
-- `topup_esim` - browse and buy top-ups
-- `get_esim_qr` - fetch activation QR as inline image
+
+| Tool | Description |
+|---|---|
+| `search_esim_plans` | Find global data plans |
+| `purchase_esim` | Buy a plan |
+| `get_esim_status` | Status and data usage |
+| `topup_esim` | Browse and buy top-ups |
+| `get_esim_qr` | Fetch the activation QR as an inline image |
 
 ### Proxy (10)
-- `search_proxies` - list available plans
-- `purchase_proxy` - buy a mobile proxy
-- `get_proxy_status` - status + usage + gateway creds
-- `rotate_proxy_ip` - rotate to a new IP (dedicated)
-- `renew_proxy` - extend expiry
-- `topup_proxy` - add data
-- `regenerate_proxy_password` - rotate gateway password
-- `list_proxy_lists` - geo-targeted sub-pools
-- `create_proxy_list` - new sub-pool
-- `delete_proxy_list` - remove a sub-pool
+
+| Tool | Description |
+|---|---|
+| `search_proxies` | List available mobile proxy plans |
+| `purchase_proxy` | Buy a mobile proxy |
+| `get_proxy_status` | Status, usage, and gateway credentials |
+| `rotate_proxy_ip` | Rotate a dedicated proxy to a new IP |
+| `renew_proxy` | Extend expiry |
+| `topup_proxy` | Add data |
+| `regenerate_proxy_password` | Rotate the gateway password |
+| `list_proxy_lists` | List geo-targeted sub-pools |
+| `create_proxy_list` | Create a geo-targeted sub-pool |
+| `delete_proxy_list` | Remove a sub-pool |
 
 ### Discovery + history (2)
-- `get_geo` - cascading country/region/city/ISP for targeting
-- `list_orders` - active SMS / eSIM / proxy orders
+
+| Tool | Description |
+|---|---|
+| `get_geo` | Cascading country/region/city/ISP for targeting |
+| `list_orders` | Active SMS / eSIM / proxy orders |
 
 ## Example prompts
 
@@ -123,7 +140,13 @@ Multiple MCP clients running simultaneously (Claude Code + Cursor + Desktop) all
 
 ## Support
 
+- Website: https://voidmob.com
+- MCP guide: https://voidmob.com/mcp
 - API docs: https://dashboard.voidmob.com/developers/docs
 - Issues: https://github.com/voidmobcom/voidmob-mcp/issues
 
-MIT License.
+---
+
+<p align="center">
+  <a href="https://voidmob.com">Website</a> · <a href="https://voidmob.com/mcp">MCP</a> · <a href="https://github.com/voidmobcom/voidmob-mcp">GitHub</a> · <a href="https://x.com/voidmob_com">X (Twitter)</a> · MIT License
+</p>
