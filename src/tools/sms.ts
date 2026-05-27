@@ -4,6 +4,7 @@ import { HttpClient } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
 import {
   Verification,
+  VerificationCancelResult,
   Rental,
   ServicesResponse,
   type Verification as VerificationT,
@@ -141,8 +142,9 @@ export const cancelRentalHandler = (http: HttpClient) =>
       const out = await callApi<{ verification: unknown }>(http, "POST", `/v1/verifications/${id}/cancel`, {
         idempotencyKey: newIdempotencyKey(),
       });
-      const v = Verification.parse(out.verification);
-      return structuredOk(`Verification ${v.id} cancelled.`, { verification: v });
+      const v = VerificationCancelResult.parse(out.verification);
+      const refund = v.refunded_cents && v.refunded_cents > 0 ? ` Refunded ${formatUsd(v.refunded_cents)}.` : "";
+      return structuredOk(`Verification ${v.id} cancelled.${refund}`, { verification: v });
     }
     if (isRentalId(id)) {
       const out = await callApi<unknown>(http, "DELETE", `/v1/rentals/${id}`, {

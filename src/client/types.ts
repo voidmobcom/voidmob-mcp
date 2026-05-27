@@ -73,6 +73,15 @@ export const Verification = z.object({
 });
 export type Verification = z.infer<typeof Verification>;
 
+// Terminal-action responses (cancel) return a slim verification object, not
+// the full resource: { id, status, refunded_cents }.
+export const VerificationCancelResult = z.object({
+  id: z.string(),
+  status: z.string(),
+  refunded_cents: z.number().int().optional(),
+});
+export type VerificationCancelResult = z.infer<typeof VerificationCancelResult>;
+
 // ── Rentals (long-term + 28-day dedicated) ──────────────────────────────────
 
 export const RentalMessage = z.object({

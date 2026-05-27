@@ -19,6 +19,8 @@ export async function callApi<T>(
   opts?: { body?: unknown; idempotencyKey?: string },
 ): Promise<T> {
   const res = await http.request(method, path, opts);
+  // 204 No Content (e.g. DELETE proxy list) is a success with no body.
+  if (res.status === 204) return undefined as T;
   const env = res.body as ApiEnvelope<T>;
   if (env && env.success === true) return env.data;
   // Handles mock test clients and 2xx responses carrying success:false.

@@ -295,12 +295,15 @@ describe("rent_number (rental + dedicated paths)", () => {
 describe("cancel_rental", () => {
   it("ver_ ID → POST /v1/verifications/:id/cancel with idempotency", async () => {
     const http = createMockHttpClient();
+    // Cancel returns a SLIM verification object, not the full resource.
     http.expect("POST", "/v1/verifications/ver_abc/cancel", {
       status: 200, headers: new Headers(),
-      body: { success: true, data: { verification: { id: "ver_abc", status: "cancelled", phone_number: "x", service_id: "x", service_name: "x", charged_price_cents: 0, expires_at: "x", can_cancel: false, created_at: "x", reuse_counter: 0, allow_reuse: false, allow_paid_reuse: false, paid_reuse_price_cents: 50, messages: [] } } },
+      body: { success: true, data: { verification: { id: "ver_abc", status: "cancelled", refunded_cents: 15 } } },
     });
     const res = await cancelRentalHandler(http)({ rental_id: "ver_abc" });
     expect(res.isError).toBeFalsy();
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("Refunded $0.15");
     expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
   });
 
