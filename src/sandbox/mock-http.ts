@@ -11,6 +11,7 @@ import type {
   ProxyList,
   ProxyPlan,
 } from "../client/types.js";
+import { formatUsd } from "../utils/format.js";
 
 // In-memory mock of the VoidMob v1 API. The sandbox registers the SAME live
 // tools (src/tools/*) but with this client injected instead of the real HTTP
@@ -139,12 +140,17 @@ function makeGateway(geoHint = "us"): NonNullable<Proxy["gateway"]> {
 export function createSandboxHttpClient(): HttpClient {
   const db = new Store();
 
-  // Lazily flip a just-created verification to code_received once READY_AFTER_MS
-  // has elapsed, mirroring the real "poll get_rental until the code lands" flow.
+  // True once READY_AFTER_MS has elapsed since the entity was (re)armed.
+  const isReady = (id: string): boolean => Date.now() - (db.createdAtMs.get(id) ?? 0) >= READY_AFTER_MS;
+
+  // Charge the wallet, or return a 402 response if the balance can't cover it.
+  const charge = (cents: number): HttpResponse | null =>
+    db.balanceCents < cents ? fail(402, "INSUFFICIENT_BALANCE", "Insufficient balance.") : ((db.balanceCents -= cents), null);
+
+  // Lazily flip a just-created verification to code_received once the code has
+  // "arrived", mirroring the real "poll get_rental until the code lands" flow.
   const settleVerification = (v: Verification): Verification => {
-    if (v.status !== "waiting_for_code") return v;
-    const age = Date.now() - (db.createdAtMs.get(v.id) ?? 0);
-    if (age < READY_AFTER_MS) return v;
+    if (v.status !== "waiting_for_code" || !isReady(v.id)) return v;
     v.status = "code_received";
     v.code = smsCode();
     v.code_received_at = iso();
@@ -153,11 +159,9 @@ export function createSandboxHttpClient(): HttpClient {
     return v;
   };
 
-  // Proxies provision asynchronously; flip to active after READY_AFTER_MS.
+  // Proxies provision asynchronously; flip to active once ready.
   const settleProxy = (p: Proxy): Proxy => {
-    if (p.status !== "provisioning") return p;
-    const age = Date.now() - (db.createdAtMs.get(p.id) ?? 0);
-    if (age >= READY_AFTER_MS) p.status = "active";
+    if (p.status === "provisioning" && isReady(p.id)) p.status = "active";
     return p;
   };
 
@@ -169,7 +173,7 @@ export function createSandboxHttpClient(): HttpClient {
     if (method === "GET" && rawPath === "/v1/me") {
       const me: MePayload = {
         id: "acct_sandbox",
-        balance: { amount_cents: db.balanceCents, currency: "USD", formatted: `$${(db.balanceCents / 100).toFixed(2)}` },
+        balance: { amount_cents: db.balanceCents, currency: "USD", formatted: formatUsd(db.balanceCents) },
         rate_limits: {
           default: { limit: 120, window_seconds: 60 },
           purchases: { limit: 30, window_seconds: 60 },
@@ -188,8 +192,8 @@ export function createSandboxHttpClient(): HttpClient {
     if (method === "POST" && rawPath === "/v1/verifications") {
       const svc = SERVICES.find((s) => s.id === body.service_id);
       if (!svc) return fail(404, "NOT_FOUND", "Service not found.");
-      if (db.balanceCents < svc.quoted_price_cents) return fail(402, "INSUFFICIENT_BALANCE", "Insufficient balance.");
-      db.balanceCents -= svc.quoted_price_cents;
+      const paid = charge(svc.quoted_price_cents);
+      if (paid) return paid;
       const id = uid("ver_");
       const v: Verification = {
         id,
@@ -216,15 +220,17 @@ export function createSandboxHttpClient(): HttpClient {
       if (!v) return fail(404, "NOT_FOUND", "Verification not found.");
       if (method === "GET" && !seg[3]) return ok({ verification: settleVerification(v) });
       if (method === "POST" && seg[3] === "cancel") {
-        const refund = v.status === "waiting_for_code" ? v.charged_price_cents : 0;
+        // Refund only if the code hasn't landed yet. settleVerification reflects
+        // elapsed time, so eligibility doesn't depend on whether the client polled.
+        const refund = settleVerification(v).status === "waiting_for_code" ? v.charged_price_cents : 0;
         if (refund > 0) db.balanceCents += refund;
         v.status = "cancelled";
         return ok({ verification: { id: v.id, status: v.status, refunded_cents: refund } });
       }
       // paid reuse (/reuse/paid) is more specific than free reuse (/reuse) - match it first
       if (method === "POST" && seg[3] === "reuse" && seg[4] === "paid") {
-        if (db.balanceCents < v.paid_reuse_price_cents) return fail(402, "INSUFFICIENT_BALANCE", "Insufficient balance.");
-        db.balanceCents -= v.paid_reuse_price_cents;
+        const paid = charge(v.paid_reuse_price_cents);
+        if (paid) return paid;
         v.reuse_counter += 1;
         v.charged_reuse_cents = v.paid_reuse_price_cents;
         v.status = "waiting_for_code";
@@ -251,8 +257,8 @@ export function createSandboxHttpClient(): HttpClient {
       const svc = SERVICES.find((s) => s.id === body.service_id);
       if (!svc) return fail(404, "NOT_FOUND", "Service not found.");
       const price = Number(body.max_price_cents ?? svc.quoted_price_cents);
-      if (db.balanceCents < price) return fail(402, "INSUFFICIENT_BALANCE", "Insufficient balance.");
-      db.balanceCents -= price;
+      const paid = charge(price);
+      if (paid) return paid;
       const id = uid("ren_");
       const duration = String(body.duration ?? "7D");
       const days = parseInt(duration, 10) || 7;
@@ -292,6 +298,8 @@ export function createSandboxHttpClient(): HttpClient {
         return ok(r);
       }
       if (method === "POST" && seg[3] === "re_rent") {
+        const paid = charge(r.charged_price_cents);
+        if (paid) return paid;
         const days = parseInt(r.duration, 10) || 7;
         r.status = "active";
         r.paid_until = iso(days * DAY);
@@ -332,8 +340,8 @@ export function createSandboxHttpClient(): HttpClient {
     if (rawPath === "/v1/esims" && method === "POST") {
       const product = ESIM_PRODUCTS.find((p) => p.id === body.product_id);
       if (!product) return fail(404, "NOT_FOUND", "Product not found.");
-      if (db.balanceCents < product.price_cents) return fail(402, "INSUFFICIENT_BALANCE", "Insufficient balance.");
-      db.balanceCents -= product.price_cents;
+      const paid = charge(product.price_cents);
+      if (paid) return paid;
       const id = uid("esim_");
       const esim: Esim = {
         id,
@@ -398,8 +406,8 @@ export function createSandboxHttpClient(): HttpClient {
       if (seg[3] === "topups" && method === "POST") {
         const product = ESIM_PRODUCTS.find((p) => p.id === body.product_id);
         if (!product) return fail(404, "NOT_FOUND", "Top-up product not found.");
-        if (db.balanceCents < product.price_cents) return fail(402, "INSUFFICIENT_BALANCE", "Insufficient balance.");
-        db.balanceCents -= product.price_cents;
+        const paid = charge(product.price_cents);
+        if (paid) return paid;
         const id = uid("esim_");
         const topup: Esim = {
           id,
@@ -446,8 +454,8 @@ export function createSandboxHttpClient(): HttpClient {
     if (rawPath === "/v1/proxies" && method === "POST") {
       const plan = PROXY_PLANS.find((p) => p.id === body.plan_id);
       if (!plan) return fail(404, "NOT_FOUND", "Plan not found.");
-      if (db.balanceCents < plan.quoted_price_cents) return fail(402, "INSUFFICIENT_BALANCE", "Insufficient balance.");
-      db.balanceCents -= plan.quoted_price_cents;
+      const paid = charge(plan.quoted_price_cents);
+      if (paid) return paid;
       const id = uid("prx_");
       const proxy: Proxy = {
         id,
@@ -484,16 +492,15 @@ export function createSandboxHttpClient(): HttpClient {
         return ok({ proxy_id: proxy.id, rotated_at: iso(), current_ip: ip() });
       }
       if (seg[3] === "renew" && method === "POST") {
-        const price = Number(body.max_price_cents ?? proxy.charged_price_cents);
-        if (db.balanceCents < price) return fail(402, "INSUFFICIENT_BALANCE", "Insufficient balance.");
-        db.balanceCents -= price;
-        proxy.expires_at = iso(30 * DAY);
+        const paid = charge(Number(body.max_price_cents ?? proxy.charged_price_cents));
+        if (paid) return paid;
+        const days = PROXY_PLANS.find((p) => p.id === proxy.plan_id)?.duration_days ?? 30;
+        proxy.expires_at = iso(days * DAY);
         return ok({ proxy });
       }
       if (seg[3] === "topup" && method === "POST") {
-        const price = Number(body.max_price_cents ?? 0);
-        if (db.balanceCents < price) return fail(402, "INSUFFICIENT_BALANCE", "Insufficient balance.");
-        db.balanceCents -= price;
+        const paid = charge(Number(body.max_price_cents ?? 0));
+        if (paid) return paid;
         proxy.data_gb_total += Number(body.additional_gb ?? 0);
         return ok({ proxy });
       }
@@ -504,6 +511,7 @@ export function createSandboxHttpClient(): HttpClient {
       if (seg[3] === "lists" && !seg[4] && method === "POST") {
         const id = uid("plist_");
         const single = typeof body.country === "string" ? body.country : null;
+        const gw = makeGateway(geoHint);
         const list: ProxyList = {
           id,
           proxy_id: proxy.id,
@@ -517,8 +525,8 @@ export function createSandboxHttpClient(): HttpClient {
           rotation_period_seconds: Number(body.rotation_period_seconds ?? 0),
           rotation_mode: String(body.rotation_mode ?? "instant"),
           format: String(body.format ?? "login_pass_host_port"),
-          credentials: { host: `${geoHint}.gw.voidmob.com`, port: 10000 + rnd(0, 4999), protocol: "http", username: `vm_${alnum(6)}`, password: alnum(12) },
-          entries: [`${geoHint}.gw.voidmob.com:${10000 + rnd(0, 4999)}:vm_${alnum(6)}:${alnum(12)}`],
+          credentials: { host: gw.host, port: gw.port, protocol: gw.protocol, username: gw.username, password: gw.password },
+          entries: [`${gw.host}:${gw.port}:${gw.username}:${gw.password}`],
           activation_note: "Active within 1-2 minutes.",
           created_at: iso(),
         };
