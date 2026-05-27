@@ -1,461 +1,316 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { state, SmsRental } from "../sandbox/state.js";
-import { generateId } from "../utils/validation.js";
+import { HttpClient } from "../client/http.js";
+import { callApi } from "../client/call-api.js";
 import {
-  formatUsd,
-  generatePhoneNumber,
-  generateVerificationCode,
-  generateDisplayId,
-  formatTimeRemaining,
-} from "../utils/format.js";
-import { errorResponse, textResponse } from "../utils/response.js";
-import { searchServices, getService, smsServices } from "../mock-data/sms.js";
+  Verification,
+  VerificationCancelResult,
+  Rental,
+  ServicesResponse,
+  type Verification as VerificationT,
+  type Rental as RentalT,
+} from "../client/types.js";
+import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
+import { formatUsd, formatTimeRemaining } from "../utils/format.js";
+import { newIdempotencyKey } from "../client/idempotency.js";
+import {
+  VER_PREFIX,
+  REN_PREFIX,
+  isVerificationId,
+  isRentalId,
+  INVALID_RENTAL_ID,
+} from "../constants/rental-id.js";
 
-const DURATION_DAYS: Record<string, number> = {
-  "3D": 3,
-  "7D": 7,
-  "14D": 14,
-  "30D": 30,
-};
+// The catalog service id for the 28-day dedicated number tier.
+const DEDICATED_SERVICE_ID = "svc_dedicated_28d";
 
-const REUSE_COST_CENTS = 50;
+// ── search_sms_services ─────────────────────────────────────────────────────
 
-export function registerSmsTools(server: McpServer) {
+export const searchSmsServicesHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { query?: string }): Promise<ToolResult> => {
+    const raw = await callApi<unknown>(http, "GET", "/v1/services");
+    const parsed = ServicesResponse.parse(raw);
+    let services = parsed.services;
+    if (args.query) {
+      const q = args.query.toLowerCase();
+      services = services.filter((s) => s.name.toLowerCase().includes(q));
+    }
+    if (services.length === 0) return toolError("No services matched.");
+    const text = [
+      `${services.length} SMS service(s):`,
+      ``,
+      ...services.slice(0, 50).map((s) =>
+        `  ${s.name.padEnd(20)} ${s.id.padEnd(14)} verify=${formatUsd(s.quoted_price_cents)}${
+          s.ltr_7d_price_cents ? `  7d=${formatUsd(s.ltr_7d_price_cents)}` : ""
+        }`,
+      ),
+    ].join("\n");
+    return structuredOk(text, { services });
+  });
+
+// ── get_rental ──────────────────────────────────────────────────────────────
+
+export const getRentalHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { rental_id: string }): Promise<ToolResult> => {
+    const id = args.rental_id;
+    if (isVerificationId(id)) {
+      const raw = await callApi<{ verification: unknown }>(http, "GET", `/v1/verifications/${id}`);
+      const v = Verification.parse(raw.verification);
+      return structuredOk(renderVerification(v), { verification: v });
+    }
+    if (isRentalId(id)) {
+      const raw = await callApi<unknown>(http, "GET", `/v1/rentals/${id}`);
+      const r = Rental.parse(raw);
+      return structuredOk(renderRental(r), { rental: r });
+    }
+    return toolError(INVALID_RENTAL_ID(id));
+  });
+
+// ── rent_number ─────────────────────────────────────────────────────────────
+
+export const rentNumberHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { service_id: string; kind?: "verification" | "rental" | "dedicated"; duration?: "3d" | "7d" | "14d" | "30d" }): Promise<ToolResult> => {
+    const kind = args.kind ?? "verification";
+    if (kind === "rental" && !args.duration) {
+      return toolError("rent_number kind='rental' requires a duration (3d|7d|14d|30d).");
+    }
+    // Quote against the live catalog.
+    const services = await callApi<unknown>(http, "GET", "/v1/services");
+    const parsed = ServicesResponse.parse(services);
+
+    if (kind === "verification") {
+      const svc = parsed.services.find((s) => s.id === args.service_id);
+      if (!svc) {
+        return toolError(`Service '${args.service_id}' not found. Use search_sms_services to list available services.`);
+      }
+      const created = await callApi<{ verification: unknown }>(http, "POST", "/v1/verifications", {
+        body: { service_id: args.service_id, max_price_cents: svc.quoted_price_cents },
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const v = Verification.parse(created.verification);
+      return structuredOk(`Verification ${v.id} created.\n\n${renderVerification(v)}`, { verification: v });
+    }
+
+    // Long-term + dedicated both POST /v1/rentals with an uppercase duration.
+    // Dedicated is the dedicated 28-day catalog service (svc_dedicated_28d, 28D).
+    let serviceId: string;
+    let duration: "3D" | "7D" | "14D" | "30D" | "28D";
+    let quotedCents: number;
+    if (kind === "dedicated") {
+      serviceId = DEDICATED_SERVICE_ID;
+      duration = "28D";
+      const ded = parsed.services.find((s) => s.id === DEDICATED_SERVICE_ID);
+      if (!ded || !ded.ltr_28d_price_cents) {
+        return toolError("Dedicated 28-day numbers are not currently available.");
+      }
+      quotedCents = ded.ltr_28d_price_cents;
+    } else {
+      serviceId = args.service_id;
+      const svc = parsed.services.find((s) => s.id === args.service_id);
+      if (!svc) {
+        return toolError(`Service '${args.service_id}' not found. Use search_sms_services to list available services.`);
+      }
+      const tier = args.duration as "3d" | "7d" | "14d" | "30d";
+      const priceByTier: Record<typeof tier, number | undefined> = {
+        "3d": svc.ltr_3d_price_cents,
+        "7d": svc.ltr_7d_price_cents,
+        "14d": svc.ltr_14d_price_cents,
+        "30d": svc.ltr_30d_price_cents,
+      };
+      const v = priceByTier[tier];
+      if (!v) {
+        return toolError(`Long-term rental ${args.duration} is not offered for ${svc.name}. Try a different duration or kind='dedicated'.`);
+      }
+      quotedCents = v;
+      duration = tier.toUpperCase() as "3D" | "7D" | "14D" | "30D";
+    }
+    // /v1/rentals returns the rental object flat (no { rental: ... } wrapper)
+    const created = await callApi<unknown>(http, "POST", "/v1/rentals", {
+      body: { service_id: serviceId, duration, max_price_cents: quotedCents },
+      idempotencyKey: newIdempotencyKey(),
+    });
+    const r = Rental.parse(created);
+    return structuredOk(`Rental ${r.id} created.\n\n${renderRental(r)}`, { rental: r });
+  });
+
+// ── cancel_rental ───────────────────────────────────────────────────────────
+
+export const cancelRentalHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { rental_id: string }): Promise<ToolResult> => {
+    const id = args.rental_id;
+    if (isVerificationId(id)) {
+      const out = await callApi<{ verification: unknown }>(http, "POST", `/v1/verifications/${id}/cancel`, {
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const v = VerificationCancelResult.parse(out.verification);
+      const refund = v.refunded_cents && v.refunded_cents > 0 ? ` Refunded ${formatUsd(v.refunded_cents)}.` : "";
+      return structuredOk(`Verification ${v.id} cancelled.${refund}`, { verification: v });
+    }
+    if (isRentalId(id)) {
+      const out = await callApi<unknown>(http, "DELETE", `/v1/rentals/${id}`, {
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const r = Rental.parse(out);
+      return structuredOk(`Rental ${r.id} cancelled.`, { rental: r });
+    }
+    return toolError(INVALID_RENTAL_ID(id));
+  });
+
+// ── reuse_number ────────────────────────────────────────────────────────────
+
+export const reuseNumberHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { rental_id: string; paid?: boolean }): Promise<ToolResult> => {
+    const id = args.rental_id;
+    if (!isVerificationId(id)) {
+      return toolError(`reuse_number requires a verification id (${VER_PREFIX}xxx). Got '${id}'.`);
+    }
+    const path = args.paid ? `/v1/verifications/${id}/reuse/paid` : `/v1/verifications/${id}/reuse`;
+    const out = await callApi<{ verification: unknown }>(http, "POST", path, {
+      idempotencyKey: newIdempotencyKey(),
+    });
+    const v = Verification.parse(out.verification);
+    return structuredOk(renderVerification(v), { verification: v });
+  });
+
+// ── re_rent_rental ──────────────────────────────────────────────────────────
+
+export const reRentRentalHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { rental_id: string }): Promise<ToolResult> => {
+    const id = args.rental_id;
+    if (!isRentalId(id)) {
+      return toolError(`re_rent_rental requires ${REN_PREFIX}xxx. Got '${id}'.`);
+    }
+    // No request body: re-rents the same number for the same duration at the
+    // current price. Only valid when re_rent_available is true on the rental.
+    const out = await callApi<unknown>(http, "POST", `/v1/rentals/${id}/re_rent`, {
+      idempotencyKey: newIdempotencyKey(),
+    });
+    const r = Rental.parse(out);
+    return structuredOk(`Re-rented ${r.id}.\n\n${renderRental(r)}`, { rental: r });
+  });
+
+// ── toggle_auto_renew ───────────────────────────────────────────────────────
+
+export const toggleAutoRenewHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { rental_id: string; auto_renew: boolean }): Promise<ToolResult> => {
+    const id = args.rental_id;
+    if (!isRentalId(id)) {
+      return toolError(`toggle_auto_renew requires ${REN_PREFIX}xxx. Got '${id}'.`);
+    }
+    const out = await callApi<unknown>(http, "POST", `/v1/rentals/${id}/auto_renew`, {
+      body: { auto_renew: args.auto_renew },
+      idempotencyKey: newIdempotencyKey(),
+    });
+    const r = Rental.parse(out);
+    return structuredOk(`Auto-renew on ${r.id} is now ${r.auto_renew ? "on" : "off"}.`, { rental: r });
+  });
+
+// ── render helpers ──────────────────────────────────────────────────────────
+
+export function renderVerification(v: VerificationT): string {
+  const lines = [
+    `Verification ${v.id}`,
+    ``,
+    `  Phone:        ${v.phone_number}`,
+    `  Service:      ${v.service_name} (${v.service_id})`,
+    `  Status:       ${v.status}`,
+    `  Charged:      ${formatUsd(v.charged_price_cents)}`,
+    `  Expires:      ${formatTimeRemaining(new Date(v.expires_at).getTime())}`,
+  ];
+  if (v.status === "code_received" && v.code) {
+    lines.push(``, `  Code received: ${v.code}`);
+    if (v.code_received_at) lines.push(`  At:           ${v.code_received_at}`);
+  } else if (v.status === "waiting_for_code") {
+    lines.push(``, `  No code yet. Try get_rental again in 10-30s.`);
+  }
+  return lines.join("\n");
+}
+
+export function renderRental(r: RentalT): string {
+  const label = r.duration === "28D" ? "dedicated" : "rental";
+  const lines = [
+    `Rental ${r.id} (${label})`,
+    ``,
+    `  Phone:        ${r.phone_number}`,
+    `  Service:      ${r.service_name} (${r.service_id})`,
+    `  Status:       ${r.status}`,
+    `  Charged:      ${formatUsd(r.charged_price_cents)}`,
+    `  Duration:     ${r.duration ?? "-"}`,
+    `  Auto-renew:   ${r.auto_renew ? "on" : "off"}`,
+    `  Paid until:   ${r.paid_until ?? "-"}`,
+    `  Expires:      ${formatTimeRemaining(new Date(r.expires_at).getTime())}`,
+  ];
+  if (r.messages && r.messages.length > 0) {
+    lines.push(``, `  Messages (${r.messages.length}):`);
+    for (const m of r.messages) {
+      lines.push(`    [${m.received_at.slice(11, 19)}] ${m.text}`);
+      if (m.code) lines.push(`      Code: ${m.code}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+// ── registration ────────────────────────────────────────────────────────────
+
+export function registerSmsTools(server: McpServer, http: HttpClient) {
   server.tool(
     "search_sms_services",
-    "Search available US non-VoIP SMS services with pricing for verification, long-term rental, and dedicated numbers.",
-    {
-      query: z
-        .string()
-        .optional()
-        .describe("Search by service name (e.g., 'telegram', 'whatsapp')"),
-    },
-    async ({ query }) => {
-      const results = searchServices(query);
-
-      if (results.length === 0) {
-        return errorResponse(
-          "No services found matching your query. Try a different search term or omit the query to see all services."
-        );
-      }
-
-      let text = `Found ${results.length} US non-VoIP SMS service(s):\n\n`;
-      text += `${"Service".padEnd(22)} ${"ID".padEnd(6)} ${"Verify".padStart(8)} ${"3-Day".padStart(8)} ${"7-Day".padStart(8)} ${"14-Day".padStart(8)} ${"30-Day".padStart(8)} ${"Dedicated".padStart(10)} Icon\n`;
-      text += `${"─".repeat(22)} ${"─".repeat(6)} ${"─".repeat(8)} ${"─".repeat(8)} ${"─".repeat(8)} ${"─".repeat(8)} ${"─".repeat(8)} ${"─".repeat(10)} ${"─".repeat(4)}\n`;
-
-      for (const s of results) {
-        text += `${s.serviceName.padEnd(22)} ${s.id.padEnd(6)} ${formatUsd(s.priceUsdCents).padStart(8)} ${formatUsd(s.ltr3PriceCents).padStart(8)} ${formatUsd(s.ltr7PriceCents).padStart(8)} ${formatUsd(s.ltr14PriceCents).padStart(8)} ${formatUsd(s.ltr30PriceCents).padStart(8)} ${formatUsd(s.dedicatedPriceCents).padStart(10)} ${s.hasIcon ? "Yes" : "No"}\n`;
-      }
-
-      return textResponse(text);
-    }
+    "Search available US non-VoIP SMS services with prices per row. Returns each service's verification price plus LTR/dedicated tiers when offered.",
+    { query: z.string().optional().describe("Substring filter on service name (e.g. 'telegram').") },
+    searchSmsServicesHandler(http),
   );
 
   server.tool(
-    "get_sms_price",
-    "Get all pricing tiers for a specific US non-VoIP SMS service.",
-    {
-      service: z.string().describe("Service ID (e.g., 'wa', 'tg', 'go')"),
-    },
-    async ({ service }) => {
-      const svc = getService(service);
-
-      if (!svc) {
-        return errorResponse(
-          `Service "${service}" not found. Use search_sms_services to find available options.`
-        );
-      }
-
-      const text = [
-        `${svc.serviceName} (${svc.id}) - US Non-VoIP`,
-        ``,
-        `  Verification (20min):  ${formatUsd(svc.priceUsdCents)}`,
-        `  Long-Term Rental:`,
-        `    3-day:               ${formatUsd(svc.ltr3PriceCents)}`,
-        `    7-day:               ${formatUsd(svc.ltr7PriceCents)}`,
-        `    14-day:              ${formatUsd(svc.ltr14PriceCents)}`,
-        `    30-day:              ${formatUsd(svc.ltr30PriceCents)}`,
-        `  Dedicated (28 days):   ${formatUsd(svc.dedicatedPriceCents)}`,
-        ``,
-        `  Has icon: ${svc.hasIcon ? "Yes" : "No"}`,
-      ].join("\n");
-
-      return textResponse(text);
-    }
+    "get_rental",
+    "Read a rental's current status and any messages received. Pass the ID you got from rent_number (ver_xxx for verifications, ren_xxx for long-term/dedicated). SMS codes typically arrive 10-60s after rent_number; poll this tool until status changes.",
+    { rental_id: z.string().describe("ver_xxx or ren_xxx") },
+    getRentalHandler(http),
   );
 
   server.tool(
     "rent_number",
-    "Rent a US non-VoIP phone number. Supports verification (20min), long-term rental (3-30 days), and dedicated numbers (28 days, all services).",
+    "Rent a US non-VoIP phone number. kind='verification' (single SMS, 20min); kind='rental' (timed LTR with duration); kind='dedicated' (28-day all-services number). Quote-then-commit: the tool fetches the live price and ties max_price_cents to the quote so you never pay above what you saw.",
     {
-      service: z.string().describe("Service ID (e.g., 'wa', 'tg', 'go')"),
-      rentalType: z
-        .enum(["verification", "rental", "dedicated"])
-        .default("verification")
-        .describe("Type of rental (default: verification)"),
-      duration: z
-        .enum(["3D", "7D", "14D", "30D"])
-        .optional()
-        .describe("Duration for long-term rentals (required when rentalType is 'rental')"),
-      autoRenew: z
-        .boolean()
-        .default(false)
-        .describe("Enable auto-renewal (only for rental/dedicated)"),
+      service_id: z.string().describe("svc_xxx from search_sms_services"),
+      kind: z.enum(["verification", "rental", "dedicated"]).default("verification"),
+      duration: z.enum(["3d", "7d", "14d", "30d"]).optional().describe("Required when kind='rental'"),
     },
-    async ({ service, rentalType, duration, autoRenew }) => {
-      const svc = getService(service);
-
-      if (!svc) {
-        return errorResponse(
-          `Service "${service}" not found. Use search_sms_services to find available options.`
-        );
-      }
-
-      if (rentalType === "rental" && !duration) {
-        return errorResponse(
-          `Duration is required for long-term rentals. Choose one of: 3D, 7D, 14D, 30D.`
-        );
-      }
-
-      let priceCents: number;
-      let txType: "sms_verification" | "sms_rental" | "sms_dedicated";
-      let expiryMs: number;
-
-      const now = Date.now();
-
-      if (rentalType === "verification") {
-        priceCents = svc.priceUsdCents;
-        txType = "sms_verification";
-        expiryMs = 20 * 60 * 1000;
-      } else if (rentalType === "rental") {
-        const durationKey = duration!;
-        const priceMap: Record<string, number> = {
-          "3D": svc.ltr3PriceCents,
-          "7D": svc.ltr7PriceCents,
-          "14D": svc.ltr14PriceCents,
-          "30D": svc.ltr30PriceCents,
-        };
-        priceCents = priceMap[durationKey];
-        txType = "sms_rental";
-        expiryMs = DURATION_DAYS[durationKey] * 86400000;
-      } else {
-        // dedicated
-        priceCents = svc.dedicatedPriceCents;
-        txType = "sms_dedicated";
-        expiryMs = 28 * 86400000;
-      }
-
-      const desc = rentalType === "verification"
-        ? `SMS verification: ${svc.serviceName}`
-        : rentalType === "rental"
-          ? `SMS ${duration} rental: ${svc.serviceName}`
-          : `SMS dedicated: ${svc.serviceName}`;
-
-      if (!state.deductBalance(priceCents, txType, desc)) {
-        return errorResponse(
-          `Insufficient balance. Need ${formatUsd(priceCents)} but have ${formatUsd(state.balanceCents)}. Use deposit to add funds.`
-        );
-      }
-
-      const rentalId = generateId("sms");
-      const phoneNumber = generatePhoneNumber();
-      const displayId = generateDisplayId("SMS");
-
-      const rental: SmsRental = {
-        id: rentalId,
-        displayId,
-        phoneNumber,
-        service: svc.id,
-        serviceName: svc.serviceName,
-        rentalType,
-        duration: rentalType === "rental" ? duration! : null,
-        autoRenew: rentalType === "verification" ? false : autoRenew,
-        paidUntil: rentalType === "verification" ? null : now + expiryMs,
-        status: "active",
-        messages: [],
-        expiresAt: now + expiryMs,
-        createdAt: now,
-        priceCents,
-        reuseCounter: 0,
-      };
-
-      state.smsRentals.set(rentalId, rental);
-
-      const lines = [
-        `Number rented!`,
-        ``,
-        `  Rental ID:  ${rentalId}`,
-        `  Display ID: ${displayId}`,
-        `  Number:     ${phoneNumber}`,
-        `  Service:    ${svc.serviceName}`,
-        `  Type:       ${rentalType}${rentalType === "rental" ? ` (${duration})` : ""}`,
-        `  Cost:       ${formatUsd(priceCents)}`,
-        `  Expires:    ${formatTimeRemaining(now + expiryMs)}`,
-      ];
-
-      if (rentalType !== "verification") {
-        lines.push(`  Auto-renew: ${autoRenew ? "On" : "Off"}`);
-        lines.push(`  Paid until: ${new Date(now + expiryMs).toISOString().slice(0, 16)}`);
-      }
-
-      lines.push(``);
-      lines.push(`  Balance:    ${formatUsd(state.balanceCents)}`);
-      lines.push(``);
-      lines.push(`Use get_messages with the rental ID to check for incoming SMS.`);
-
-      return textResponse(lines.join("\n"));
-    }
-  );
-
-  server.tool(
-    "get_messages",
-    "Check for incoming SMS messages on a rented number.",
-    {
-      rentalId: z.string().describe("Rental ID returned from rent_number"),
-    },
-    async ({ rentalId }) => {
-      const rental = state.smsRentals.get(rentalId);
-
-      if (!rental) {
-        return errorResponse(`Rental not found: ${rentalId}`);
-      }
-
-      if (rental.status === "active" && Date.now() >= rental.expiresAt) {
-        rental.status = "expired";
-      }
-
-      if (rental.status === "expired") {
-        return errorResponse(
-          `Rental ${rentalId} has expired. Use reuse_number to reactivate a verification rental.`
-        );
-      }
-
-      if (rental.status === "cancelled") {
-        return errorResponse(`Rental ${rentalId} has been cancelled.`);
-      }
-
-      // Lazy mock: generate a message after 5 seconds
-      if (rental.messages.length === 0) {
-        const elapsed = Date.now() - rental.createdAt;
-
-        if (elapsed < 5000) {
-          const text = [
-            `No messages yet for ${rental.phoneNumber} (${rental.serviceName}).`,
-            ``,
-            `  Waiting for SMS... try again shortly.`,
-            `  Time since rental: ${Math.floor(elapsed / 1000)}s`,
-          ].join("\n");
-
-          return textResponse(text);
-        }
-
-        // For dedicated numbers, the message comes from a random service
-        let msgService = rental.serviceName;
-        if (rental.rentalType === "dedicated") {
-          const randomSvc = smsServices[Math.floor(Math.random() * smsServices.length)];
-          msgService = randomSvc.serviceName;
-        }
-
-        const code = generateVerificationCode();
-        rental.messages.push({
-          id: generateId("msg"),
-          message_text: `Your ${msgService} verification code is: ${code}`,
-          code,
-          received_at: Date.now(),
-          read_at: null,
-        });
-
-        if (rental.rentalType === "verification") {
-          rental.status = "completed";
-        }
-      }
-
-      let text = `Messages for ${rental.phoneNumber} (${rental.serviceName}):\n\n`;
-
-      for (const msg of rental.messages) {
-        const time = new Date(msg.received_at).toISOString().slice(11, 19);
-        const readStatus = msg.read_at ? "read" : "new";
-        text += `  [${time}] (${readStatus})\n`;
-        text += `  ${msg.message_text}\n`;
-        if (msg.code) {
-          text += `  Code: ${msg.code}\n`;
-        }
-        text += `\n`;
-
-        if (!msg.read_at) {
-          msg.read_at = Date.now();
-        }
-      }
-
-      text += `Total messages: ${rental.messages.length}`;
-      if (rental.status === "completed") {
-        text += `\nStatus: completed - use reuse_number to receive another SMS.`;
-      }
-
-      return textResponse(text);
-    }
+    rentNumberHandler(http),
   );
 
   server.tool(
     "cancel_rental",
-    "Cancel an SMS rental. Full refund for verification with no messages, no refund for LTR/dedicated.",
-    {
-      rentalId: z.string().describe("Rental ID to cancel"),
-    },
-    async ({ rentalId }) => {
-      const rental = state.smsRentals.get(rentalId);
-
-      if (!rental) {
-        return errorResponse(`Rental not found: ${rentalId}`);
-      }
-
-      if (rental.status === "cancelled") {
-        return errorResponse(`Rental ${rentalId} is already cancelled.`);
-      }
-
-      if (rental.status === "expired") {
-        return errorResponse(`Rental ${rentalId} has expired and cannot be cancelled.`);
-      }
-
-      rental.status = "cancelled";
-
-      if (rental.rentalType === "verification" && rental.messages.length === 0) {
-        state.addBalance(rental.priceCents, "refund", `Refund: ${rental.serviceName} verification`);
-
-        const text = [
-          `Rental ${rentalId} cancelled.`,
-          ``,
-          `  Refund:      ${formatUsd(rental.priceCents)} (no messages received)`,
-          `  New balance: ${formatUsd(state.balanceCents)}`,
-        ].join("\n");
-
-        return textResponse(text);
-      }
-
-      const reason = rental.rentalType === "verification"
-        ? "messages were already received"
-        : `${rental.rentalType} rentals are non-refundable`;
-
-      const text = [
-        `Rental ${rentalId} cancelled.`,
-        ``,
-        `  No refund - ${reason}.`,
-      ].join("\n");
-
-      return textResponse(text);
-    }
+    "Cancel a rental. For verifications (ver_xxx) the API may refund if no message arrived. For long-term/dedicated rentals (ren_xxx) cancellation is typically non-refundable - check the response.",
+    { rental_id: z.string() },
+    cancelRentalHandler(http),
   );
 
   server.tool(
     "reuse_number",
-    "Reuse a completed or expired verification number to receive another SMS.",
+    "Reuse a completed/expired verification to receive another SMS. Free reuse is available when allow_reuse is true on the verification. Paid reuse ($0.50) is available when allow_paid_reuse is true.",
     {
-      rentalId: z.string().describe("Rental ID of a verification rental to reuse"),
-      paid: z
-        .boolean()
-        .default(false)
-        .describe("Use paid reuse ($0.50) for expired numbers"),
+      rental_id: z.string().describe("ver_xxx from a verification"),
+      paid: z.boolean().default(false),
     },
-    async ({ rentalId, paid }) => {
-      const rental = state.smsRentals.get(rentalId);
+    reuseNumberHandler(http),
+  );
 
-      if (!rental) {
-        return errorResponse(`Rental not found: ${rentalId}`);
-      }
-
-      if (rental.rentalType !== "verification") {
-        return errorResponse(
-          `Only verification rentals can be reused. This is a ${rental.rentalType} rental.`
-        );
-      }
-
-      if (rental.status === "active") {
-        return errorResponse(
-          `Rental ${rentalId} is still active. Wait for it to complete or expire before reusing.`
-        );
-      }
-
-      if (rental.status === "cancelled") {
-        return errorResponse(`Rental ${rentalId} has been cancelled and cannot be reused.`);
-      }
-
-      if (!paid && rental.status === "expired") {
-        return errorResponse(
-          `Rental ${rentalId} has expired. Use paid reuse (paid: true) for ${formatUsd(REUSE_COST_CENTS)} to reactivate.`
-        );
-      }
-
-      if (paid) {
-        if (!state.deductBalance(REUSE_COST_CENTS, "sms_reuse", `SMS reuse: ${rental.serviceName}`)) {
-          return errorResponse(
-            `Insufficient balance. Need ${formatUsd(REUSE_COST_CENTS)} but have ${formatUsd(state.balanceCents)}. Use deposit to add funds.`
-          );
-        }
-      }
-
-      const now = Date.now();
-      rental.status = "active";
-      rental.expiresAt = now + 20 * 60 * 1000;
-      rental.messages = [];
-      rental.reuseCounter += 1;
-
-      const lines = [
-        `Number reused!`,
-        ``,
-        `  Rental ID:   ${rentalId}`,
-        `  Number:      ${rental.phoneNumber}`,
-        `  Service:     ${rental.serviceName}`,
-        `  Reuse count: ${rental.reuseCounter}`,
-        `  Cost:        ${paid ? formatUsd(REUSE_COST_CENTS) : "Free"}`,
-        `  Expires:     ${formatTimeRemaining(rental.expiresAt)}`,
-        `  Balance:     ${formatUsd(state.balanceCents)}`,
-        ``,
-        `Use get_messages to check for incoming SMS.`,
-      ];
-
-      return textResponse(lines.join("\n"));
-    }
+  server.tool(
+    "re_rent_rental",
+    "Re-rent the same number for another period at the current price. Only works on an expired rental whose re_rent_available is true (the provider has not yet released the number). Re-uses the rental's original duration; no duration argument.",
+    {
+      rental_id: z.string().describe("ren_xxx from an expired LTR with re_rent_available=true"),
+    },
+    reRentRentalHandler(http),
   );
 
   server.tool(
     "toggle_auto_renew",
-    "Toggle auto-renewal for a long-term rental or dedicated number.",
+    "Turn auto-renewal on/off for an LTR or dedicated rental.",
     {
-      rentalId: z.string().describe("Rental ID of a long-term or dedicated rental"),
+      rental_id: z.string().describe("ren_xxx"),
+      auto_renew: z.boolean(),
     },
-    async ({ rentalId }) => {
-      const rental = state.smsRentals.get(rentalId);
-
-      if (!rental) {
-        return errorResponse(`Rental not found: ${rentalId}`);
-      }
-
-      if (rental.rentalType === "verification") {
-        return errorResponse(
-          `Auto-renewal is not available for verification rentals. Only long-term and dedicated rentals support auto-renewal.`
-        );
-      }
-
-      rental.autoRenew = !rental.autoRenew;
-
-      const lines = [
-        `Auto-renewal ${rental.autoRenew ? "enabled" : "disabled"}.`,
-        ``,
-        `  Rental ID:     ${rentalId}`,
-        `  Service:       ${rental.serviceName}`,
-        `  Type:          ${rental.rentalType}${rental.duration ? ` (${rental.duration})` : ""}`,
-        `  Auto-renew:    ${rental.autoRenew ? "On" : "Off"}`,
-        `  Paid until:    ${rental.paidUntil ? new Date(rental.paidUntil).toISOString().slice(0, 16) : "N/A"}`,
-        `  Renewal cost:  ${formatUsd(rental.priceCents)}`,
-      ];
-
-      if (rental.autoRenew && state.balanceCents < rental.priceCents) {
-        lines.push(``);
-        lines.push(`  WARNING: Balance (${formatUsd(state.balanceCents)}) is less than renewal cost (${formatUsd(rental.priceCents)}). Add funds before renewal date.`);
-      }
-
-      return textResponse(lines.join("\n"));
-    }
+    toggleAutoRenewHandler(http),
   );
 }

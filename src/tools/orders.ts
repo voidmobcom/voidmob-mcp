@@ -1,179 +1,109 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { state } from "../sandbox/state.js";
+import { HttpClient } from "../client/http.js";
+import { callApi } from "../client/call-api.js";
+import { Rental, Esim, Proxy } from "../client/types.js";
+import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { formatUsd } from "../utils/format.js";
-import { errorResponse, textResponse } from "../utils/response.js";
 
-interface OrderDetails {
+interface OrderRow {
+  kind: "sms" | "esim" | "proxy";
   id: string;
-  displayId: string;
-  type: "sms" | "esim" | "proxy";
   status: string;
-  priceCents: number;
-  createdAt: number;
-  details: Record<string, unknown>;
+  charged_price_cents: number;
+  created_at: string;
+  summary: string;
 }
 
-export function registerOrdersTools(server: McpServer) {
+export const listOrdersHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { kind?: "sms" | "esim" | "proxy"; limit?: number }): Promise<ToolResult> => {
+    const limit = args.limit ?? 20;
+    const tasks: Promise<OrderRow[]>[] = [];
+    if (!args.kind || args.kind === "sms") tasks.push(fetchRentals(http));
+    if (!args.kind || args.kind === "esim") tasks.push(fetchEsims(http));
+    if (!args.kind || args.kind === "proxy") tasks.push(fetchProxies(http));
+    const settled = await Promise.allSettled(tasks);
+    const rows: OrderRow[] = [];
+    const warnings: string[] = [];
+    for (const r of settled) {
+      if (r.status === "fulfilled") rows.push(...r.value);
+      else {
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        warnings.push(`(partial: ${msg})`);
+      }
+    }
+    rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const page = rows.slice(0, limit);
+    if (page.length === 0) {
+      // Distinguish a genuinely empty account from a fan-out where every
+      // branch failed (e.g. a schema mismatch throwing out of every fetch).
+      // Surfacing the warnings avoids the misleading "No orders found."
+      if (warnings.length > 0) {
+        return toolError(`Could not load orders. ${warnings.join(" ")}`);
+      }
+      return toolError("No orders found.");
+    }
+    const text = [
+      `${rows.length} order(s)${rows.length > limit ? ` (showing ${limit})` : ""}:`,
+      ``,
+      ...page.map(
+        (r) =>
+          `  [${r.kind.toUpperCase().padEnd(5)}] ${r.id.padEnd(20)} ${r.status.padEnd(14)} ${formatUsd(r.charged_price_cents).padStart(8)} ${r.created_at.slice(0, 16)}  ${r.summary}`,
+      ),
+      warnings.length ? `\n${warnings.join("\n")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return structuredOk(text, { orders: page });
+  });
+
+async function fetchRentals(http: HttpClient): Promise<OrderRow[]> {
+  const data = await callApi<unknown[]>(http, "GET", "/v1/rentals");
+  const items = z.array(Rental).parse(data);
+  return items.map((r) => ({
+    kind: "sms" as const,
+    id: r.id,
+    status: r.status,
+    charged_price_cents: r.charged_price_cents,
+    created_at: r.created_at,
+    summary: `${r.service_name} ${r.phone_number} ${r.duration ?? ""}`,
+  }));
+}
+
+async function fetchEsims(http: HttpClient): Promise<OrderRow[]> {
+  const data = await callApi<{ esims: unknown[] }>(http, "GET", "/v1/esims");
+  const items = z.array(Esim).parse(data.esims);
+  return items.map((e) => ({
+    kind: "esim" as const,
+    id: e.id,
+    status: e.status,
+    charged_price_cents: e.charged_price_cents,
+    created_at: e.created_at,
+    summary: `${e.countries.join(",")} ${e.data_unlimited || e.data_limit_gb == null ? "unlim" : `${e.data_limit_gb}GB`}`,
+  }));
+}
+
+async function fetchProxies(http: HttpClient): Promise<OrderRow[]> {
+  const data = await callApi<{ proxies: unknown[] }>(http, "GET", "/v1/proxies");
+  const items = z.array(Proxy).parse(data.proxies);
+  return items.map((p) => ({
+    kind: "proxy" as const,
+    id: p.id,
+    status: p.status,
+    charged_price_cents: p.charged_price_cents,
+    created_at: p.created_at ?? "",
+    summary: `${p.data_gb_total}GB ${p.lists.length} list(s)`,
+  }));
+}
+
+export function registerOrdersTools(server: McpServer, http: HttpClient) {
   server.tool(
     "list_orders",
-    "List all orders across SMS, eSIM, and proxy services.",
+    "List the user's active and past orders across SMS rentals, eSIMs, and proxies. Note: ephemeral verifications (20-min single-SMS) are NOT listable - the rental id you got from rent_number is your handle to them.",
     {
-      type: z
-        .enum(["sms", "esim", "proxy"])
-        .optional()
-        .describe("Filter by service type"),
-      status: z
-        .enum(["active", "completed", "cancelled", "expired"])
-        .optional()
-        .describe("Filter by status"),
-      limit: z
-        .number()
-        .min(1)
-        .max(50)
-        .default(20)
-        .describe("Maximum number of orders to return (default: 20)"),
+      kind: z.enum(["sms", "esim", "proxy"]).optional().describe("Filter by kind"),
+      limit: z.number().min(1).max(100).default(20),
     },
-    async ({ type, status, limit }) => {
-      const now = Date.now();
-      const orders: OrderDetails[] = [];
-
-      if (!type || type === "sms") {
-        for (const rental of state.smsRentals.values()) {
-          if (rental.status === "active" && rental.expiresAt < now) {
-            rental.status = "expired";
-          }
-          if (status && rental.status !== status) continue;
-          orders.push({
-            id: rental.id,
-            displayId: rental.displayId,
-            type: "sms",
-            status: rental.status,
-            priceCents: rental.priceCents,
-            createdAt: rental.createdAt,
-            details: {
-              phoneNumber: rental.phoneNumber,
-              service: rental.service,
-              serviceName: rental.serviceName,
-              rentalType: rental.rentalType,
-              duration: rental.duration,
-              messageCount: rental.messages.length,
-            },
-          });
-        }
-      }
-
-      if (!type || type === "esim") {
-        for (const order of state.esimOrders.values()) {
-          if (order.status === "active" && order.expiresAt < now) {
-            order.status = "expired";
-          }
-          if (status && order.status !== status) continue;
-          orders.push({
-            id: order.id,
-            displayId: order.displayId,
-            type: "esim",
-            status: order.status,
-            priceCents: Math.round(order.retailPriceUsd * 100),
-            createdAt: order.createdAt,
-            details: {
-              planTitle: order.planTitle,
-              dataLimitGb: order.dataLimitGb,
-              validityDays: order.validityDays,
-              countries: order.countries.join(", "),
-            },
-          });
-        }
-      }
-
-      if (!type || type === "proxy") {
-        for (const proxy of state.proxies.values()) {
-          if (proxy.status === "active" && proxy.expiresAt < now) {
-            proxy.status = "expired";
-          }
-          if (status && proxy.status !== status) continue;
-          orders.push({
-            id: proxy.id,
-            displayId: proxy.displayId,
-            type: "proxy",
-            status: proxy.status,
-            priceCents: proxy.priceCents,
-            createdAt: proxy.createdAt,
-            details: {
-              type: proxy.type,
-              country: proxy.country,
-              countryName: proxy.countryName,
-              carrier: proxy.carrier,
-              carrierName: proxy.carrierName,
-              protocol: proxy.protocol,
-            },
-          });
-        }
-      }
-
-      if (orders.length === 0) {
-        return errorResponse("No orders found.");
-      }
-
-      orders.sort((a, b) => b.createdAt - a.createdAt);
-      const limited = orders.slice(0, limit);
-
-      const typeBadge: Record<string, string> = {
-        sms: "[SMS]",
-        esim: "[eSIM]",
-        proxy: "[Proxy]",
-      };
-
-      let text = `${orders.length} order(s)${orders.length > limit ? ` (showing ${limit})` : ""}:\n`;
-
-      for (const o of limited) {
-        const date = new Date(o.createdAt).toISOString().slice(0, 16).replace("T", " ");
-        const badge = typeBadge[o.type];
-
-        text += `\n  ${badge} ${o.displayId}`;
-        text += `\n    ID: ${o.id}`;
-        text += `\n    Status: ${o.status}  |  Price: ${formatUsd(o.priceCents)}`;
-
-        if (o.type === "sms") {
-          const d = o.details as {
-            phoneNumber: string;
-            service: string;
-            serviceName: string;
-            rentalType: string;
-            duration: string | null;
-            messageCount: number;
-          };
-          text += `\n    Service: ${d.serviceName} (${d.service})`;
-          text += `\n    Phone: ${d.phoneNumber}  |  Type: ${d.rentalType}`;
-          if (d.duration) text += `  |  Duration: ${d.duration}`;
-          text += `\n    Messages: ${d.messageCount}`;
-        } else if (o.type === "esim") {
-          const d = o.details as {
-            planTitle: string;
-            dataLimitGb: number | null;
-            validityDays: number;
-            countries: string;
-          };
-          text += `\n    Plan: ${d.planTitle}`;
-          text += `\n    Data: ${d.dataLimitGb !== null ? `${d.dataLimitGb} GB` : "Unlimited"}  |  Validity: ${d.validityDays} days`;
-          text += `\n    Countries: ${d.countries}`;
-        } else if (o.type === "proxy") {
-          const d = o.details as {
-            type: string;
-            country: string;
-            countryName: string;
-            carrier: string;
-            carrierName: string;
-            protocol: string;
-          };
-          text += `\n    Type: ${d.type}  |  Protocol: ${d.protocol}`;
-          text += `\n    Location: ${d.countryName} (${d.country})  |  Carrier: ${d.carrierName}`;
-        }
-
-        text += `\n    Created: ${date}\n`;
-      }
-
-      return textResponse(text);
-    }
+    listOrdersHandler(http),
   );
 }

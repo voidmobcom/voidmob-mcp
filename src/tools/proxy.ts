@@ -1,617 +1,400 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { state } from "../sandbox/state.js";
-import type { ProxyList } from "../sandbox/state.js";
-import { validateCountry, ToolError, generateId } from "../utils/validation.js";
-import {
-  formatUsd,
-  formatGb,
-  formatTimeRemaining,
-  generateDisplayId,
-  generateProxyCredentials,
-  generateIp,
-  generateConnectionString,
-  generateOpenvpnConfig,
-  generateVlessUri,
-} from "../utils/format.js";
-import { errorResponse, textResponse } from "../utils/response.js";
-import { searchProducts, getProduct } from "../mock-data/proxy.js";
+import { HttpClient, HttpError, NetworkError } from "../client/http.js";
+import { callApi } from "../client/call-api.js";
+import { newIdempotencyKey } from "../client/idempotency.js";
+import { Proxy, ProxyPlan, ProxyList, type ProxyPlan as ProxyPlanT } from "../client/types.js";
+import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
+import { formatUsd } from "../utils/format.js";
 
-export function registerProxyTools(server: McpServer) {
+async function fetchProxyPlan(http: HttpClient, planId: string): Promise<ProxyPlanT | null> {
+  const plansData = await callApi<{ plans: unknown[] }>(http, "GET", `/v1/proxy_plans`);
+  const plans = z.array(ProxyPlan).parse(plansData.plans);
+  return plans.find((p) => p.id === planId) ?? null;
+}
+
+// ── search_proxies ──────────────────────────────────────────────────────────
+
+export const searchProxiesHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: {
+    country?: string;
+    min_data_gb?: number;
+  }): Promise<ToolResult> => {
+    const q = new URLSearchParams();
+    if (args.country) q.set("country", args.country);
+    if (args.min_data_gb !== undefined) q.set("min_gb", String(args.min_data_gb));
+    const path = `/v1/proxy_plans${q.toString() ? `?${q}` : ""}`;
+    const data = await callApi<{ plans: unknown[] }>(http, "GET", path);
+    const plans = z.array(ProxyPlan).parse(data.plans);
+    if (plans.length === 0) return toolError("No proxy plans matched your filters.");
+    const text = [
+      `Found ${plans.length} proxy plan(s):`,
+      ``,
+      ...plans.map((p) =>
+        `  ${p.name.padEnd(36)} ${p.id.padEnd(20)} ${p.type.padEnd(10)} ${(p.country_name ?? p.country ?? "global").padEnd(16)} ${p.data_gb}GB ${p.duration_days}d ${formatUsd(p.quoted_price_cents)}`,
+      ),
+    ].join("\n");
+    return structuredOk(text, { proxy_plans: plans });
+  });
+
+// ── purchase_proxy ──────────────────────────────────────────────────────────
+
+export const purchaseProxyHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { plan_id: string }): Promise<ToolResult> => {
+    const plan = await fetchProxyPlan(http, args.plan_id);
+    if (!plan) {
+      return toolError(
+        `Plan '${args.plan_id}' not found. Use search_proxies to list available plans.`,
+      );
+    }
+    const out = await callApi<{ proxy: unknown }>(http, "POST", "/v1/proxies", {
+      body: { plan_id: args.plan_id, max_price_cents: plan.quoted_price_cents },
+      idempotencyKey: newIdempotencyKey(),
+    });
+    const proxy = Proxy.parse(out.proxy);
+    return structuredOk(
+      `Proxy ${proxy.id} provisioning. Status: ${proxy.status}. Poll get_proxy_status until active.`,
+      { proxy },
+    );
+  });
+
+// ── get_proxy_status ────────────────────────────────────────────────────────
+
+export const getProxyStatusHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
+    // The core GET is the source of truth (and enforces auth/ownership). Usage
+    // and the NoList gateway are best-effort enrichment: degrade either to null
+    // on ANY API/network error so a transient secondary failure never sinks a
+    // status read. Non-API throws (bugs) still propagate.
+    const degradeToNull = (e: unknown) => {
+      if (e instanceof HttpError || e instanceof NetworkError) return null;
+      throw e;
+    };
+    const [coreRaw, usageRaw, nolistRaw] = await Promise.all([
+      callApi<{ proxy: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}`),
+      callApi<{ usage: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}/usage`).catch(degradeToNull),
+      // Idempotent get-or-create for the package-level NoList gateway. A stable
+      // per-proxy key (not a fresh UUID) means concurrent/repeat status polls
+      // dedup to a single provisioning instead of racing to overwrite the
+      // gateway password.
+      callApi<{ proxy: unknown }>(http, "POST", `/v1/proxies/${args.proxy_id}/nolist_credentials`, {
+        idempotencyKey: `nolist-${args.proxy_id}`,
+      }).catch(degradeToNull),
+    ]);
+    // Prefer the nolist response (gateway populated once active) over the core
+    // GET, whose gateway is null until nolist credentials are provisioned.
+    const proxy = Proxy.parse((nolistRaw?.proxy as unknown) ?? coreRaw.proxy);
+    const lines = [
+      `Proxy ${proxy.id}`,
+      ``,
+      `  Status:        ${proxy.status}`,
+      `  Data:          ${(proxy.data_bytes_used / 1024 / 1024 / 1024).toFixed(2)} GB / ${proxy.data_gb_total} GB`,
+      `  Expires:       ${proxy.expires_at}`,
+    ];
+    if (proxy.rotation_url) lines.push(`  Rotation URL:  ${proxy.rotation_url}`);
+    if (proxy.gateway) {
+      lines.push(
+        ``,
+        `  Gateway:`,
+        `    Host:      ${proxy.gateway.host}`,
+        `    Port:      ${proxy.gateway.port}`,
+        `    Protocol:  ${proxy.gateway.protocol}`,
+        `    User:      ${proxy.gateway.username}`,
+        `    Password:  ${proxy.gateway.password}`,
+      );
+    } else {
+      lines.push(``, `  Gateway:       (not yet provisioned)`);
+    }
+    return structuredOk(lines.join("\n"), {
+      proxy,
+      usage: usageRaw?.usage ?? null,
+      nolist_credentials: proxy.gateway,
+    });
+  });
+
+// ── rotate_proxy_ip ─────────────────────────────────────────────────────────
+
+export const rotateProxyIpHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
+    const out = await callApi<{ proxy_id: string; rotated_at: string; current_ip: string | null }>(
+      http,
+      "POST",
+      `/v1/proxies/${args.proxy_id}/rotate_ip`,
+      { idempotencyKey: newIdempotencyKey() },
+    );
+    return structuredOk(
+      `Rotated ${out.proxy_id} at ${out.rotated_at}. New IP: ${out.current_ip ?? "(unknown)"}`,
+      { proxy_id: out.proxy_id, rotated_at: out.rotated_at, current_ip: out.current_ip },
+    );
+  });
+
+// ── renew_proxy ─────────────────────────────────────────────────────────────
+
+export const renewProxyHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
+    const coreRaw = await callApi<{ proxy: unknown }>(
+      http,
+      "GET",
+      `/v1/proxies/${args.proxy_id}`,
+    );
+    const proxy = Proxy.parse(coreRaw.proxy);
+    if (!proxy.plan_id) {
+      return toolError(`Proxy ${args.proxy_id} has no plan_id; renewal not available.`);
+    }
+    const plan = await fetchProxyPlan(http, proxy.plan_id);
+    if (!plan) return toolError(`Original plan ${proxy.plan_id} no longer available.`);
+    const out = await callApi<{ proxy: unknown }>(
+      http,
+      "POST",
+      `/v1/proxies/${args.proxy_id}/renew`,
+      {
+        body: { max_price_cents: plan.quoted_price_cents },
+        idempotencyKey: newIdempotencyKey(),
+      },
+    );
+    return structuredOk(`Proxy ${args.proxy_id} renewed.`, { proxy: Proxy.parse(out.proxy) });
+  });
+
+// ── topup_proxy ─────────────────────────────────────────────────────────────
+
+export const topupProxyHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { proxy_id: string; additional_gb: number }): Promise<ToolResult> => {
+    // Quote: derive per-GB price from the proxy's original plan, then tie
+    // max_price_cents to (perGb * additional_gb) so we never pay above quote.
+    const coreRaw = await callApi<{ proxy: unknown }>(
+      http,
+      "GET",
+      `/v1/proxies/${args.proxy_id}`,
+    );
+    const proxy = Proxy.parse(coreRaw.proxy);
+    if (!proxy.plan_id) {
+      return toolError(`Proxy ${args.proxy_id} has no plan_id; top-up not available.`);
+    }
+    const plan = await fetchProxyPlan(http, proxy.plan_id);
+    if (!plan) return toolError(`Original plan ${proxy.plan_id} no longer available.`);
+    if (!plan.data_gb || plan.data_gb <= 0) {
+      return toolError(`Plan ${plan.id} has no GB allowance; top-up not available.`);
+    }
+    const maxPriceCents = Math.round((plan.quoted_price_cents / plan.data_gb) * args.additional_gb);
+    const out = await callApi<{ proxy: unknown }>(
+      http,
+      "POST",
+      `/v1/proxies/${args.proxy_id}/topup`,
+      {
+        body: { additional_gb: args.additional_gb, max_price_cents: maxPriceCents },
+        idempotencyKey: newIdempotencyKey(),
+      },
+    );
+    // The topup response body carries only the refreshed proxy (no per-topup
+    // charged amount), so report the quoted ceiling we tied - the strict-tie
+    // contract guarantees the actual charge did not exceed it.
+    const refreshed = Proxy.parse(out.proxy);
+    return structuredOk(
+      `Topped up ${args.proxy_id} by ${args.additional_gb} GB (up to ${formatUsd(maxPriceCents)}).`,
+      { proxy: refreshed },
+    );
+  });
+
+// ── regenerate_proxy_password ───────────────────────────────────────────────
+
+export const regenerateProxyPasswordHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
+    const out = await callApi<{ proxy: unknown }>(
+      http,
+      "POST",
+      `/v1/proxies/${args.proxy_id}/regenerate_password`,
+      { idempotencyKey: newIdempotencyKey() },
+    );
+    const proxy = Proxy.parse(out.proxy);
+    const password = proxy.gateway?.password ?? "(no gateway)";
+    return structuredOk(`New password for ${args.proxy_id}: ${password}`, { proxy });
+  });
+
+// ── list_proxy_lists ────────────────────────────────────────────────────────
+
+export const listProxyListsHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
+    const coreRaw = await callApi<{ proxy: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}`);
+    const proxy = Proxy.parse(coreRaw.proxy);
+    const lists = proxy.lists;
+    if (lists.length === 0) return toolError(`No proxy lists on ${args.proxy_id}.`);
+    const text = [
+      `Lists for ${args.proxy_id}:`,
+      ``,
+      ...lists.map((l) => {
+        const geo = l.countries?.length
+          ? l.countries.join(",")
+          : [l.country, l.region, l.city, l.isp].filter(Boolean).join("/") || "world";
+        const rot =
+          l.rotation_period_seconds === 0
+            ? "per-request"
+            : l.rotation_period_seconds === -1
+              ? "sticky"
+              : `${l.rotation_period_seconds}s`;
+        return `  ${l.name} (${l.id}) geo=${geo} rotation=${rot} mode=${l.rotation_mode}`;
+      }),
+    ].join("\n");
+    return structuredOk(text, { lists });
+  });
+
+// ── create_proxy_list ───────────────────────────────────────────────────────
+
+export const createProxyListHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: {
+    proxy_id: string;
+    name: string;
+    country?: string;
+    countries?: string[];
+    region?: string;
+    city?: string;
+    isp?: string;
+    zip?: string;
+    rotation_period_seconds?: number;
+    rotation_mode?: "instant" | "delayed_5s" | "no_rotation_on_fail";
+    format?: string;
+  }): Promise<ToolResult> => {
+    // Geo: country (single) XOR countries (2-30). region/city/isp/zip only
+    // valid with a single country. Mirror the API's validation locally to
+    // fail fast without a wasted round-trip.
+    const hasCountry = !!args.country;
+    const hasCountries = !!args.countries && args.countries.length > 0;
+    if (!hasCountry && !hasCountries) {
+      return toolError("Provide either country (single) or countries (2-30).");
+    }
+    if (hasCountry && hasCountries) {
+      return toolError("country and countries are mutually exclusive.");
+    }
+    if (hasCountries && (args.region || args.city || args.isp || args.zip)) {
+      return toolError("region/city/isp/zip are only valid with a single country, not countries.");
+    }
+    const body: Record<string, unknown> = {
+      name: args.name,
+      rotation_period_seconds: args.rotation_period_seconds ?? 0,
+      rotation_mode: args.rotation_mode ?? "instant",
+      format: args.format ?? "login_pass_host_port",
+    };
+    if (hasCountry) {
+      body.country = args.country;
+      if (args.region) body.region = args.region;
+      if (args.city) body.city = args.city;
+      if (args.isp) body.isp = args.isp;
+      if (args.zip) body.zip = args.zip;
+    } else {
+      body.countries = args.countries;
+    }
+    const out = await callApi<{ list: unknown }>(http, "POST", `/v1/proxies/${args.proxy_id}/lists`, {
+      body,
+      idempotencyKey: newIdempotencyKey(),
+    });
+    const list = ProxyList.parse(out.list);
+    const credLines = list.credentials
+      ? [`  Username: ${list.credentials.username}`, `  Password: ${list.credentials.password}`]
+      : [`  Credentials: (provisioning - active within 1-2 minutes)`];
+    const text = [`Created list ${list.id}.`, ...credLines, ...list.entries.map((e) => `  ${e}`)].join("\n");
+    return structuredOk(text, { list });
+  });
+
+// ── delete_proxy_list ───────────────────────────────────────────────────────
+
+export const deleteProxyListHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { proxy_id: string; list_id: string }): Promise<ToolResult> => {
+    await callApi<unknown>(http, "DELETE", `/v1/proxies/${args.proxy_id}/lists/${args.list_id}`, {
+      idempotencyKey: newIdempotencyKey(),
+    });
+    return structuredOk(`List ${args.list_id} deleted.`, { proxy_id: args.proxy_id, list_id: args.list_id });
+  });
+
+// ── registration ────────────────────────────────────────────────────────────
+
+export function registerProxyTools(server: McpServer, http: HttpClient) {
   server.tool(
     "search_proxies",
-    "Search available mobile proxy products by country or type.",
+    "Search available mobile proxy plans (shared rotating mobile IPs, billed by data). Each result includes the plan id, location, data allowance, duration, and price. Region/city/ISP targeting is configured per list after purchase via create_proxy_list.",
     {
-      country: z
-        .string()
-        .optional()
-        .describe("ISO 3166-1 alpha-2 country code (e.g., US, GB, DE)"),
-      type: z
-        .enum(["shared", "dedicated_standard", "dedicated_premium"])
-        .optional()
-        .describe("Proxy type: shared (pay-per-GB), dedicated standard, or dedicated premium"),
+      country: z.string().optional().describe("ISO-3166-1 alpha-2 (e.g. 'US'). Many plans are worldwide and match any country."),
+      min_data_gb: z.number().optional().describe("Minimum included data allowance in GB"),
     },
-    async ({ country, type }) => {
-      try {
-        const validatedCountry = country ? validateCountry(country) : undefined;
-        const results = searchProducts({ country: validatedCountry, type });
-
-        if (results.length === 0) {
-          return errorResponse(
-            "No proxy products found matching your criteria. Try a different country or type."
-          );
-        }
-
-        let text = `Found ${results.length} proxy product(s):\n\n`;
-        for (const p of results) {
-          text += `  ${p.name}\n`;
-          text += `    ID:       ${p.id}\n`;
-          text += `    Type:     ${p.type}\n`;
-          text += `    Country:  ${p.country} (${p.countryName})\n`;
-          text += `    Carrier:  ${p.carrier} (${p.carrierName})\n`;
-          if (p.dataGb !== null) {
-            text += `    Data:     ${formatGb(p.dataGb)}\n`;
-          }
-          text += `    Duration: ${p.durationDays} days (${p.period})\n`;
-          text += `    Price:    ${formatUsd(p.priceCents)}\n`;
-          if (p.features.length > 0) {
-            text += `    Features: ${p.features.join(", ")}\n`;
-          }
-          text += `\n`;
-        }
-
-        return textResponse(text);
-      } catch (e) {
-        if (e instanceof ToolError) return errorResponse(e.message);
-        throw e;
-      }
-    }
+    searchProxiesHandler(http),
   );
 
   server.tool(
     "purchase_proxy",
-    "Purchase a mobile proxy. Shared (pay-per-GB), dedicated standard, or dedicated premium.",
-    {
-      productId: z.string().describe("Product ID from search_proxies"),
-    },
-    async ({ productId }) => {
-      try {
-        const product = getProduct(productId);
-        if (!product) {
-          return errorResponse(
-            `Product not found: ${productId}. Use search_proxies to find available products.`
-          );
-        }
-
-        if (
-          !state.deductBalance(
-            product.priceCents,
-            "proxy_purchase",
-            `Proxy: ${product.name}`
-          )
-        ) {
-          return errorResponse(
-            `Insufficient balance. Need ${formatUsd(product.priceCents)} but have ${formatUsd(state.balanceCents)}. Use deposit to add funds.`
-          );
-        }
-
-        const creds = generateProxyCredentials(product.country);
-        const ip = generateIp();
-        const now = Date.now();
-
-        const protocol: "http" | "socks5" | "vless" =
-          product.type === "shared"
-            ? "http"
-            : product.type === "dedicated_standard"
-              ? "socks5"
-              : "vless";
-
-        const lists: ProxyList[] = [];
-        if (product.type === "shared") {
-          const r = () => Math.random().toString(36).substring(2, 8);
-          lists.push({
-            id: generateId("lst"),
-            name: "Default",
-            login: `vm_${r()}`,
-            password: r() + r(),
-            country: null,
-            region: null,
-            city: null,
-            isp: null,
-            locationPreset: "world_mix",
-            countries: null,
-            rotationPeriod: 0,
-          });
-        }
-
-        const proxyId = generateId("prx");
-        const entry = {
-          id: proxyId,
-          displayId: generateDisplayId("PRX"),
-          type: product.type,
-          status: "active" as const,
-          proxyHost: creds.host,
-          proxyPort: creds.port,
-          socksPort:
-            product.type === "dedicated_standard" || product.type === "dedicated_premium"
-              ? creds.socksPort
-              : null,
-          proxyUsername: creds.username,
-          proxyPassword: creds.password,
-          protocol,
-          country: product.country,
-          countryName: product.countryName,
-          carrier: product.carrier,
-          carrierName: product.carrierName,
-          currentIp: ip,
-          isOnline: true,
-          dataTotal: product.type === "shared" ? product.dataGb : null,
-          dataUsed: product.type === "shared" ? 0 : null,
-          rotationInterval: null,
-          lastRotatedAt: null,
-          autoRenew: false,
-          expiresAt: now + product.durationDays * 24 * 60 * 60 * 1000,
-          createdAt: now,
-          priceCents: product.priceCents,
-          features: product.features,
-          lists,
-        };
-
-        state.proxies.set(proxyId, entry);
-
-        const connectionString = generateConnectionString(
-          creds.host,
-          creds.port,
-          creds.username,
-          creds.password
-        );
-
-        const lines = [
-          `Proxy purchased!`,
-          ``,
-          `  Order ID:    ${proxyId}`,
-          `  Display ID:  ${entry.displayId}`,
-          `  Product:     ${product.name}`,
-          `  Type:        ${product.type}`,
-          `  Protocol:    ${protocol}`,
-          `  Country:     ${product.country} (${product.countryName})`,
-          `  Carrier:     ${product.carrier} (${product.carrierName})`,
-          `  Cost:        ${formatUsd(product.priceCents)}`,
-          `  Expires:     ${formatTimeRemaining(entry.expiresAt)}`,
-        ];
-
-        if (product.type === "shared" && product.dataGb !== null) {
-          lines.push(`  Data:        ${formatGb(product.dataGb)}`);
-        }
-
-        lines.push(
-          ``,
-          `  Connection:`,
-          `    Host:       ${creds.host}`,
-          `    Port:       ${creds.port}`
-        );
-
-        if (entry.socksPort !== null) {
-          lines.push(`    SOCKS Port: ${entry.socksPort}`);
-        }
-
-        lines.push(
-          `    Username:   ${creds.username}`,
-          `    Password:   ${creds.password}`,
-          `    String:     ${connectionString}`,
-          `    Current IP: ${ip}`
-        );
-
-        if (lists.length > 0) {
-          const list = lists[0];
-          const listConn = generateConnectionString(creds.host, creds.port, list.login, list.password);
-          lines.push(
-            ``,
-            `  Default Proxy List:`,
-            `    List ID:    ${list.id}`,
-            `    Login:      ${list.login}`,
-            `    Password:   ${list.password}`,
-            `    Preset:     ${list.locationPreset}`,
-            `    Rotation:   per-request`,
-            `    Connection: ${listConn}`
-          );
-        }
-
-        lines.push(
-          ``,
-          `Use get_proxy_status to check status, rotate_proxy to rotate IP (dedicated only).`
-        );
-
-        return textResponse(lines.join("\n"));
-      } catch (e) {
-        if (e instanceof ToolError) return errorResponse(e.message);
-        throw e;
-      }
-    }
+    "Purchase a proxy plan. Returns 202 Accepted with status=provisioning; the gateway becomes active in 1-2 minutes. Poll get_proxy_status until status='active'.",
+    { plan_id: z.string() },
+    purchaseProxyHandler(http),
   );
 
   server.tool(
     "get_proxy_status",
-    "Check status, bandwidth, and connection details for a proxy.",
-    {
-      proxyId: z.string().describe("Proxy order ID returned from purchase_proxy"),
-    },
-    async ({ proxyId }) => {
-      try {
-        const proxy = state.proxies.get(proxyId);
-        if (!proxy) {
-          return errorResponse(`Proxy not found: ${proxyId}`);
-        }
-
-        const now = Date.now();
-
-        if (proxy.type === "shared" && proxy.dataTotal !== null) {
-          const hoursElapsed = (now - proxy.createdAt) / 3600000;
-          const simulatedUsage = hoursElapsed * 0.05;
-          const maxUsage = proxy.dataTotal * 0.9;
-          proxy.dataUsed = Math.round(Math.min(simulatedUsage, maxUsage) * 100) / 100;
-        }
-
-        const lines = [
-          `Proxy Status - ${proxy.carrierName} (${proxy.countryName})`,
-          ``,
-          `  Order ID:      ${proxy.id}`,
-          `  Display ID:    ${proxy.displayId}`,
-          `  Status:        ${proxy.status}`,
-          `  Type:          ${proxy.type}`,
-          `  Protocol:      ${proxy.protocol}`,
-          `  Country:       ${proxy.country} (${proxy.countryName})`,
-          `  Carrier:       ${proxy.carrier} (${proxy.carrierName})`,
-          `  Online:        ${proxy.isOnline ? "yes" : "no"}`,
-          `  Current IP:    ${proxy.currentIp}`,
-          `  Expires:       ${formatTimeRemaining(proxy.expiresAt)}`,
-          `  Auto-renew:    ${proxy.autoRenew ? "on" : "off"}`,
-        ];
-
-        if (proxy.type === "shared" && proxy.dataTotal !== null && proxy.dataUsed !== null) {
-          const remaining = Math.max(0, proxy.dataTotal - proxy.dataUsed);
-          lines.push(
-            ``,
-            `  Bandwidth:`,
-            `    Used:        ${formatGb(proxy.dataUsed)}`,
-            `    Remaining:   ${formatGb(remaining)}`,
-            `    Total:       ${formatGb(proxy.dataTotal)}`
-          );
-        }
-
-        if (proxy.type !== "shared") {
-          lines.push(
-            ``,
-            `  Rotation:`,
-            `    Interval:    ${proxy.rotationInterval !== null ? `${proxy.rotationInterval}s` : "manual"}`,
-            `    Last rotated: ${proxy.lastRotatedAt ? new Date(proxy.lastRotatedAt).toISOString() : "never"}`
-          );
-        }
-
-        lines.push(
-          ``,
-          `  Connection:`,
-          `    Host:        ${proxy.proxyHost}`,
-          `    Port:        ${proxy.proxyPort}`
-        );
-
-        if (proxy.socksPort !== null) {
-          lines.push(`    SOCKS Port:  ${proxy.socksPort}`);
-        }
-
-        lines.push(
-          `    Username:    ${proxy.proxyUsername}`,
-          `    Password:    ${proxy.proxyPassword}`
-        );
-
-        if (proxy.features.length > 0) {
-          lines.push(``, `  Features: ${proxy.features.join(", ")}`);
-        }
-
-        if (proxy.type === "shared" && proxy.lists.length > 0) {
-          lines.push(``, `  Proxy Lists: ${proxy.lists.length}`);
-          for (const list of proxy.lists) {
-            lines.push(`    - ${list.name} (${list.id}) preset=${list.locationPreset}`);
-          }
-        }
-
-        return textResponse(lines.join("\n"));
-      } catch (e) {
-        if (e instanceof ToolError) return errorResponse(e.message);
-        throw e;
-      }
-    }
+    "Read a proxy's status, usage, and gateway credentials in one call.",
+    { proxy_id: z.string() },
+    getProxyStatusHandler(http),
   );
 
   server.tool(
-    "rotate_proxy",
-    "Rotate a proxy to get a new IP address. Works on dedicated proxies only.",
-    {
-      proxyId: z.string().describe("Proxy order ID to rotate"),
-    },
-    async ({ proxyId }) => {
-      try {
-        const proxy = state.proxies.get(proxyId);
-        if (!proxy) {
-          return errorResponse(`Proxy not found: ${proxyId}`);
-        }
-
-        if (proxy.status !== "active") {
-          return errorResponse(
-            `Proxy ${proxyId} is ${proxy.status}. Only active proxies can be rotated.`
-          );
-        }
-
-        if (proxy.type === "shared") {
-          return errorResponse(
-            `Shared proxies rotate automatically per-request. Use proxy lists to control rotation. Only dedicated proxies support manual rotation.`
-          );
-        }
-
-        const oldIp = proxy.currentIp;
-        const newIp = generateIp();
-        proxy.currentIp = newIp;
-        proxy.lastRotatedAt = Date.now();
-
-        const text = [
-          `IP rotated!`,
-          ``,
-          `  Order ID:       ${proxy.id}`,
-          `  Old IP:         ${oldIp}`,
-          `  New IP:         ${newIp}`,
-          `  Last rotated:   ${new Date(proxy.lastRotatedAt).toISOString()}`,
-        ].join("\n");
-
-        return textResponse(text);
-      } catch (e) {
-        if (e instanceof ToolError) return errorResponse(e.message);
-        throw e;
-      }
-    }
+    "rotate_proxy_ip",
+    "Rotate a dedicated proxy to a new IP. Shared proxies rotate per-request through their lists - use create_proxy_list / list_proxy_lists instead.",
+    { proxy_id: z.string() },
+    rotateProxyIpHandler(http),
   );
 
   server.tool(
-    "get_proxy_lists",
-    "Get proxy lists for a shared proxy order.",
+    "renew_proxy",
+    "Extend a proxy's expiry by purchasing another period. Quote-then-commit.",
+    { proxy_id: z.string() },
+    renewProxyHandler(http),
+  );
+
+  server.tool(
+    "topup_proxy",
+    "Add more data to a shared proxy plan. Quote-then-commit: derives per-GB price from the proxy's original plan and ties max_price_cents to (per_gb * additional_gb).",
     {
-      orderId: z.string().describe("Shared proxy order ID"),
+      proxy_id: z.string(),
+      additional_gb: z.number().int().positive(),
     },
-    async ({ orderId }) => {
-      try {
-        const proxy = state.proxies.get(orderId);
-        if (!proxy) {
-          return errorResponse(`Proxy not found: ${orderId}`);
-        }
+    topupProxyHandler(http),
+  );
 
-        if (proxy.type !== "shared") {
-          return errorResponse(
-            `Proxy lists are only available for shared proxies. This is a ${proxy.type} proxy.`
-          );
-        }
+  server.tool(
+    "regenerate_proxy_password",
+    "Rotate the main proxy gateway password. Returns the new credentials.",
+    { proxy_id: z.string() },
+    regenerateProxyPasswordHandler(http),
+  );
 
-        if (proxy.lists.length === 0) {
-          return errorResponse(`No proxy lists found for order ${orderId}.`);
-        }
-
-        let text = `Proxy Lists for ${proxy.displayId} (${proxy.countryName}):\n\n`;
-        for (const list of proxy.lists) {
-          const connStr = generateConnectionString(
-            proxy.proxyHost,
-            proxy.proxyPort,
-            list.login,
-            list.password
-          );
-          text += `  ${list.name} (${list.id})\n`;
-          text += `    Login:      ${list.login}\n`;
-          text += `    Password:   ${list.password}\n`;
-          text += `    Preset:     ${list.locationPreset}\n`;
-          if (list.countries) {
-            text += `    Countries:  ${list.countries.join(", ")}\n`;
-          }
-          text += `    Rotation:   ${list.rotationPeriod === 0 ? "per-request" : list.rotationPeriod === -1 ? "sticky" : `${list.rotationPeriod}s`}\n`;
-          if (list.country) text += `    Country:    ${list.country}\n`;
-          if (list.region) text += `    Region:     ${list.region}\n`;
-          if (list.city) text += `    City:       ${list.city}\n`;
-          if (list.isp) text += `    ISP:        ${list.isp}\n`;
-          text += `    Connection: ${connStr}\n`;
-          text += `\n`;
-        }
-
-        return textResponse(text);
-      } catch (e) {
-        if (e instanceof ToolError) return errorResponse(e.message);
-        throw e;
-      }
-    }
+  server.tool(
+    "list_proxy_lists",
+    "List proxy lists for a shared proxy (geo-targeted sub-pools that share the proxy's bandwidth).",
+    { proxy_id: z.string() },
+    listProxyListsHandler(http),
   );
 
   server.tool(
     "create_proxy_list",
-    "Create a new geo-targeted proxy list for a shared proxy order.",
+    "Create a new geo-targeted proxy list on a shared proxy. Provide either a single country (with optional region/city/isp/zip subfilters) or a countries array (2-30, mutually exclusive with the subfilters). To edit an existing list, delete it and create a new one.",
     {
-      orderId: z.string().describe("Shared proxy order ID"),
-      name: z.string().describe("Name for the proxy list"),
-      locationPreset: z
-        .enum(["world_mix", "north_america", "europe", "asia", "latin_america", "custom"])
-        .default("world_mix")
-        .describe("Location preset for the list"),
-      countries: z
-        .array(z.string())
-        .optional()
-        .describe("Country codes (required when preset is 'custom')"),
-      rotationPeriod: z
-        .number()
-        .default(0)
-        .describe("Rotation period: 0=per-request, -1=sticky, N=seconds"),
+      proxy_id: z.string(),
+      name: z.string(),
+      country: z.string().optional().describe("ISO-3166-1 alpha-2, lowercased. Mutually exclusive with countries."),
+      countries: z.array(z.string()).optional().describe("2-30 ISO-3166-1 alpha-2 codes. Mutually exclusive with country/subfilters."),
+      region: z.string().optional().describe("Only valid with a single country."),
+      city: z.string().optional().describe("Only valid with a single country."),
+      isp: z.string().optional().describe("Only valid with a single country."),
+      zip: z.string().optional().describe("Only valid with a single country."),
+      rotation_period_seconds: z.number().int().default(0).describe("0=per-request, -1=sticky, N=seconds (max 86400)"),
+      rotation_mode: z.enum(["instant", "delayed_5s", "no_rotation_on_fail"]).default("instant"),
+      format: z.string().default("login_pass_host_port").describe("Output format for entries[] (e.g. login_pass_host_port, http_url, socks5_url)"),
     },
-    async ({ orderId, name, locationPreset, countries, rotationPeriod }) => {
-      try {
-        const proxy = state.proxies.get(orderId);
-        if (!proxy) {
-          return errorResponse(`Proxy not found: ${orderId}`);
-        }
-
-        if (proxy.type !== "shared") {
-          return errorResponse(
-            `Proxy lists are only available for shared proxies. This is a ${proxy.type} proxy.`
-          );
-        }
-
-        if (locationPreset === "custom" && (!countries || countries.length === 0)) {
-          return errorResponse(
-            `Countries must be provided when using the 'custom' location preset.`
-          );
-        }
-
-        const validatedCountries = countries
-          ? countries.map((c) => validateCountry(c))
-          : null;
-
-        const r = () => Math.random().toString(36).substring(2, 8);
-        const list: ProxyList = {
-          id: generateId("lst"),
-          name,
-          login: `vm_${r()}`,
-          password: r() + r(),
-          country: null,
-          region: null,
-          city: null,
-          isp: null,
-          locationPreset,
-          countries: validatedCountries,
-          rotationPeriod,
-        };
-
-        proxy.lists.push(list);
-
-        const connStr = generateConnectionString(
-          proxy.proxyHost,
-          proxy.proxyPort,
-          list.login,
-          list.password
-        );
-
-        const rotationLabel =
-          rotationPeriod === 0
-            ? "per-request"
-            : rotationPeriod === -1
-              ? "sticky"
-              : `${rotationPeriod}s`;
-
-        const lines = [
-          `Proxy list created!`,
-          ``,
-          `  List ID:      ${list.id}`,
-          `  Name:         ${list.name}`,
-          `  Login:        ${list.login}`,
-          `  Password:     ${list.password}`,
-          `  Preset:       ${locationPreset}`,
-        ];
-
-        if (validatedCountries) {
-          lines.push(`  Countries:    ${validatedCountries.join(", ")}`);
-        }
-
-        lines.push(
-          `  Rotation:     ${rotationLabel}`,
-          `  Connection:   ${connStr}`,
-          ``,
-          `Total lists for this order: ${proxy.lists.length}`
-        );
-
-        return textResponse(lines.join("\n"));
-      } catch (e) {
-        if (e instanceof ToolError) return errorResponse(e.message);
-        throw e;
-      }
-    }
+    createProxyListHandler(http),
   );
 
   server.tool(
-    "get_openvpn_config",
-    "Get OpenVPN configuration file for a dedicated proxy.",
+    "delete_proxy_list",
+    "Delete a proxy list. The list's credentials stop working immediately.",
     {
-      orderId: z.string().describe("Dedicated proxy order ID"),
+      proxy_id: z.string(),
+      list_id: z.string(),
     },
-    async ({ orderId }) => {
-      try {
-        const proxy = state.proxies.get(orderId);
-        if (!proxy) {
-          return errorResponse(`Proxy not found: ${orderId}`);
-        }
-
-        if (proxy.type === "shared") {
-          return errorResponse(
-            `OpenVPN config is only available for dedicated proxies. This is a shared proxy.`
-          );
-        }
-
-        const { config, filename } = generateOpenvpnConfig(
-          proxy.proxyHost,
-          proxy.proxyUsername,
-          proxy.proxyPassword,
-          proxy.country,
-          proxy.carrierName
-        );
-
-        const text = [
-          `OpenVPN Configuration - ${proxy.displayId}`,
-          ``,
-          `  Filename: ${filename}`,
-          ``,
-          `--- ${filename} ---`,
-          config,
-          `--- end ---`,
-        ].join("\n");
-
-        return textResponse(text);
-      } catch (e) {
-        if (e instanceof ToolError) return errorResponse(e.message);
-        throw e;
-      }
-    }
-  );
-
-  server.tool(
-    "get_vless_config",
-    "Get VLESS connection URI for a dedicated premium proxy.",
-    {
-      orderId: z.string().describe("Dedicated premium proxy order ID"),
-    },
-    async ({ orderId }) => {
-      try {
-        const proxy = state.proxies.get(orderId);
-        if (!proxy) {
-          return errorResponse(`Proxy not found: ${orderId}`);
-        }
-
-        if (proxy.type !== "dedicated_premium") {
-          return errorResponse(
-            `VLESS config is only available for dedicated premium proxies. This is a ${proxy.type} proxy.`
-          );
-        }
-
-        const { uri, uuid } = generateVlessUri(
-          proxy.proxyHost,
-          proxy.proxyPort,
-          proxy.country
-        );
-
-        const text = [
-          `VLESS Configuration - ${proxy.displayId}`,
-          ``,
-          `  Host:  ${proxy.proxyHost}`,
-          `  Port:  ${proxy.proxyPort}`,
-          `  UUID:  ${uuid}`,
-          ``,
-          `  URI:   ${uri}`,
-        ].join("\n");
-
-        return textResponse(text);
-      } catch (e) {
-        if (e instanceof ToolError) return errorResponse(e.message);
-        throw e;
-      }
-    }
+    deleteProxyListHandler(http),
   );
 }

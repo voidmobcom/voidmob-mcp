@@ -1,19 +1,24 @@
 # VoidMob MCP
 
-Mobile proxies, non-VoIP SMS verifications, and global eSIMs for AI agents and MCP clients.
+[![npm version](https://img.shields.io/npm/v/@voidmob/mcp)](https://www.npmjs.com/package/@voidmob/mcp)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Node](https://img.shields.io/node/v/@voidmob/mcp)](https://nodejs.org)
+
+Mobile proxies, non-VoIP SMS verifications, and global eSIMs - exposed as 25 tools your AI agent can call directly.
 
 ```bash
 npx -y @voidmob/mcp
 ```
 
-## Quick Start
+## Setup
 
-Add VoidMob to your MCP client. No auth, no config, no API key.
+1. Generate an API key at https://dashboard.voidmob.com/developers/api-keys (keys are 32-char secrets prefixed `vmk_live_`).
+2. Add the MCP to your client (snippets below). Provide the key as `VOIDMOB_API_KEY`.
 
 ### Claude Code
 
 ```bash
-claude mcp add voidmob -- npx -y @voidmob/mcp
+claude mcp add voidmob -- env VOIDMOB_API_KEY=vmk_live_... npx -y @voidmob/mcp
 ```
 
 ### Cursor
@@ -25,7 +30,8 @@ Add to `~/.cursor/mcp.json`:
   "mcpServers": {
     "voidmob": {
       "command": "npx",
-      "args": ["-y", "@voidmob/mcp"]
+      "args": ["-y", "@voidmob/mcp"],
+      "env": { "VOIDMOB_API_KEY": "vmk_live_..." }
     }
   }
 }
@@ -33,121 +39,107 @@ Add to `~/.cursor/mcp.json`:
 
 ### Claude Desktop
 
-Add to your config file:
-
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Linux: `~/.config/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS), `%APPDATA%\Claude\claude_desktop_config.json` (Windows), or `~/.config/Claude/claude_desktop_config.json` (Linux):
 
 ```json
 {
   "mcpServers": {
     "voidmob": {
       "command": "npx",
-      "args": ["-y", "@voidmob/mcp"]
+      "args": ["-y", "@voidmob/mcp"],
+      "env": { "VOIDMOB_API_KEY": "vmk_live_..." }
     }
   }
 }
 ```
 
-Restart your client. You now have 23 tools for mobile proxies, SMS verification, eSIM, and wallet operations.
+## Try without a key (sandbox)
 
-## Available Tools
+```bash
+VOIDMOB_SANDBOX=1 npx -y @voidmob/mcp
+```
 
-### Mobile Proxies (8 tools)
+Boots in-memory mocks with a $500 play-money balance. Every tool works against fake data. State resets on restart.
 
-| Tool | Description |
-|------|-------------|
-| `search_proxies` | Search mobile proxy products by country or type (shared, dedicated standard, dedicated premium) |
-| `purchase_proxy` | Purchase a mobile proxy and get connection credentials |
-| `get_proxy_status` | Check bandwidth usage, connection details, and IP |
-| `rotate_proxy` | Rotate to a new IP address (dedicated proxies only) |
-| `get_proxy_lists` | Get geo-targeted proxy lists for a shared proxy |
-| `create_proxy_list` | Create a new proxy list with location targeting |
-| `get_openvpn_config` | Get OpenVPN configuration file for a dedicated proxy |
-| `get_vless_config` | Get VLESS connection URI for a dedicated premium proxy |
+## Configuration
 
-### SMS - US Non-VoIP (7 tools)
+| Env var | Purpose | Required |
+|---|---|---|
+| `VOIDMOB_API_KEY` | Bearer key from the dashboard | Live mode |
+| `VOIDMOB_SANDBOX` | Set to `1` for mock-data mode | No |
+| `VOIDMOB_DEBUG` | Set to `1` to log requests to stderr | No |
+| `VOIDMOB_BASE_URL` | Override API host (advanced) | No |
 
-| Tool | Description |
-|------|-------------|
-| `search_sms_services` | Search US non-VoIP SMS services with verification, rental, and dedicated pricing |
-| `get_sms_price` | Get all pricing tiers for a specific service |
-| `rent_number` | Rent a US number - verification (20min), long-term rental (3-30 days), or dedicated (28 days) |
-| `get_messages` | Check for incoming SMS messages on a rented number |
-| `cancel_rental` | Cancel a rental (full refund for verification with no messages) |
-| `reuse_number` | Reuse a completed number to receive another SMS |
-| `toggle_auto_renew` | Toggle auto-renewal for long-term rentals and dedicated numbers |
+## Tools
 
-### eSIM (5 tools)
+25 tools across five domains.
+
+### Account (1)
 
 | Tool | Description |
-|------|-------------|
-| `search_esim_plans` | Search eSIM data plans by country, data amount, duration, or features (5G, hotspot) |
-| `get_esim_plan_details` | Get full plan details including network type, speed, and activation policy |
-| `purchase_esim` | Purchase an eSIM plan and get QR code, activation code, and ICCID |
-| `get_esim_usage` | Check data usage and remaining balance for an active eSIM |
-| `topup_esim` | Browse available top-up products or purchase a top-up for an active eSIM |
+|---|---|
+| `get_account` | Balance, rate limits, and account id |
 
-### Wallet (2 tools)
+### SMS (7)
 
 | Tool | Description |
-|------|-------------|
-| `get_balance` | Get wallet balance in USD and cents |
-| `deposit` | Create a crypto deposit (BTC, ETH, SOL, USDT, USDC, LTC, DOGE) |
+|---|---|
+| `search_sms_services` | List services with prices |
+| `rent_number` | Rent a US number (verification / rental / dedicated) |
+| `get_rental` | Read status and received messages |
+| `cancel_rental` | Cancel a verification or long-term rental |
+| `reuse_number` | Free or paid reuse of a completed verification |
+| `re_rent_rental` | Extend a long-term rental for another period |
+| `toggle_auto_renew` | Turn auto-renewal on or off |
 
-### General (1 tool)
+### eSIM (5)
 
 | Tool | Description |
-|------|-------------|
-| `list_orders` | List all orders across SMS, eSIM, and proxy services with filtering |
+|---|---|
+| `search_esim_plans` | Find global data plans |
+| `purchase_esim` | Buy a plan |
+| `get_esim_status` | Status and data usage |
+| `topup_esim` | Browse and buy top-ups |
+| `get_esim_qr` | Fetch the activation QR as an inline image |
 
-## Example Conversations
+### Proxy (10)
 
-These are things you can ask Claude, Cursor, or any MCP client after adding VoidMob:
+| Tool | Description |
+|---|---|
+| `search_proxies` | List available mobile proxy plans |
+| `purchase_proxy` | Buy a mobile proxy |
+| `get_proxy_status` | Status, usage, and gateway credentials |
+| `rotate_proxy_ip` | Rotate a dedicated proxy to a new IP |
+| `renew_proxy` | Extend expiry |
+| `topup_proxy` | Add data |
+| `regenerate_proxy_password` | Rotate the gateway password |
+| `list_proxy_lists` | List geo-targeted sub-pools |
+| `create_proxy_list` | Create a geo-targeted sub-pool |
+| `delete_proxy_list` | Remove a sub-pool |
 
-> Set up a dedicated US mobile proxy and give me the credentials
+### Discovery + history (2)
 
-> Rotate my US dedicated proxy IP
+| Tool | Description |
+|---|---|
+| `get_geo` | Cascading country/region/city/ISP for targeting |
+| `list_orders` | Active SMS / eSIM / proxy orders |
 
-> Create a US-only proxy list on my shared proxy
+## Example prompts
 
-> Get the OpenVPN config for my US dedicated proxy
+> Rent me a US number for Telegram verification
 
-> What VLESS connection options do I have for my premium proxy?
+> Find an eSIM plan that covers all of Europe with at least 5GB for two weeks
 
-> Rent me a dedicated US phone number that receives from all services
+> Show me my active proxies
 
-> Set up a 7-day WhatsApp rental with auto-renew
+> Top up esim_xxx with 5GB
 
-> Check if my verification code arrived
+## Sharing a key across processes
 
-> Find eSIM plans that cover all of Europe with at least 5GB
-
-> Find the cheapest eSIM plan for 2 weeks in Japan with at least 5GB
-
-> Top up my Japan eSIM with more data
-
-> Show me all my active orders
-
-## Sandbox Mode
-
-VoidMob MCP currently runs in **sandbox mode**. All 23 tools work, but the data is mock.
-
-- **$50 starting balance** - enough to try every tool
-- **Stateful** - renting a number deducts balance, messages appear after a few seconds, deposits auto-confirm
-- **Deposits auto-confirm** in ~5 seconds
-- **State resets** on server restart
-- **No auth required** - zero config, just `npx -y @voidmob/mcp`
-
-The sandbox is designed to let you explore the full flow: deposit funds, rent a number, receive a verification code, check your balance. Everything behaves like the real API, just with mock data underneath.
-
-## API Access
-
-Currently in sandbox mode. Join the waitlist at [voidmob.com](https://voidmob.com) for early API access.
+Multiple MCP clients running simultaneously (Claude Code + Cursor + Desktop) all share the same per-account rate limit. Heavy parallel usage may hit `RATE_LIMITED`; back off and retry.
 
 ---
 
 <p align="center">
-  <a href="https://voidmob.com">Website</a> · <a href="https://github.com/voidmobcom/voidmob-mcp">GitHub</a> · <a href="https://x.com/voidmob_com">X (Twitter)</a> · MIT License
+  <a href="https://voidmob.com">Website</a> · <a href="https://voidmob.com/docs">Docs</a> · <a href="https://voidmob.com/mcp">MCP</a> · <a href="https://dashboard.voidmob.com/api-reference">API reference</a> · MIT License
 </p>

@@ -1,0 +1,45 @@
+name: Publish
+
+on:
+  push:
+    tags: [ 'v*.*.*' ]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # for npm provenance
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - run: npm ci
+      - run: npm run version-sync
+      - run: npm run build
+      - run: npm test
+
+      - run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # MCP registry update. Confirm the actual PATCH endpoint shape against
+      # the current spec before flipping this on. If it fails, the npm publish
+      # still succeeded above.
+      - name: Sync MCP registry version
+        if: success()
+        env:
+          MCP_REGISTRY_TOKEN: ${{ secrets.MCP_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$MCP_REGISTRY_TOKEN" ]; then
+            echo "MCP_REGISTRY_TOKEN not set; skipping registry sync"
+            exit 0
+          fi
+          curl -sS -X PATCH "https://registry.modelcontextprotocol.io/v0/servers/io.github.voidmobcom/voidmob-mcp" \
+            -H "Authorization: Bearer $MCP_REGISTRY_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data @server.json

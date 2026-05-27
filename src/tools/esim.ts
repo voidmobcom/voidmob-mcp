@@ -1,396 +1,242 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { state, EsimOrder } from "../sandbox/state.js";
-import { ToolError, generateId } from "../utils/validation.js";
-import {
-  formatUsd,
-  formatMb,
-  formatData,
-  formatTimeRemaining,
-  generateDisplayId,
-  generateIccid,
-  generateActivationCode,
-} from "../utils/format.js";
-import { errorResponse, textResponse } from "../utils/response.js";
-import {
-  searchPlans,
-  getPlan,
-  getTopupProducts,
-  getTopupProduct,
-} from "../mock-data/esim.js";
+import { HttpClient, HttpError, NetworkError } from "../client/http.js";
+import { callApi } from "../client/call-api.js";
+import { newIdempotencyKey } from "../client/idempotency.js";
+import { EsimProduct, Esim, EsimUsage } from "../client/types.js";
+import { structuredOk, structuredWithImage, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
+import { formatUsd, formatData } from "../utils/format.js";
 
-function featureBadges(has5g: boolean, hasHotspot: boolean): string {
-  const badges: string[] = [];
-  if (has5g) badges.push("5G");
-  if (hasHotspot) badges.push("Hotspot");
-  return badges.length > 0 ? badges.join(", ") : "None";
-}
+// ── search_esim_plans ───────────────────────────────────────────────────────
 
-export function registerEsimTools(server: McpServer) {
+export const searchEsimPlansHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: {
+    country?: string;
+    min_data_gb?: number;
+    min_days?: number;
+    has_5g?: boolean;
+    has_hotspot?: boolean;
+    query?: string;
+    limit?: number;
+    cursor?: string;
+  }): Promise<ToolResult> => {
+    const q = new URLSearchParams();
+    if (args.country) q.set("country", args.country);
+    if (args.min_data_gb !== undefined) q.set("min_data_gb", String(args.min_data_gb));
+    // API param is min_validity_days (not min_days); has_5g is server-side.
+    if (args.min_days !== undefined) q.set("min_validity_days", String(args.min_days));
+    if (args.has_5g !== undefined) q.set("has_5g", String(args.has_5g));
+    if (args.query) q.set("search", args.query);
+    q.set("limit", String(args.limit ?? 20));
+    if (args.cursor) q.set("cursor", args.cursor);
+
+    const path = `/v1/esim_products?${q.toString()}`;
+    const data = await callApi<{ products: unknown[]; next_cursor: string | null }>(
+      http,
+      "GET",
+      path,
+    );
+    let products = z.array(EsimProduct).parse(data.products);
+    // has_hotspot is not a server-side filter, so apply it to the returned page
+    // (rather than silently ignoring it as the query param did before).
+    if (args.has_hotspot !== undefined) {
+      products = products.filter((p) => p.features.has_hotspot === args.has_hotspot);
+    }
+    if (products.length === 0) return toolError("No eSIM plans matched your filters.");
+    const text = [
+      `Found ${products.length} eSIM plan(s)${data.next_cursor ? " (more available - pass cursor to paginate)" : ""}:`,
+      ``,
+      ...products.map((p) =>
+        [
+          `  ${p.title} (${p.id})`,
+          `    Countries:  ${p.countries.join(", ")}`,
+          `    Data:       ${formatData(p.data_limit_gb, p.data_unlimited)}`,
+          `    Validity:   ${p.validity_days} days`,
+          `    Price:      ${formatUsd(p.price_cents)}`,
+          `    5G/Hotspot: ${p.features.has_5g ? "yes" : "no"} / ${p.features.has_hotspot ? "yes" : "no"}`,
+        ].join("\n"),
+      ),
+    ].join("\n\n");
+    return structuredOk(text, { esim_plans: products, next_cursor: data.next_cursor });
+  });
+
+// ── purchase_esim ───────────────────────────────────────────────────────────
+
+export const purchaseEsimHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { plan_id: string }): Promise<ToolResult> => {
+    const productResp = await callApi<{ product: unknown }>(http, "GET", `/v1/esim_products/${args.plan_id}`);
+    const product = EsimProduct.parse(productResp.product);
+    const out = await callApi<{ esim: unknown }>(http, "POST", "/v1/esims", {
+      body: { product_id: args.plan_id, max_price_cents: product.price_cents },
+      idempotencyKey: newIdempotencyKey(),
+    });
+    const esim = Esim.parse(out.esim);
+    const text = [
+      `eSIM purchased: ${esim.id}`,
+      ``,
+      `  Title:          ${product.title}`,
+      `  Countries:      ${esim.countries.join(", ")}`,
+      `  Data:           ${formatData(esim.data_limit_gb, esim.data_unlimited)}`,
+      `  Validity:       ${esim.validity_days} days`,
+      `  Charged:        ${formatUsd(esim.charged_price_cents)}`,
+      `  Activation:     ${esim.activation_code ?? "(pending)"}`,
+      `  ICCID:          ${esim.iccid ?? "(pending)"}`,
+      ``,
+      `Use get_esim_qr(esim_id="${esim.id}") to fetch the QR code as an image.`,
+    ].join("\n");
+    return structuredOk(text, { esim });
+  });
+
+// ── get_esim_status ─────────────────────────────────────────────────────────
+
+export const getEsimStatusHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { esim_id: string }): Promise<ToolResult> => {
+    // Usage is best-effort enrichment on a read path: degrade to null on ANY
+    // API/network error so a transient usage-subservice failure never sinks the
+    // core eSIM status read. Non-API throws (bugs) still propagate.
+    const [esimRaw, usageRaw] = await Promise.all([
+      callApi<{ esim: unknown }>(http, "GET", `/v1/esims/${args.esim_id}`),
+      callApi<{ usage: unknown }>(http, "GET", `/v1/esims/${args.esim_id}/usage`).catch((e) => {
+        if (e instanceof HttpError || e instanceof NetworkError) return null;
+        throw e;
+      }),
+    ]);
+    const esim = Esim.parse(esimRaw.esim);
+    const usage = usageRaw ? EsimUsage.parse(usageRaw.usage) : null;
+    const primaryPkg = usage?.packages[0] ?? null;
+    const text = [
+      `eSIM ${esim.id}`,
+      ``,
+      `  Countries:   ${esim.countries.join(", ")}`,
+      `  Data:        ${formatData(esim.data_limit_gb, esim.data_unlimited)}`,
+      `  Status:      ${esim.status}`,
+      `  Validity:    ${esim.validity_days} days`,
+      `  Expires:     ${esim.expires_at ?? "(not yet activated)"}`,
+      primaryPkg
+        ? `  Usage:       ${primaryPkg.used_mb.toFixed(0)} MB / ${primaryPkg.total_mb.toFixed(0)} MB (${primaryPkg.percent_used}%)`
+        : `  Usage:       (not yet available)`,
+    ].join("\n");
+    return structuredOk(text, { esim, usage });
+  });
+
+// ── topup_esim ──────────────────────────────────────────────────────────────
+
+export const topupEsimHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { esim_id: string; topup_product_id?: string }): Promise<ToolResult> => {
+    if (!args.topup_product_id) {
+      // Browse path
+      const out = await callApi<{ supports_topup: boolean; topups: unknown[] }>(
+        http,
+        "GET",
+        `/v1/esims/${args.esim_id}/topups`,
+      );
+      if (!out.supports_topup || out.topups.length === 0) {
+        return toolError(`No top-up products available for ${args.esim_id}.`);
+      }
+      const topups = z.array(EsimProduct).parse(out.topups);
+      const text = [
+        `Available top-ups for ${args.esim_id}:`,
+        ``,
+        ...topups.map(
+          (t) =>
+            `  ${t.title} (${t.id}) - ${formatData(t.data_limit_gb, t.data_unlimited)}, ${t.validity_days} days, ${formatUsd(t.price_cents)}`,
+        ),
+        ``,
+        `Re-run topup_esim with topup_product_id to purchase.`,
+      ].join("\n");
+      return structuredOk(text, { topups });
+    }
+    // Purchase path: quote-then-commit
+    const productResp = await callApi<{ product: unknown }>(
+      http,
+      "GET",
+      `/v1/esim_products/${args.topup_product_id}`,
+    );
+    const product = EsimProduct.parse(productResp.product);
+    const created = await callApi<{ esim: unknown }>(
+      http,
+      "POST",
+      `/v1/esims/${args.esim_id}/topups`,
+      {
+        body: { product_id: args.topup_product_id, max_price_cents: product.price_cents },
+        idempotencyKey: newIdempotencyKey(),
+      },
+    );
+    const esim = Esim.parse(created.esim);
+    const text = [
+      `Top-up ${esim.id} purchased on ${args.esim_id}.`,
+      ``,
+      `  Title:     ${product.title}`,
+      `  Data:      ${formatData(product.data_limit_gb, product.data_unlimited)}`,
+      `  Validity:  ${product.validity_days} days`,
+      `  Charged:   ${formatUsd(esim.charged_price_cents)}`,
+    ].join("\n");
+    return structuredOk(text, { esim });
+  });
+
+// ── get_esim_qr ─────────────────────────────────────────────────────────────
+
+export const getEsimQrHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { esim_id: string }): Promise<ToolResult> => {
+    const res = await http.request("GET", `/v1/esims/${args.esim_id}/qr.png`, {
+      expectBinary: true,
+    });
+    if (!res.binary) return toolError("QR fetch returned no binary payload.");
+    const base64 = res.binary.toString("base64");
+    return structuredWithImage(
+      `QR code for eSIM ${args.esim_id}. Scan with your device camera to install.`,
+      { esim_id: args.esim_id },
+      { mimeType: "image/png", base64 },
+    );
+  });
+
+// ── registration ────────────────────────────────────────────────────────────
+
+export function registerEsimTools(server: McpServer, http: HttpClient) {
   server.tool(
     "search_esim_plans",
-    "Search available eSIM data plans by country, data, duration, or features.",
+    "Search global eSIM data plans. Each result includes the full plan shape (countries, region, data limit, validity, routing location, 5G/hotspot/calls/SMS/topup features) so a separate plan-details tool is unnecessary.",
     {
-      country: z
-        .string()
-        .optional()
-        .describe("ISO 3166-1 alpha-2 country code (e.g., JP, US, GB)"),
-      duration: z
-        .number()
-        .min(1)
-        .optional()
-        .describe("Minimum plan validity in days"),
-      dataAmount: z
-        .number()
-        .min(1)
-        .optional()
-        .describe("Minimum data amount in GB"),
-      has5g: z.boolean().optional().describe("Filter for 5G-capable plans"),
-      hasHotspot: z
-        .boolean()
-        .optional()
-        .describe("Filter for plans with hotspot/tethering"),
-      search: z
-        .string()
-        .optional()
-        .describe("Text search in plan title (e.g., 'Japan', 'Europe')"),
-      limit: z
-        .number()
-        .min(1)
-        .max(50)
-        .default(20)
-        .describe("Maximum results to return (default: 20)"),
+      country: z.string().optional().describe("ISO-3166 country code (e.g. 'JP')"),
+      min_data_gb: z.number().optional(),
+      min_days: z.number().optional(),
+      has_5g: z.boolean().optional(),
+      has_hotspot: z.boolean().optional(),
+      query: z.string().optional().describe("Substring search on plan title"),
+      limit: z.number().min(1).max(50).default(20),
+      cursor: z.string().optional(),
     },
-    async ({ country, duration, dataAmount, has5g, hasHotspot, search, limit }) => {
-      try {
-        const results = searchPlans({
-          country,
-          duration,
-          dataAmount,
-          has5g,
-          hasHotspot,
-          search,
-          limit,
-        });
-
-        if (results.length === 0) {
-          return errorResponse(
-            "No eSIM plans found matching your criteria. Try different filters or omit them to browse all plans."
-          );
-        }
-
-        let text = `Found ${results.length} eSIM plan(s):\n\n`;
-
-        for (const plan of results) {
-          text += `  ${plan.title} (${plan.id})\n`;
-          text += `    Countries:  ${plan.countries.join(", ")}\n`;
-          text += `    Data:       ${formatData(plan.dataLimitGb, plan.dataUnlimited)}\n`;
-          text += `    Duration:   ${plan.validityDays} days\n`;
-          text += `    Price:      $${plan.retailPriceUsd.toFixed(2)}\n`;
-          text += `    Features:   ${featureBadges(plan.has5g, plan.hasHotspot)}\n`;
-          text += `    Routing:    ${plan.routingLocation}\n`;
-          text += `    Top-up:     ${plan.supportsTopup ? "Yes" : "No"}\n\n`;
-        }
-
-        return textResponse(text);
-      } catch (e) {
-        if (e instanceof ToolError) return errorResponse(e.message);
-        throw e;
-      }
-    }
-  );
-
-  server.tool(
-    "get_esim_plan_details",
-    "Get full details for a specific eSIM plan.",
-    {
-      planId: z.string().describe("Plan ID (e.g., 'esim_jp_3g_7d')"),
-    },
-    async ({ planId }) => {
-      const plan = getPlan(planId);
-
-      if (!plan) {
-        return errorResponse(
-          `Plan not found: ${planId}. Use search_esim_plans to browse available plans.`
-        );
-      }
-
-      const text = [
-        `${plan.title}`,
-        ``,
-        `  Plan ID:          ${plan.id}`,
-        `  Countries:        ${plan.countries.join(", ")}`,
-        `  Data:             ${formatData(plan.dataLimitGb, plan.dataUnlimited)}`,
-        `  Duration:         ${plan.validityDays} days`,
-        `  Price:            $${plan.retailPriceUsd.toFixed(2)}`,
-        `  Network:          ${plan.networkType}`,
-        `  Speed:            ${plan.speed}`,
-        `  5G:               ${plan.has5g ? "Yes" : "No"}`,
-        `  Hotspot:          ${plan.hasHotspot ? "Yes" : "No"}`,
-        `  Activation:       ${plan.activationPolicy}`,
-        `  Routing:          ${plan.routingLocation}`,
-        `  Supports top-up:  ${plan.supportsTopup ? "Yes" : "No"}`,
-        `  Tags:             ${plan.tags.length > 0 ? plan.tags.join(", ") : "None"}`,
-      ].join("\n");
-
-      return textResponse(text);
-    }
+    searchEsimPlansHandler(http),
   );
 
   server.tool(
     "purchase_esim",
-    "Purchase an eSIM plan. Returns QR code and activation details.",
-    {
-      planId: z.string().describe("Plan ID to purchase (e.g., 'esim_jp_3g_7d')"),
-    },
-    async ({ planId }) => {
-      const plan = getPlan(planId);
-
-      if (!plan) {
-        return errorResponse(
-          `Plan not found: ${planId}. Use search_esim_plans to browse available plans.`
-        );
-      }
-
-      const costCents = Math.round(plan.retailPriceUsd * 100);
-
-      if (!state.deductBalance(costCents, "esim_purchase", `eSIM: ${plan.title}`)) {
-        return errorResponse(
-          `Insufficient balance. Need ${formatUsd(costCents)} but have ${formatUsd(state.balanceCents)}. Use deposit to add funds.`
-        );
-      }
-
-      const now = Date.now();
-      const orderId = generateId("esm");
-      const displayId = generateDisplayId("ESM");
-
-      const order: EsimOrder = {
-        id: orderId,
-        displayId,
-        planId: plan.id,
-        planTitle: plan.title,
-        countries: plan.countries,
-        dataLimitGb: plan.dataLimitGb,
-        dataUnlimited: plan.dataUnlimited,
-        validityDays: plan.validityDays,
-        dataUsedMb: 0,
-        status: "active",
-        retailPriceUsd: plan.retailPriceUsd,
-        qrCodeData: `https://sandbox.voidmob.com/esim/qr/${orderId}`,
-        activationCode: generateActivationCode(),
-        iccid: generateIccid(),
-        isTopup: false,
-        parentOrderId: null,
-        supportsTopup: plan.supportsTopup,
-        expiresAt: now + plan.validityDays * 86400000,
-        createdAt: now,
-      };
-
-      state.esimOrders.set(orderId, order);
-
-      const lines = [
-        `eSIM purchased!`,
-        ``,
-        `  Order ID:         ${orderId}`,
-        `  Display ID:       ${displayId}`,
-        `  Plan:             ${plan.title}`,
-        `  Countries:        ${plan.countries.join(", ")}`,
-        `  Data:             ${formatData(plan.dataLimitGb, plan.dataUnlimited)}`,
-        `  Duration:         ${plan.validityDays} days`,
-        `  Cost:             $${plan.retailPriceUsd.toFixed(2)}`,
-        `  Balance:          ${formatUsd(state.balanceCents)}`,
-        ``,
-        `  QR Code:          ${order.qrCodeData}`,
-        `  Activation Code:  ${order.activationCode}`,
-        `  ICCID:            ${order.iccid}`,
-        ``,
-        `Setup steps:`,
-        `  1. Scan the QR code or enter the activation code in your device settings`,
-        `  2. Select the eSIM line and enable data roaming`,
-        `  3. The plan activates on first data usage`,
-        ``,
-        `Use get_esim_usage with order ID "${orderId}" to check data consumption.`,
-      ];
-
-      return textResponse(lines.join("\n"));
-    }
+    "Purchase an eSIM plan. Quote-then-commit: the tool fetches the live price and ties max_price_cents to it so you never pay above what you saw.",
+    { plan_id: z.string().describe("prod_xxx from search_esim_plans") },
+    purchaseEsimHandler(http),
   );
 
   server.tool(
-    "get_esim_usage",
-    "Check data usage and status for an eSIM order.",
-    {
-      orderId: z.string().describe("Order ID returned from purchase_esim"),
-    },
-    async ({ orderId }) => {
-      const order = state.esimOrders.get(orderId);
-
-      if (!order) {
-        return errorResponse(`Order not found: ${orderId}`);
-      }
-
-      const now = Date.now();
-
-      if (order.status === "active" && now >= order.expiresAt) {
-        order.status = "expired";
-      }
-
-      // Simulate usage: ~0.1 GB/hour = ~102.4 MB/hour, cap at 95% of total
-      const hoursElapsed = (now - order.createdAt) / 3600000;
-      const simulatedUsageMb = hoursElapsed * 102.4;
-
-      if (order.dataUnlimited || order.dataLimitGb === null) {
-        order.dataUsedMb = Math.round(simulatedUsageMb * 100) / 100;
-      } else {
-        const totalMb = order.dataLimitGb * 1024;
-        const maxUsageMb = totalMb * 0.95;
-        order.dataUsedMb = Math.round(Math.min(simulatedUsageMb, maxUsageMb) * 100) / 100;
-      }
-
-      const esimStatus = order.status === "active" ? "active" : "expired";
-
-      const lines = [
-        `eSIM Usage`,
-        ``,
-        `  esimStatus: ${esimStatus}`,
-        ``,
-        `  Package: ${order.planTitle}`,
-        `    Used: ${formatMb(order.dataUsedMb)}`,
-      ];
-
-      if (!order.dataUnlimited && order.dataLimitGb !== null) {
-        const totalMb = order.dataLimitGb * 1024;
-        const remainingMb = Math.max(0, totalMb - order.dataUsedMb);
-        const pct = Math.min(100, (order.dataUsedMb / totalMb) * 100);
-
-        lines[lines.length - 1] = `    Used: ${formatMb(order.dataUsedMb)} / ${formatMb(totalMb)} (${pct.toFixed(1)}%)`;
-        lines.push(`    Remaining: ${formatMb(remainingMb)}`);
-      }
-
-      lines.push(
-        `    Expires: ${order.status === "expired" ? "Expired" : new Date(order.expiresAt).toISOString().slice(0, 16)}`,
-      );
-
-      if (order.status === "active") {
-        lines.push(`    Time left: ${formatTimeRemaining(order.expiresAt)}`);
-      }
-
-      return textResponse(lines.join("\n"));
-    }
+    "get_esim_status",
+    "Read an eSIM's current status, plan info, and data usage. Combines GET /v1/esims/:id + /usage in one parallel call.",
+    { esim_id: z.string() },
+    getEsimStatusHandler(http),
   );
 
   server.tool(
     "topup_esim",
-    "Browse available top-up products or purchase a top-up for an active eSIM.",
+    "Browse top-up products (omit topup_product_id) or purchase a specific top-up (supply topup_product_id) for an active eSIM.",
     {
-      orderId: z.string().describe("Order ID of the eSIM to top up"),
-      topupProductId: z
-        .string()
-        .optional()
-        .describe("Top-up product ID to purchase. Omit to browse available top-ups."),
+      esim_id: z.string(),
+      topup_product_id: z.string().optional(),
     },
-    async ({ orderId, topupProductId }) => {
-      const order = state.esimOrders.get(orderId);
+    topupEsimHandler(http),
+  );
 
-      if (!order) {
-        return errorResponse(`Order not found: ${orderId}`);
-      }
-
-      if (order.status !== "active") {
-        return errorResponse(
-          `Order ${orderId} is ${order.status}. Only active orders can be topped up.`
-        );
-      }
-
-      if (!order.supportsTopup) {
-        return errorResponse(
-          `Order ${orderId} (${order.planTitle}) does not support top-ups.`
-        );
-      }
-
-      if (!topupProductId) {
-        const products = getTopupProducts(order.planId);
-
-        if (products.length === 0) {
-          return errorResponse(
-            `No top-up products available for plan ${order.planTitle}.`
-          );
-        }
-
-        let text = `Available top-ups for ${order.planTitle} (order ${orderId}):\n\n`;
-
-        for (const p of products) {
-          text += `  ${p.title} (${p.id})\n`;
-          text += `    Data:     ${p.dataLimitGb} GB\n`;
-          text += `    Duration: ${p.validityDays} days\n`;
-          text += `    Price:    $${p.retailPriceUsd.toFixed(2)}\n\n`;
-        }
-
-        text += `Use topup_esim with orderId and topupProductId to purchase.`;
-
-        return textResponse(text);
-      }
-
-      const product = getTopupProduct(topupProductId);
-
-      if (!product) {
-        return errorResponse(
-          `Top-up product not found: ${topupProductId}. Use topup_esim without topupProductId to browse available options.`
-        );
-      }
-
-      const costCents = Math.round(product.retailPriceUsd * 100);
-
-      if (!state.deductBalance(costCents, "esim_topup", `eSIM top-up: ${product.title} on ${orderId}`)) {
-        return errorResponse(
-          `Insufficient balance. Need ${formatUsd(costCents)} but have ${formatUsd(state.balanceCents)}. Use deposit to add funds.`
-        );
-      }
-
-      const now = Date.now();
-      const newOrderId = generateId("esm");
-      const displayId = generateDisplayId("ESM");
-
-      const topupOrder: EsimOrder = {
-        id: newOrderId,
-        displayId,
-        planId: order.planId,
-        planTitle: product.title,
-        countries: order.countries,
-        dataLimitGb: product.dataLimitGb,
-        dataUnlimited: false,
-        validityDays: product.validityDays,
-        dataUsedMb: 0,
-        status: "active",
-        retailPriceUsd: product.retailPriceUsd,
-        qrCodeData: `https://sandbox.voidmob.com/esim/qr/${newOrderId}`,
-        activationCode: generateActivationCode(),
-        iccid: order.iccid,
-        isTopup: true,
-        parentOrderId: orderId,
-        supportsTopup: false,
-        expiresAt: now + product.validityDays * 86400000,
-        createdAt: now,
-      };
-
-      state.esimOrders.set(newOrderId, topupOrder);
-
-      const text = [
-        `Top-up purchased!`,
-        ``,
-        `  Top-up order:  ${newOrderId}`,
-        `  Display ID:    ${displayId}`,
-        `  Product:       ${product.title}`,
-        `  Data:          ${product.dataLimitGb} GB`,
-        `  Duration:      ${product.validityDays} days`,
-        `  Cost:          $${product.retailPriceUsd.toFixed(2)}`,
-        `  Parent order:  ${orderId}`,
-        `  Balance:       ${formatUsd(state.balanceCents)}`,
-        ``,
-        `The top-up data has been added to your eSIM.`,
-      ].join("\n");
-
-      return textResponse(text);
-    }
+  server.tool(
+    "get_esim_qr",
+    "Fetch the activation QR code for an eSIM as an image. Most MCP clients render the image inline so the user can scan it directly.",
+    { esim_id: z.string() },
+    getEsimQrHandler(http),
   );
 }
