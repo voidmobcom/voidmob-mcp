@@ -62,7 +62,7 @@ function proxyResp(id: string, overrides: Partial<Record<string, unknown>> = {})
 describe("search_proxies", () => {
   it("composes query string with all filters and renders a list", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/proxy_plans?country=US&type=shared&min_gb=5", {
+    http.expect("GET", "/v1/proxy_plans?country=US&min_gb=5", {
       status: 200,
       headers: new Headers(),
       body: {
@@ -72,7 +72,6 @@ describe("search_proxies", () => {
     });
     const res = await searchProxiesHandler(http)({
       country: "US",
-      type: "shared",
       min_data_gb: 5,
     });
     expect(res.isError).toBeFalsy();

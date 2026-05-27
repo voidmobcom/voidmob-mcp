@@ -18,12 +18,10 @@ async function fetchProxyPlan(http: HttpClient, planId: string): Promise<ProxyPl
 export const searchProxiesHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: {
     country?: string;
-    type?: "shared" | "dedicated_standard" | "dedicated_premium";
     min_data_gb?: number;
   }): Promise<ToolResult> => {
     const q = new URLSearchParams();
     if (args.country) q.set("country", args.country);
-    if (args.type) q.set("type", args.type);
     if (args.min_data_gb !== undefined) q.set("min_gb", String(args.min_data_gb));
     const path = `/v1/proxy_plans${q.toString() ? `?${q}` : ""}`;
     const data = await callApi<{ plans: unknown[] }>(http, "GET", path);
@@ -311,11 +309,10 @@ export const deleteProxyListHandler = (http: HttpClient) =>
 export function registerProxyTools(server: McpServer, http: HttpClient) {
   server.tool(
     "search_proxies",
-    "Search available mobile proxy plans.",
+    "Search available mobile proxy plans (shared rotating mobile IPs, billed by data). Each result includes the plan id, location, data allowance, duration, and price. Region/city/ISP targeting is configured per list after purchase via create_proxy_list.",
     {
-      country: z.string().optional(),
-      type: z.enum(["shared", "dedicated_standard", "dedicated_premium"]).optional(),
-      min_data_gb: z.number().optional(),
+      country: z.string().optional().describe("ISO-3166-1 alpha-2 (e.g. 'US'). Many plans are worldwide and match any country."),
+      min_data_gb: z.number().optional().describe("Minimum included data allowance in GB"),
     },
     searchProxiesHandler(http),
   );

@@ -439,10 +439,8 @@ export function createSandboxHttpClient(): HttpClient {
     if (rawPath === "/v1/proxy_plans" && method === "GET") {
       let plans = PROXY_PLANS;
       const country = query.get("country");
-      const type = query.get("type");
       const minGb = query.get("min_gb");
       if (country) plans = plans.filter((p) => p.country === country.toUpperCase());
-      if (type) plans = plans.filter((p) => p.type === type);
       if (minGb) plans = plans.filter((p) => p.data_gb >= Number(minGb));
       return ok({ plans });
     }
