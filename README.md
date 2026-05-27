@@ -59,7 +59,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 VOIDMOB_SANDBOX=1 npx -y @voidmob/mcp
 ```
 
-Boots in-memory mocks with a $50 starting balance. Every tool works against fake data. State resets on restart.
+Boots in-memory mocks with a $500 play-money balance. Every tool works against fake data. State resets on restart.
 
 ## Configuration
 
