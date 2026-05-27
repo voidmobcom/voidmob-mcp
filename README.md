@@ -138,16 +138,8 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 
 Multiple MCP clients running simultaneously (Claude Code + Cursor + Desktop) all share the same per-account rate limit. Heavy parallel usage may hit `RATE_LIMITED`; back off and retry.
 
-## Support
-
-- Website: https://voidmob.com
-- Docs: https://voidmob.com/docs
-- MCP guide: https://voidmob.com/mcp
-- API reference: https://dashboard.voidmob.com/developers/docs
-- Issues: https://github.com/voidmobcom/voidmob-mcp/issues
-
 ---
 
 <p align="center">
-  <a href="https://voidmob.com">Website</a> · <a href="https://voidmob.com/docs">Docs</a> · <a href="https://voidmob.com/mcp">MCP</a> · <a href="https://github.com/voidmobcom/voidmob-mcp">GitHub</a> · MIT License
+  <a href="https://voidmob.com">Website</a> · <a href="https://voidmob.com/docs">Docs</a> · <a href="https://voidmob.com/mcp">MCP</a> · <a href="https://dashboard.voidmob.com/api-reference">API reference</a> · MIT License
 </p>
