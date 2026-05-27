@@ -33,7 +33,7 @@ export const searchProxiesHandler = (http: HttpClient) =>
       `Found ${plans.length} proxy plan(s):`,
       ``,
       ...plans.map((p) =>
-        `  ${p.name.padEnd(36)} ${p.id.padEnd(20)} ${p.type.padEnd(20)} ${p.country} ${p.data_gb !== null ? `${p.data_gb}GB` : "unlim"} ${p.duration_days}d ${formatUsd(p.quoted_price_cents)}`,
+        `  ${p.name.padEnd(36)} ${p.id.padEnd(20)} ${p.type.padEnd(10)} ${(p.country_name ?? p.country ?? "global").padEnd(16)} ${p.data_gb}GB ${p.duration_days}d ${formatUsd(p.quoted_price_cents)}`,
       ),
     ].join("\n");
     return structuredOk(text, { proxy_plans: plans });
@@ -66,25 +66,31 @@ export const getProxyStatusHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
     const [coreRaw, usageRaw, nolistRaw] = await Promise.all([
       callApi<{ proxy: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}`),
-      callApi<unknown>(http, "GET", `/v1/proxies/${args.proxy_id}/usage`).catch((e) => {
+      callApi<{ usage: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}/usage`).catch((e) => {
         if (e instanceof HttpError && (e.code === "PROXY_NOT_READY" || e.code === "USAGE_UNAVAILABLE")) return null;
         throw e;
       }),
-      callApi<unknown>(http, "GET", `/v1/proxies/${args.proxy_id}/nolist_credentials`).catch((e) => {
+      // Idempotent get-or-create for the package-level NoList gateway. Requires
+      // the package to be active (else 409 PROXY_NOT_READY); returns the
+      // persisted credentials on subsequent calls.
+      callApi<{ proxy: unknown }>(http, "POST", `/v1/proxies/${args.proxy_id}/nolist_credentials`, {
+        idempotencyKey: newIdempotencyKey(),
+      }).catch((e) => {
         if (e instanceof HttpError && (e.code === "PROXY_NOT_READY" || e.code === "PROXY_NOT_FOUND")) return null;
         throw e;
       }),
     ]);
-    const proxy = Proxy.parse(coreRaw.proxy);
+    // Prefer the nolist response (gateway populated once active) over the core
+    // GET, whose gateway is null until nolist credentials are provisioned.
+    const proxy = Proxy.parse((nolistRaw?.proxy as unknown) ?? coreRaw.proxy);
     const lines = [
       `Proxy ${proxy.id}`,
       ``,
       `  Status:        ${proxy.status}`,
-      `  Type:          ${proxy.type ?? "-"}`,
-      `  Country:       ${proxy.country ?? "-"}`,
       `  Data:          ${(proxy.data_bytes_used / 1024 / 1024 / 1024).toFixed(2)} GB / ${proxy.data_gb_total} GB`,
       `  Expires:       ${proxy.expires_at}`,
     ];
+    if (proxy.rotation_url) lines.push(`  Rotation URL:  ${proxy.rotation_url}`);
     if (proxy.gateway) {
       lines.push(
         ``,
@@ -100,8 +106,8 @@ export const getProxyStatusHandler = (http: HttpClient) =>
     }
     return structuredOk(lines.join("\n"), {
       proxy,
-      usage: usageRaw,
-      nolist_credentials: nolistRaw,
+      usage: usageRaw?.usage ?? null,
+      nolist_credentials: proxy.gateway,
     });
   });
 
@@ -211,9 +217,18 @@ export const listProxyListsHandler = (http: HttpClient) =>
     const text = [
       `Lists for ${args.proxy_id}:`,
       ``,
-      ...lists.map((l) =>
-        `  ${l.name} (${l.id}) preset=${l.location_preset} rotation=${l.rotation_period === 0 ? "per-request" : l.rotation_period === -1 ? "sticky" : `${l.rotation_period}s`}`,
-      ),
+      ...lists.map((l) => {
+        const geo = l.countries?.length
+          ? l.countries.join(",")
+          : [l.country, l.region, l.city, l.isp].filter(Boolean).join("/") || "world";
+        const rot =
+          l.rotation_period_seconds === 0
+            ? "per-request"
+            : l.rotation_period_seconds === -1
+              ? "sticky"
+              : `${l.rotation_period_seconds}s`;
+        return `  ${l.name} (${l.id}) geo=${geo} rotation=${rot} mode=${l.rotation_mode}`;
+      }),
     ].join("\n");
     return structuredOk(text, { lists });
   });
@@ -224,24 +239,55 @@ export const createProxyListHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: {
     proxy_id: string;
     name: string;
-    location_preset: "world_mix" | "north_america" | "europe" | "asia" | "latin_america" | "custom";
+    country?: string;
     countries?: string[];
-    rotation_period: number;
+    region?: string;
+    city?: string;
+    isp?: string;
+    zip?: string;
+    rotation_period_seconds?: number;
+    rotation_mode?: "instant" | "delayed_5s" | "no_rotation_on_fail";
+    format?: string;
   }): Promise<ToolResult> => {
-    if (args.location_preset === "custom" && (!args.countries || args.countries.length === 0)) {
-      return toolError("countries is required when location_preset='custom'.");
+    // Geo: country (single) XOR countries (2-30). region/city/isp/zip only
+    // valid with a single country. Mirror the API's validation locally to
+    // fail fast without a wasted round-trip.
+    const hasCountry = !!args.country;
+    const hasCountries = !!args.countries && args.countries.length > 0;
+    if (!hasCountry && !hasCountries) {
+      return toolError("Provide either country (single) or countries (2-30).");
+    }
+    if (hasCountry && hasCountries) {
+      return toolError("country and countries are mutually exclusive.");
+    }
+    if (hasCountries && (args.region || args.city || args.isp || args.zip)) {
+      return toolError("region/city/isp/zip are only valid with a single country, not countries.");
+    }
+    const body: Record<string, unknown> = {
+      name: args.name,
+      rotation_period_seconds: args.rotation_period_seconds ?? 0,
+      rotation_mode: args.rotation_mode ?? "instant",
+      format: args.format ?? "login_pass_host_port",
+    };
+    if (hasCountry) {
+      body.country = args.country;
+      if (args.region) body.region = args.region;
+      if (args.city) body.city = args.city;
+      if (args.isp) body.isp = args.isp;
+      if (args.zip) body.zip = args.zip;
+    } else {
+      body.countries = args.countries;
     }
     const out = await callApi<{ list: unknown }>(http, "POST", `/v1/proxies/${args.proxy_id}/lists`, {
-      body: {
-        name: args.name,
-        location_preset: args.location_preset,
-        countries: args.countries ?? null,
-        rotation_period: args.rotation_period,
-      },
+      body,
       idempotencyKey: newIdempotencyKey(),
     });
     const list = ProxyList.parse(out.list);
-    return structuredOk(`Created list ${list.id}.\n  Login: ${list.login}\n  Password: ${list.password}`, { list });
+    const credLines = list.credentials
+      ? [`  Username: ${list.credentials.username}`, `  Password: ${list.credentials.password}`]
+      : [`  Credentials: (provisioning - active within 1-2 minutes)`];
+    const text = [`Created list ${list.id}.`, ...credLines, ...list.entries.map((e) => `  ${e}`)].join("\n");
+    return structuredOk(text, { list });
   });
 
 // ── delete_proxy_list ───────────────────────────────────────────────────────
@@ -322,13 +368,19 @@ export function registerProxyTools(server: McpServer, http: HttpClient) {
 
   server.tool(
     "create_proxy_list",
-    "Create a new geo-targeted proxy list on a shared proxy. To edit an existing list, delete it and create a new one.",
+    "Create a new geo-targeted proxy list on a shared proxy. Provide either a single country (with optional region/city/isp/zip subfilters) or a countries array (2-30, mutually exclusive with the subfilters). To edit an existing list, delete it and create a new one.",
     {
       proxy_id: z.string(),
       name: z.string(),
-      location_preset: z.enum(["world_mix", "north_america", "europe", "asia", "latin_america", "custom"]).default("world_mix"),
-      countries: z.array(z.string()).optional().describe("Required when location_preset='custom'."),
-      rotation_period: z.number().int().default(0).describe("0=per-request, -1=sticky, N=seconds"),
+      country: z.string().optional().describe("ISO-3166-1 alpha-2, lowercased. Mutually exclusive with countries."),
+      countries: z.array(z.string()).optional().describe("2-30 ISO-3166-1 alpha-2 codes. Mutually exclusive with country/subfilters."),
+      region: z.string().optional().describe("Only valid with a single country."),
+      city: z.string().optional().describe("Only valid with a single country."),
+      isp: z.string().optional().describe("Only valid with a single country."),
+      zip: z.string().optional().describe("Only valid with a single country."),
+      rotation_period_seconds: z.number().int().default(0).describe("0=per-request, -1=sticky, N=seconds (max 86400)"),
+      rotation_mode: z.enum(["instant", "delayed_5s", "no_rotation_on_fail"]).default("instant"),
+      format: z.string().default("login_pass_host_port").describe("Output format for entries[] (e.g. login_pass_host_port, http_url, socks5_url)"),
     },
     createProxyListHandler(http),
   );

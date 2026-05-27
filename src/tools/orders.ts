@@ -34,7 +34,15 @@ export const listOrdersHandler = (http: HttpClient) =>
     }
     rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
     const page = rows.slice(0, limit);
-    if (page.length === 0) return toolError("No orders found.");
+    if (page.length === 0) {
+      // Distinguish a genuinely empty account from a fan-out where every
+      // branch failed (e.g. a schema mismatch throwing out of every fetch).
+      // Surfacing the warnings avoids the misleading "No orders found."
+      if (warnings.length > 0) {
+        return toolError(`Could not load orders. ${warnings.join(" ")}`);
+      }
+      return toolError("No orders found.");
+    }
     const text = [
       `${rows.length} order(s)${rows.length > limit ? ` (showing ${limit})` : ""}:`,
       ``,
@@ -71,7 +79,7 @@ async function fetchEsims(http: HttpClient): Promise<OrderRow[]> {
     status: e.status,
     charged_price_cents: e.charged_price_cents,
     created_at: e.created_at,
-    summary: `${e.plan_title} ${e.countries.join(",")} ${e.data_unlimited ? "unlim" : `${e.data_gb_total}GB`}`,
+    summary: `${e.countries.join(",")} ${e.data_unlimited ? "unlim" : `${e.data_limit_gb}GB`}`,
   }));
 }
 
@@ -84,7 +92,7 @@ async function fetchProxies(http: HttpClient): Promise<OrderRow[]> {
     status: p.status,
     charged_price_cents: p.charged_price_cents,
     created_at: p.created_at ?? "",
-    summary: `${p.type ?? ""} ${p.country ?? ""}`,
+    summary: `${p.data_gb_total}GB ${p.lists.length} list(s)`,
   }));
 }
 

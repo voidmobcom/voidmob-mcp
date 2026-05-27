@@ -31,12 +31,12 @@ export const searchEsimPlansHandler = (http: HttpClient) =>
     if (args.cursor) q.set("cursor", args.cursor);
 
     const path = `/v1/esim_products?${q.toString()}`;
-    const data = await callApi<{ esim_products: unknown[]; next_cursor: string | null }>(
+    const data = await callApi<{ products: unknown[]; next_cursor: string | null }>(
       http,
       "GET",
       path,
     );
-    const products = z.array(EsimProduct).parse(data.esim_products);
+    const products = z.array(EsimProduct).parse(data.products);
     if (products.length === 0) return toolError("No eSIM plans matched your filters.");
     const text = [
       `Found ${products.length} eSIM plan(s)${data.next_cursor ? " (more available - pass cursor to paginate)" : ""}:`,
@@ -45,10 +45,10 @@ export const searchEsimPlansHandler = (http: HttpClient) =>
         [
           `  ${p.title} (${p.id})`,
           `    Countries:  ${p.countries.join(", ")}`,
-          `    Data:       ${p.data_unlimited ? "unlimited" : `${p.data_gb} GB`}`,
+          `    Data:       ${p.data_unlimited ? "unlimited" : `${p.data_limit_gb} GB`}`,
           `    Validity:   ${p.validity_days} days`,
-          `    Price:      ${formatUsd(p.retail_price_cents)}`,
-          `    5G/Hotspot: ${p.has_5g ? "yes" : "no"} / ${p.has_hotspot ? "yes" : "no"}`,
+          `    Price:      ${formatUsd(p.price_cents)}`,
+          `    5G/Hotspot: ${p.features.has_5g ? "yes" : "no"} / ${p.features.has_hotspot ? "yes" : "no"}`,
         ].join("\n"),
       ),
     ].join("\n\n");
@@ -62,20 +62,20 @@ export const purchaseEsimHandler = (http: HttpClient) =>
     const productResp = await callApi<{ product: unknown }>(http, "GET", `/v1/esim_products/${args.plan_id}`);
     const product = EsimProduct.parse(productResp.product);
     const out = await callApi<{ esim: unknown }>(http, "POST", "/v1/esims", {
-      body: { product_id: args.plan_id, max_price_cents: product.retail_price_cents },
+      body: { product_id: args.plan_id, max_price_cents: product.price_cents },
       idempotencyKey: newIdempotencyKey(),
     });
     const esim = Esim.parse(out.esim);
     const text = [
       `eSIM purchased: ${esim.id}`,
       ``,
-      `  Plan:           ${esim.plan_title}`,
+      `  Title:          ${product.title}`,
       `  Countries:      ${esim.countries.join(", ")}`,
-      `  Data:           ${esim.data_unlimited ? "unlimited" : `${esim.data_gb_total} GB`}`,
+      `  Data:           ${esim.data_unlimited ? "unlimited" : `${esim.data_limit_gb} GB`}`,
       `  Validity:       ${esim.validity_days} days`,
       `  Charged:        ${formatUsd(esim.charged_price_cents)}`,
-      `  Activation:     ${esim.activation_code}`,
-      `  ICCID:          ${esim.iccid}`,
+      `  Activation:     ${esim.activation_code ?? "(pending)"}`,
+      `  ICCID:          ${esim.iccid ?? "(pending)"}`,
       ``,
       `Use get_esim_qr(esim_id="${esim.id}") to fetch the QR code as an image.`,
     ].join("\n");
@@ -99,10 +99,11 @@ export const getEsimStatusHandler = (http: HttpClient) =>
     const text = [
       `eSIM ${esim.id}`,
       ``,
-      `  Plan:        ${esim.plan_title}`,
+      `  Countries:   ${esim.countries.join(", ")}`,
+      `  Data:        ${esim.data_unlimited ? "unlimited" : `${esim.data_limit_gb} GB`}`,
       `  Status:      ${esim.status}`,
       `  Validity:    ${esim.validity_days} days`,
-      `  Expires:     ${esim.expires_at}`,
+      `  Expires:     ${esim.expires_at ?? "(not yet activated)"}`,
       primaryPkg
         ? `  Usage:       ${primaryPkg.used_mb.toFixed(0)} MB / ${primaryPkg.total_mb.toFixed(0)} MB (${primaryPkg.percent_used}%)`
         : `  Usage:       (not yet available)`,
@@ -130,7 +131,7 @@ export const topupEsimHandler = (http: HttpClient) =>
         ``,
         ...topups.map(
           (t) =>
-            `  ${t.title} (${t.id}) - ${t.data_gb} GB, ${t.validity_days} days, ${formatUsd(t.retail_price_cents)}`,
+            `  ${t.title} (${t.id}) - ${t.data_unlimited ? "unlimited" : `${t.data_limit_gb} GB`}, ${t.validity_days} days, ${formatUsd(t.price_cents)}`,
         ),
         ``,
         `Re-run topup_esim with topup_product_id to purchase.`,
@@ -149,7 +150,7 @@ export const topupEsimHandler = (http: HttpClient) =>
       "POST",
       `/v1/esims/${args.esim_id}/topups`,
       {
-        body: { product_id: args.topup_product_id, max_price_cents: product.retail_price_cents },
+        body: { product_id: args.topup_product_id, max_price_cents: product.price_cents },
         idempotencyKey: newIdempotencyKey(),
       },
     );
@@ -157,9 +158,9 @@ export const topupEsimHandler = (http: HttpClient) =>
     const text = [
       `Top-up ${esim.id} purchased on ${args.esim_id}.`,
       ``,
-      `  Plan:      ${esim.plan_title}`,
-      `  Data:      ${esim.data_unlimited ? "unlimited" : `${esim.data_gb_total} GB`}`,
-      `  Validity:  ${esim.validity_days} days`,
+      `  Title:     ${product.title}`,
+      `  Data:      ${product.data_unlimited ? "unlimited" : `${product.data_limit_gb} GB`}`,
+      `  Validity:  ${product.validity_days} days`,
       `  Charged:   ${formatUsd(esim.charged_price_cents)}`,
     ].join("\n");
     return structuredOk(text, { esim });
@@ -186,7 +187,7 @@ export const getEsimQrHandler = (http: HttpClient) =>
 export function registerEsimTools(server: McpServer, http: HttpClient) {
   server.tool(
     "search_esim_plans",
-    "Search global eSIM data plans. Each result includes the full plan shape (countries, data, validity, network type, speed, 5G/hotspot, activation policy) so a separate plan-details tool is unnecessary.",
+    "Search global eSIM data plans. Each result includes the full plan shape (countries, region, data limit, validity, routing location, 5G/hotspot/calls/SMS/topup features) so a separate plan-details tool is unnecessary.",
     {
       country: z.string().optional().describe("ISO-3166 country code (e.g. 'JP')"),
       min_data_gb: z.number().optional(),
@@ -202,8 +203,8 @@ export function registerEsimTools(server: McpServer, http: HttpClient) {
 
   server.tool(
     "purchase_esim",
-    "Purchase an eSIM plan. Quote-then-commit: the tool fetches the live retail price and ties max_price_cents to it so you never pay above what you saw.",
-    { plan_id: z.string().describe("esim_product_xxx from search_esim_plans") },
+    "Purchase an eSIM plan. Quote-then-commit: the tool fetches the live price and ties max_price_cents to it so you never pay above what you saw.",
+    { plan_id: z.string().describe("prod_xxx from search_esim_plans") },
     purchaseEsimHandler(http),
   );
 

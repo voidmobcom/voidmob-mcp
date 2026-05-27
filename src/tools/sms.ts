@@ -20,6 +20,9 @@ import {
   INVALID_RENTAL_ID,
 } from "../constants/rental-id.js";
 
+// The catalog service id for the 28-day dedicated number tier.
+const DEDICATED_SERVICE_ID = "svc_dedicated_28d";
+
 // ── search_sms_services ─────────────────────────────────────────────────────
 
 export const searchSmsServicesHandler = (http: HttpClient) =>
@@ -37,7 +40,7 @@ export const searchSmsServicesHandler = (http: HttpClient) =>
       ``,
       ...services.slice(0, 50).map((s) =>
         `  ${s.name.padEnd(20)} ${s.id.padEnd(14)} verify=${formatUsd(s.quoted_price_cents)}${
-          s.dedicated_price_cents !== undefined ? `  ded=${formatUsd(s.dedicated_price_cents)}` : ""
+          s.ltr_7d_price_cents ? `  7d=${formatUsd(s.ltr_7d_price_cents)}` : ""
         }`,
       ),
     ].join("\n");
@@ -70,46 +73,59 @@ export const rentNumberHandler = (http: HttpClient) =>
     if (kind === "rental" && !args.duration) {
       return toolError("rent_number kind='rental' requires a duration (3d|7d|14d|30d).");
     }
-    // Quote
+    // Quote against the live catalog.
     const services = await callApi<unknown>(http, "GET", "/v1/services");
     const parsed = ServicesResponse.parse(services);
-    const svc = parsed.services.find((s) => s.id === args.service_id);
-    if (!svc) {
-      return toolError(`Service '${args.service_id}' not found. Use search_sms_services to list available services.`);
-    }
-    let quotedCents: number;
+
     if (kind === "verification") {
-      quotedCents = svc.quoted_price_cents;
-    } else if (kind === "rental") {
-      const k = args.duration as "3d" | "7d" | "14d" | "30d";
-      const v = svc.ltr_prices_cents?.[k];
-      if (v === undefined) {
-        return toolError(`Long-term rental ${args.duration} is not offered for ${svc.name}. Try a different duration or kind='dedicated'.`);
+      const svc = parsed.services.find((s) => s.id === args.service_id);
+      if (!svc) {
+        return toolError(`Service '${args.service_id}' not found. Use search_sms_services to list available services.`);
       }
-      quotedCents = v;
-    } else {
-      if (svc.dedicated_price_cents === undefined) {
-        return toolError(`Dedicated numbers are not offered for ${svc.name}.`);
-      }
-      quotedCents = svc.dedicated_price_cents;
-    }
-    // Commit
-    const body: Record<string, unknown> = { service_id: args.service_id, max_price_cents: quotedCents };
-    if (kind !== "verification") {
-      body.kind = kind;
-      if (args.duration) body.duration = args.duration;
-    }
-    if (kind === "verification") {
       const created = await callApi<{ verification: unknown }>(http, "POST", "/v1/verifications", {
-        body,
+        body: { service_id: args.service_id, max_price_cents: svc.quoted_price_cents },
         idempotencyKey: newIdempotencyKey(),
       });
       const v = Verification.parse(created.verification);
       return structuredOk(`Verification ${v.id} created.\n\n${renderVerification(v)}`, { verification: v });
     }
+
+    // Long-term + dedicated both POST /v1/rentals with an uppercase duration.
+    // Dedicated is the dedicated 28-day catalog service (svc_dedicated_28d, 28D).
+    let serviceId: string;
+    let duration: "3D" | "7D" | "14D" | "30D" | "28D";
+    let quotedCents: number;
+    if (kind === "dedicated") {
+      serviceId = DEDICATED_SERVICE_ID;
+      duration = "28D";
+      const ded = parsed.services.find((s) => s.id === DEDICATED_SERVICE_ID);
+      if (!ded || !ded.ltr_28d_price_cents) {
+        return toolError("Dedicated 28-day numbers are not currently available.");
+      }
+      quotedCents = ded.ltr_28d_price_cents;
+    } else {
+      serviceId = args.service_id;
+      const svc = parsed.services.find((s) => s.id === args.service_id);
+      if (!svc) {
+        return toolError(`Service '${args.service_id}' not found. Use search_sms_services to list available services.`);
+      }
+      const tier = args.duration as "3d" | "7d" | "14d" | "30d";
+      const priceByTier: Record<typeof tier, number | undefined> = {
+        "3d": svc.ltr_3d_price_cents,
+        "7d": svc.ltr_7d_price_cents,
+        "14d": svc.ltr_14d_price_cents,
+        "30d": svc.ltr_30d_price_cents,
+      };
+      const v = priceByTier[tier];
+      if (!v) {
+        return toolError(`Long-term rental ${args.duration} is not offered for ${svc.name}. Try a different duration or kind='dedicated'.`);
+      }
+      quotedCents = v;
+      duration = tier.toUpperCase() as "3D" | "7D" | "14D" | "30D";
+    }
     // /v1/rentals returns the rental object flat (no { rental: ... } wrapper)
     const created = await callApi<unknown>(http, "POST", "/v1/rentals", {
-      body,
+      body: { service_id: serviceId, duration, max_price_cents: quotedCents },
       idempotencyKey: newIdempotencyKey(),
     });
     const r = Rental.parse(created);
@@ -157,13 +173,14 @@ export const reuseNumberHandler = (http: HttpClient) =>
 // ── re_rent_rental ──────────────────────────────────────────────────────────
 
 export const reRentRentalHandler = (http: HttpClient) =>
-  wrapToolErrors(async (args: { rental_id: string; duration: "3d" | "7d" | "14d" | "30d" }): Promise<ToolResult> => {
+  wrapToolErrors(async (args: { rental_id: string }): Promise<ToolResult> => {
     const id = args.rental_id;
     if (!isRentalId(id)) {
       return toolError(`re_rent_rental requires ${REN_PREFIX}xxx. Got '${id}'.`);
     }
+    // No request body: re-rents the same number for the same duration at the
+    // current price. Only valid when re_rent_available is true on the rental.
     const out = await callApi<unknown>(http, "POST", `/v1/rentals/${id}/re_rent`, {
-      body: { duration: args.duration },
       idempotencyKey: newIdempotencyKey(),
     });
     const r = Rental.parse(out);
@@ -198,21 +215,19 @@ export function renderVerification(v: VerificationT): string {
     `  Charged:      ${formatUsd(v.charged_price_cents)}`,
     `  Expires:      ${formatTimeRemaining(new Date(v.expires_at).getTime())}`,
   ];
-  if (v.messages && v.messages.length > 0) {
-    lines.push(``, `  Messages (${v.messages.length}):`);
-    for (const m of v.messages) {
-      lines.push(`    [${m.received_at.slice(11, 19)}] ${m.text}`);
-      if (m.code) lines.push(`      Code: ${m.code}`);
-    }
+  if (v.status === "code_received" && v.code) {
+    lines.push(``, `  Code received: ${v.code}`);
+    if (v.code_received_at) lines.push(`  At:           ${v.code_received_at}`);
   } else if (v.status === "waiting_for_code") {
-    lines.push(``, `  No messages yet. Try get_rental again in 10-30s.`);
+    lines.push(``, `  No code yet. Try get_rental again in 10-30s.`);
   }
   return lines.join("\n");
 }
 
 export function renderRental(r: RentalT): string {
+  const label = r.duration === "28D" ? "dedicated" : "rental";
   const lines = [
-    `Rental ${r.id} (${r.kind})`,
+    `Rental ${r.id} (${label})`,
     ``,
     `  Phone:        ${r.phone_number}`,
     `  Service:      ${r.service_name} (${r.service_id})`,
@@ -280,10 +295,9 @@ export function registerSmsTools(server: McpServer, http: HttpClient) {
 
   server.tool(
     "re_rent_rental",
-    "Re-rent the same number for another LTR period. Use before the rental expires/releases to keep the same phone number across periods.",
+    "Re-rent the same number for another period at the current price. Only works on an expired rental whose re_rent_available is true (the provider has not yet released the number). Re-uses the rental's original duration; no duration argument.",
     {
-      rental_id: z.string().describe("ren_xxx from a completed LTR"),
-      duration: z.enum(["3d", "7d", "14d", "30d"]),
+      rental_id: z.string().describe("ren_xxx from an expired LTR with re_rent_available=true"),
     },
     reRentRentalHandler(http),
   );

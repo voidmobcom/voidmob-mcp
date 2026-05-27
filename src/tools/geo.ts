@@ -23,13 +23,13 @@ const KINDS: ReadonlyArray<GeoKind> = [
     key: "cities",
     schema: GeoCity,
     label: "cities",
-    fmt: ((c: z.infer<typeof GeoCity>) => `  ${c.name} (${c.code}) ${c.available_nodes} nodes`) as (item: never) => string,
+    fmt: ((c: z.infer<typeof GeoCity>) => `  ${c.name} (${c.available_nodes} nodes)`) as (item: never) => string,
   },
   {
     key: "regions",
     schema: GeoRegion,
     label: "regions",
-    fmt: ((r: z.infer<typeof GeoRegion>) => `  ${r.name} (${r.code}) ${r.available_nodes} nodes`) as (item: never) => string,
+    fmt: ((r: z.infer<typeof GeoRegion>) => `  ${r.name} (${r.available_nodes} nodes)`) as (item: never) => string,
   },
   {
     key: "countries",
