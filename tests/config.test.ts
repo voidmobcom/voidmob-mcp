@@ -12,7 +12,7 @@ describe("parseEnv", () => {
     const cfg = parseEnv({ VOIDMOB_API_KEY: "vmk_live_" + "a".repeat(32) });
     expect(cfg.sandbox).toBe(false);
     expect(cfg.apiKey).toBe("vmk_live_" + "a".repeat(32));
-    expect(cfg.baseUrl).toBe("https://dashboard.voidmob.com");
+    expect(cfg.baseUrl).toBe("https://dashboard.voidmob.com/api");
   });
 
   it("accepts vmk_test_ keys", () => {

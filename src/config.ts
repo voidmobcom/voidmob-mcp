@@ -12,7 +12,7 @@ export interface Config {
   debug: boolean;
 }
 
-const DEFAULT_BASE_URL = "https://dashboard.voidmob.com";
+const DEFAULT_BASE_URL = "https://dashboard.voidmob.com/api";
 const SETUP_URL = "https://dashboard.voidmob.com/settings/api-keys";
 
 const KEY_RE = /^vmk_(live|test)_[A-Za-z0-9]{32}$/;
