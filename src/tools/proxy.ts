@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { HttpClient, HttpError } from "../client/http.js";
+import { HttpClient, HttpError, NetworkError } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
 import { Proxy, ProxyPlan, ProxyList, type ProxyPlan as ProxyPlanT } from "../client/types.js";
@@ -64,21 +64,24 @@ export const purchaseProxyHandler = (http: HttpClient) =>
 
 export const getProxyStatusHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
+    // The core GET is the source of truth (and enforces auth/ownership). Usage
+    // and the NoList gateway are best-effort enrichment: degrade either to null
+    // on ANY API/network error so a transient secondary failure never sinks a
+    // status read. Non-API throws (bugs) still propagate.
+    const degradeToNull = (e: unknown) => {
+      if (e instanceof HttpError || e instanceof NetworkError) return null;
+      throw e;
+    };
     const [coreRaw, usageRaw, nolistRaw] = await Promise.all([
       callApi<{ proxy: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}`),
-      callApi<{ usage: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}/usage`).catch((e) => {
-        if (e instanceof HttpError && (e.code === "PROXY_NOT_READY" || e.code === "USAGE_UNAVAILABLE")) return null;
-        throw e;
-      }),
-      // Idempotent get-or-create for the package-level NoList gateway. Requires
-      // the package to be active (else 409 PROXY_NOT_READY); returns the
-      // persisted credentials on subsequent calls.
+      callApi<{ usage: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}/usage`).catch(degradeToNull),
+      // Idempotent get-or-create for the package-level NoList gateway. A stable
+      // per-proxy key (not a fresh UUID) means concurrent/repeat status polls
+      // dedup to a single provisioning instead of racing to overwrite the
+      // gateway password.
       callApi<{ proxy: unknown }>(http, "POST", `/v1/proxies/${args.proxy_id}/nolist_credentials`, {
-        idempotencyKey: newIdempotencyKey(),
-      }).catch((e) => {
-        if (e instanceof HttpError && (e.code === "PROXY_NOT_READY" || e.code === "PROXY_NOT_FOUND")) return null;
-        throw e;
-      }),
+        idempotencyKey: `nolist-${args.proxy_id}`,
+      }).catch(degradeToNull),
     ]);
     // Prefer the nolist response (gateway populated once active) over the core
     // GET, whose gateway is null until nolist credentials are provisioned.
@@ -175,7 +178,7 @@ export const topupProxyHandler = (http: HttpClient) =>
       return toolError(`Plan ${plan.id} has no GB allowance; top-up not available.`);
     }
     const maxPriceCents = Math.round((plan.quoted_price_cents / plan.data_gb) * args.additional_gb);
-    const out = await callApi<{ proxy: unknown; charged_price_cents: number }>(
+    const out = await callApi<{ proxy: unknown }>(
       http,
       "POST",
       `/v1/proxies/${args.proxy_id}/topup`,
@@ -184,9 +187,12 @@ export const topupProxyHandler = (http: HttpClient) =>
         idempotencyKey: newIdempotencyKey(),
       },
     );
+    // The topup response body carries only the refreshed proxy (no per-topup
+    // charged amount), so report the quoted ceiling we tied - the strict-tie
+    // contract guarantees the actual charge did not exceed it.
     const refreshed = Proxy.parse(out.proxy);
     return structuredOk(
-      `Topped up ${args.proxy_id} by ${args.additional_gb} GB (${formatUsd(out.charged_price_cents)}).`,
+      `Topped up ${args.proxy_id} by ${args.additional_gb} GB (up to ${formatUsd(maxPriceCents)}).`,
       { proxy: refreshed },
     );
   });

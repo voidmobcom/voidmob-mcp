@@ -79,7 +79,7 @@ async function fetchEsims(http: HttpClient): Promise<OrderRow[]> {
     status: e.status,
     charged_price_cents: e.charged_price_cents,
     created_at: e.created_at,
-    summary: `${e.countries.join(",")} ${e.data_unlimited ? "unlim" : `${e.data_limit_gb}GB`}`,
+    summary: `${e.countries.join(",")} ${e.data_unlimited || e.data_limit_gb == null ? "unlim" : `${e.data_limit_gb}GB`}`,
   }));
 }
 

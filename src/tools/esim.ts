@@ -1,11 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { HttpClient, HttpError } from "../client/http.js";
+import { HttpClient, HttpError, NetworkError } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
 import { EsimProduct, Esim, EsimUsage } from "../client/types.js";
 import { structuredOk, structuredWithImage, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
-import { formatUsd } from "../utils/format.js";
+import { formatUsd, formatData } from "../utils/format.js";
 
 // ── search_esim_plans ───────────────────────────────────────────────────────
 
@@ -23,9 +23,9 @@ export const searchEsimPlansHandler = (http: HttpClient) =>
     const q = new URLSearchParams();
     if (args.country) q.set("country", args.country);
     if (args.min_data_gb !== undefined) q.set("min_data_gb", String(args.min_data_gb));
-    if (args.min_days !== undefined) q.set("min_days", String(args.min_days));
+    // API param is min_validity_days (not min_days); has_5g is server-side.
+    if (args.min_days !== undefined) q.set("min_validity_days", String(args.min_days));
     if (args.has_5g !== undefined) q.set("has_5g", String(args.has_5g));
-    if (args.has_hotspot !== undefined) q.set("has_hotspot", String(args.has_hotspot));
     if (args.query) q.set("search", args.query);
     q.set("limit", String(args.limit ?? 20));
     if (args.cursor) q.set("cursor", args.cursor);
@@ -36,7 +36,12 @@ export const searchEsimPlansHandler = (http: HttpClient) =>
       "GET",
       path,
     );
-    const products = z.array(EsimProduct).parse(data.products);
+    let products = z.array(EsimProduct).parse(data.products);
+    // has_hotspot is not a server-side filter, so apply it to the returned page
+    // (rather than silently ignoring it as the query param did before).
+    if (args.has_hotspot !== undefined) {
+      products = products.filter((p) => p.features.has_hotspot === args.has_hotspot);
+    }
     if (products.length === 0) return toolError("No eSIM plans matched your filters.");
     const text = [
       `Found ${products.length} eSIM plan(s)${data.next_cursor ? " (more available - pass cursor to paginate)" : ""}:`,
@@ -45,7 +50,7 @@ export const searchEsimPlansHandler = (http: HttpClient) =>
         [
           `  ${p.title} (${p.id})`,
           `    Countries:  ${p.countries.join(", ")}`,
-          `    Data:       ${p.data_unlimited ? "unlimited" : `${p.data_limit_gb} GB`}`,
+          `    Data:       ${formatData(p.data_limit_gb, p.data_unlimited)}`,
           `    Validity:   ${p.validity_days} days`,
           `    Price:      ${formatUsd(p.price_cents)}`,
           `    5G/Hotspot: ${p.features.has_5g ? "yes" : "no"} / ${p.features.has_hotspot ? "yes" : "no"}`,
@@ -71,7 +76,7 @@ export const purchaseEsimHandler = (http: HttpClient) =>
       ``,
       `  Title:          ${product.title}`,
       `  Countries:      ${esim.countries.join(", ")}`,
-      `  Data:           ${esim.data_unlimited ? "unlimited" : `${esim.data_limit_gb} GB`}`,
+      `  Data:           ${formatData(esim.data_limit_gb, esim.data_unlimited)}`,
       `  Validity:       ${esim.validity_days} days`,
       `  Charged:        ${formatUsd(esim.charged_price_cents)}`,
       `  Activation:     ${esim.activation_code ?? "(pending)"}`,
@@ -86,10 +91,13 @@ export const purchaseEsimHandler = (http: HttpClient) =>
 
 export const getEsimStatusHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { esim_id: string }): Promise<ToolResult> => {
+    // Usage is best-effort enrichment on a read path: degrade to null on ANY
+    // API/network error so a transient usage-subservice failure never sinks the
+    // core eSIM status read. Non-API throws (bugs) still propagate.
     const [esimRaw, usageRaw] = await Promise.all([
       callApi<{ esim: unknown }>(http, "GET", `/v1/esims/${args.esim_id}`),
       callApi<{ usage: unknown }>(http, "GET", `/v1/esims/${args.esim_id}/usage`).catch((e) => {
-        if (e instanceof HttpError && e.code === "USAGE_UNAVAILABLE") return null;
+        if (e instanceof HttpError || e instanceof NetworkError) return null;
         throw e;
       }),
     ]);
@@ -100,7 +108,7 @@ export const getEsimStatusHandler = (http: HttpClient) =>
       `eSIM ${esim.id}`,
       ``,
       `  Countries:   ${esim.countries.join(", ")}`,
-      `  Data:        ${esim.data_unlimited ? "unlimited" : `${esim.data_limit_gb} GB`}`,
+      `  Data:        ${formatData(esim.data_limit_gb, esim.data_unlimited)}`,
       `  Status:      ${esim.status}`,
       `  Validity:    ${esim.validity_days} days`,
       `  Expires:     ${esim.expires_at ?? "(not yet activated)"}`,
@@ -131,7 +139,7 @@ export const topupEsimHandler = (http: HttpClient) =>
         ``,
         ...topups.map(
           (t) =>
-            `  ${t.title} (${t.id}) - ${t.data_unlimited ? "unlimited" : `${t.data_limit_gb} GB`}, ${t.validity_days} days, ${formatUsd(t.price_cents)}`,
+            `  ${t.title} (${t.id}) - ${formatData(t.data_limit_gb, t.data_unlimited)}, ${t.validity_days} days, ${formatUsd(t.price_cents)}`,
         ),
         ``,
         `Re-run topup_esim with topup_product_id to purchase.`,
@@ -159,7 +167,7 @@ export const topupEsimHandler = (http: HttpClient) =>
       `Top-up ${esim.id} purchased on ${args.esim_id}.`,
       ``,
       `  Title:     ${product.title}`,
-      `  Data:      ${product.data_unlimited ? "unlimited" : `${product.data_limit_gb} GB`}`,
+      `  Data:      ${formatData(product.data_limit_gb, product.data_unlimited)}`,
       `  Validity:  ${product.validity_days} days`,
       `  Charged:   ${formatUsd(esim.charged_price_cents)}`,
     ].join("\n");

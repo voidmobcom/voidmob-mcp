@@ -31,6 +31,11 @@ export function mapApiError(err: unknown): string {
       if (max !== undefined && avail !== undefined) {
         return `Price moved from ${formatUsd(max)} to ${formatUsd(avail)} between quote and purchase. Re-run the tool to accept the new price${reqLine}`;
       }
+      // eSIM emits only available_price_cents (no max). Still surface the
+      // concrete current price rather than a vague "above your cap".
+      if (avail !== undefined) {
+        return `Price moved above your quote (now ${formatUsd(avail)}). Re-run the tool to accept the new price${reqLine}`;
+      }
       return `Price moved above your cap. Re-run the tool to accept the new price${reqLine}`;
     }
     case "SERVICE_OUT_OF_STOCK":

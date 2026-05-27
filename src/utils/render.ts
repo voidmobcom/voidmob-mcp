@@ -1,3 +1,4 @@
+import { ZodError } from "zod";
 import { HttpError, NetworkError } from "../client/http.js";
 import { mapApiError } from "../client/errors.js";
 
@@ -11,10 +12,6 @@ export interface ToolResult {
   >;
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
-}
-
-export function textBlock(text: string): ToolResult {
-  return { content: [{ type: "text", text }] };
 }
 
 export function structuredOk(text: string, structured: Record<string, unknown>): ToolResult {
@@ -43,8 +40,15 @@ export function toolError(message: string): ToolResult {
 }
 
 /**
- * Wrap a tool handler so HttpError + NetworkError surfaces are translated to
- * agent-readable text via mapApiError. Unknown throws still propagate.
+ * Wrap a tool handler so error surfaces become clean, white-labeled tool
+ * results instead of opaque protocol crashes:
+ *  - HttpError / NetworkError -> agent-readable text via mapApiError.
+ *  - ZodError (response shape we can't parse) -> a generic message that leaks
+ *    no schema internals. The detail is logged to stderr only. We deliberately
+ *    do NOT tell the caller to blindly retry: a money operation may have
+ *    succeeded server-side even though we couldn't parse its response, so the
+ *    caller should verify before re-running.
+ *  - Anything else still propagates.
  */
 export function wrapToolErrors<A, R extends ToolResult>(
   fn: (args: A) => Promise<R>,
@@ -55,6 +59,13 @@ export function wrapToolErrors<A, R extends ToolResult>(
     } catch (e) {
       if (e instanceof HttpError || e instanceof NetworkError) {
         return toolError(mapApiError(e));
+      }
+      if (e instanceof ZodError) {
+        process.stderr.write(`[voidmob-mcp] response schema mismatch: ${e.message}\n`);
+        return toolError(
+          "The API returned an unexpected response the client could not parse. " +
+          "The operation may have completed - check your account or use list_orders / a get_* tool to verify before retrying.",
+        );
       }
       throw e;
     }
