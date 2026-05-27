@@ -51,7 +51,7 @@ describe("get_account", () => {
     expect(res.isError).toBe(true);
     const textBlock = res.content[0];
     if (textBlock.type !== "text") throw new Error("expected text block");
-    expect(textBlock.text).toContain("settings/api-keys");
+    expect(textBlock.text).toContain("developers/api-keys");
     expect(textBlock.text).toContain("req_x");
   });
 });

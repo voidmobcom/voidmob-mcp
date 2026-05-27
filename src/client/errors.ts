@@ -1,7 +1,7 @@
 import { HttpError, NetworkError } from "./http.js";
 import { formatUsd } from "../utils/format.js";
 
-const SETUP_URL = "https://dashboard.voidmob.com/settings/api-keys";
+const SETUP_URL = "https://dashboard.voidmob.com/developers/api-keys";
 const WALLET_URL = "https://dashboard.voidmob.com/wallet";
 
 export function mapApiError(err: unknown): string {

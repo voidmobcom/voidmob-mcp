@@ -5,7 +5,7 @@ import { HttpError, NetworkError } from "../../src/client/http.js";
 describe("mapApiError", () => {
   it("UNAUTHENTICATED → docs URL pointer", () => {
     const err = new HttpError(401, "UNAUTHENTICATED", "req_x", undefined, "Authentication required.");
-    expect(mapApiError(err)).toContain("dashboard.voidmob.com/settings/api-keys");
+    expect(mapApiError(err)).toContain("dashboard.voidmob.com/developers/api-keys");
   });
 
   it("INSUFFICIENT_BALANCE → wallet URL pointer", () => {

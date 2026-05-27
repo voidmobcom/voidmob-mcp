@@ -1,5 +1,9 @@
 # VoidMob MCP
 
+[![npm version](https://img.shields.io/npm/v/@voidmob/mcp)](https://www.npmjs.com/package/@voidmob/mcp)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Node](https://img.shields.io/node/v/@voidmob/mcp)](https://nodejs.org)
+
 Mobile proxies, non-VoIP SMS verifications, and global eSIMs - exposed as 25 tools your AI agent can call directly.
 
 ```bash
@@ -8,7 +12,7 @@ npx -y @voidmob/mcp
 
 ## Setup
 
-1. Generate an API key at https://dashboard.voidmob.com/settings/api-keys (keys are 32-char secrets prefixed `vmk_live_`).
+1. Generate an API key at https://dashboard.voidmob.com/developers/api-keys (keys are 32-char secrets prefixed `vmk_live_`).
 2. Add the MCP to your client (snippets below). Provide the key as `VOIDMOB_API_KEY`.
 
 ### Claude Code
@@ -123,7 +127,7 @@ Semver. Tools target API v1. Major bumps signal removed/renamed tools; minor add
 
 ## Support
 
-- API docs: https://dashboard.voidmob.com/docs
+- API docs: https://dashboard.voidmob.com/developers/docs
 - Issues: https://github.com/voidmobcom/voidmob-mcp/issues
 
 MIT License.
