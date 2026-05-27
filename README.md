@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@voidmob/mcp)](https://www.npmjs.com/package/@voidmob/mcp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Node](https://img.shields.io/node/v/@voidmob/mcp)](https://nodejs.org)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-5FA04E)](https://nodejs.org)
 
 Mobile proxies, non-VoIP SMS verifications, and global eSIMs - exposed as 25 tools your AI agent can call directly.
 
@@ -123,7 +123,7 @@ Multiple MCP clients running simultaneously (Claude Code + Cursor + Desktop) all
 
 ## Versioning
 
-Semver. Tools target API v1. Major bumps signal removed/renamed tools; minor adds. See https://github.com/voidmobcom/voidmob-mcp/releases.
+Semver - major versions may remove or rename tools. See [releases](https://github.com/voidmobcom/voidmob-mcp/releases).
 
 ## Support
 
