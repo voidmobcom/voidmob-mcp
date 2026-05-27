@@ -141,12 +141,13 @@ Multiple MCP clients running simultaneously (Claude Code + Cursor + Desktop) all
 ## Support
 
 - Website: https://voidmob.com
+- Docs: https://voidmob.com/docs
 - MCP guide: https://voidmob.com/mcp
-- API docs: https://dashboard.voidmob.com/developers/docs
+- API reference: https://dashboard.voidmob.com/developers/docs
 - Issues: https://github.com/voidmobcom/voidmob-mcp/issues
 
 ---
 
 <p align="center">
-  <a href="https://voidmob.com">Website</a> · <a href="https://voidmob.com/mcp">MCP</a> · <a href="https://github.com/voidmobcom/voidmob-mcp">GitHub</a> · MIT License
+  <a href="https://voidmob.com">Website</a> · <a href="https://voidmob.com/docs">Docs</a> · <a href="https://voidmob.com/mcp">MCP</a> · <a href="https://github.com/voidmobcom/voidmob-mcp">GitHub</a> · MIT License
 </p>
