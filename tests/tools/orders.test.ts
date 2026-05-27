@@ -7,17 +7,25 @@ import { createMockHttpClient } from "../../src/testing/mock-http.js";
 function rentalFixture(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: "ren_old",
-    kind: "rental",
+    display_id: "LTR123",
     status: "active",
     phone_number: "+14155550123",
     service_id: "svc_tg",
     service_name: "Telegram",
-    duration: "7d",
+    country: "us",
+    duration: "7D",
+    rental_type: "rental",
     charged_price_cents: 500,
     auto_renew: false,
+    next_renewal_price_cents: 500,
+    re_rent_available: false,
+    re_rent_price_cents: null,
+    re_rent_blocked_at: null,
+    created_at: "2026-05-01T00:00:00Z",
     paid_until: "2026-05-28T00:00:00Z",
     expires_at: "2026-05-28T00:00:00Z",
-    created_at: "2026-05-01T00:00:00Z",
+    can_cancel: false,
+    cancel_window_expires_at: null,
     messages: [],
     ...overrides,
   };
@@ -27,19 +35,23 @@ function esimFixture(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: "esim_mid",
     status: "completed",
-    plan_title: "Japan 5GB / 7 days",
-    countries: ["JP"],
-    data_gb_total: 5,
-    data_unlimited: false,
-    validity_days: 7,
-    charged_price_cents: 999,
-    activation_code: "LPA:1$smdp.voidmob.com$ABC123",
-    iccid: "8901123412345678901",
+    product_id: "prod_jp7d",
     is_topup: false,
     parent_order_id: null,
-    supports_topup: true,
-    expires_at: "2026-05-28T00:00:00Z",
+    iccid: "8901123412345678901",
+    activation_code: "LPA:1$smdp.voidmob.com$ABC123",
+    qr_code_url: "https://dashboard.voidmob.com/api/v1/esims/esim_mid/qr.png",
+    smdp_address: "smdp.voidmob.com",
+    data_limit_gb: 5,
+    data_unlimited: false,
+    validity_days: 7,
+    countries: ["JP"],
+    routing_location: "JP",
+    charged_price_cents: 999,
+    currency: "USD",
     created_at: "2026-05-10T00:00:00Z",
+    completed_at: "2026-05-10T00:00:00Z",
+    expires_at: "2026-05-28T00:00:00Z",
     ...overrides,
   };
 }
@@ -59,14 +71,13 @@ function proxyFixture(overrides: Partial<Record<string, unknown>> = {}) {
     id: "px_new",
     status: "active",
     plan_id: "proxy_plan_us_shared_5gb",
-    type: "shared",
-    country: "US",
     data_gb_total: 5,
     data_bytes_used: 0,
     charged_price_cents: 1499,
     expires_at: "2026-06-20T00:00:00Z",
     gateway: gatewayFixture(),
     lists: [],
+    rotation_url: null,
     created_at: "2026-05-20T00:00:00Z",
     ...overrides,
   };
@@ -200,7 +211,7 @@ describe("list_orders", () => {
     expect(t.text).toContain("(showing 2)");
   });
 
-  it("returns toolError 'No orders found.' when all 3 fan-out branches fail", async () => {
+  it("surfaces partial-failure warnings (not a misleading 'No orders found.') when all 3 branches fail", async () => {
     const http = createMockHttpClient();
     const fail = {
       status: 500,
@@ -213,6 +224,24 @@ describe("list_orders", () => {
     http.expect("GET", "/v1/rentals", fail);
     http.expect("GET", "/v1/esims", fail);
     http.expect("GET", "/v1/proxies", fail);
+
+    const res = await listOrdersHandler(http)({});
+    expect(res.isError).toBe(true);
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    // When every fan-out call fails, the empty result is a hidden error, not an
+    // empty account: surface the partial failures instead of "No orders found."
+    expect(t.text).toContain("Could not load orders");
+    expect(t.text).toContain("partial:");
+    expect(t.text).not.toContain("No orders found.");
+  });
+
+  it("returns 'No orders found.' only when the account is genuinely empty (no warnings)", async () => {
+    const http = createMockHttpClient();
+    const empty = { status: 200, headers: new Headers(), body: { success: true, data: [] as unknown[] } };
+    http.expect("GET", "/v1/rentals", empty);
+    http.expect("GET", "/v1/esims", { status: 200, headers: new Headers(), body: { success: true, data: { esims: [] } } });
+    http.expect("GET", "/v1/proxies", { status: 200, headers: new Headers(), body: { success: true, data: { proxies: [] } } });
 
     const res = await listOrdersHandler(http)({});
     expect(res.isError).toBe(true);

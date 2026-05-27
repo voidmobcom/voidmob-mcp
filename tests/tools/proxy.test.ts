@@ -191,14 +191,15 @@ describe("purchase_proxy", () => {
 // ── get_proxy_status ────────────────────────────────────────────────────────
 
 describe("get_proxy_status", () => {
-  it("happy path: 3 parallel calls (proxy, usage, nolist_credentials), merged response", async () => {
+  it("happy path: 3 parallel calls (proxy GET, usage GET, nolist POST), merged response", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxies/proxy_xyz", {
       status: 200,
       headers: new Headers(),
+      // Core GET has gateway null until nolist provisions it.
       body: {
         success: true,
-        data: { proxy: proxyResp("proxy_xyz", { data_bytes_used: 1073741824 }) },
+        data: { proxy: proxyResp("proxy_xyz", { data_bytes_used: 1073741824, gateway: null }) },
       },
     });
     http.expect("GET", "/v1/proxies/proxy_xyz/usage", {
@@ -206,22 +207,24 @@ describe("get_proxy_status", () => {
       headers: new Headers(),
       body: {
         success: true,
-        data: { data_used_gb: 1.0, data_total_gb: 5 },
+        data: { usage: { daily_bytes: 0, weekly_bytes: 0, monthly_bytes: 0, total_bytes: 1073741824, total_gb_allocated: 5, remaining_bytes: 4 } },
       },
     });
-    http.expect("GET", "/v1/proxies/proxy_xyz/nolist_credentials", {
+    // nolist is an idempotent get-or-create POST that returns the proxy with
+    // gateway populated.
+    http.expect("POST", "/v1/proxies/proxy_xyz/nolist_credentials", {
       status: 200,
       headers: new Headers(),
       body: {
         success: true,
-        data: { username: "nolist_user", password: "nolist_pass" },
+        data: { proxy: proxyResp("proxy_xyz", { data_bytes_used: 1073741824 }) },
       },
     });
     const res = await getProxyStatusHandler(http)({ proxy_id: "proxy_xyz" });
     expect(res.isError).toBeFalsy();
     expect(res.structuredContent?.proxy).toMatchObject({ id: "proxy_xyz" });
-    expect(res.structuredContent?.usage).toMatchObject({ data_used_gb: 1.0 });
-    expect(res.structuredContent?.nolist_credentials).toMatchObject({ username: "nolist_user" });
+    expect(res.structuredContent?.usage).toMatchObject({ total_bytes: 1073741824 });
+    expect(res.structuredContent?.nolist_credentials).toMatchObject({ username: "vm_abc123" });
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
     expect(t.text).toContain("proxy_xyz");
@@ -229,7 +232,7 @@ describe("get_proxy_status", () => {
     expect(t.text).toContain("p4ssw0rd");
   });
 
-  it("partial failure: usage and nolist_credentials return 503 → still succeeds with those fields null", async () => {
+  it("partial failure: usage and nolist return 503 → still succeeds with those fields null", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxies/proxy_xyz", {
       status: 200,
@@ -252,15 +255,15 @@ describe("get_proxy_status", () => {
         },
       },
     });
-    http.expect("GET", "/v1/proxies/proxy_xyz/nolist_credentials", {
-      status: 503,
+    http.expect("POST", "/v1/proxies/proxy_xyz/nolist_credentials", {
+      status: 409,
       headers: new Headers(),
       body: {
         success: false,
         error: {
           code: "PROXY_NOT_READY",
           message: "not provisioned yet",
-          request_id: "req_nolist_503",
+          request_id: "req_nolist_409",
           docs_url: "",
         },
       },
@@ -269,6 +272,7 @@ describe("get_proxy_status", () => {
     expect(res.isError).toBeFalsy();
     expect(res.structuredContent?.proxy).toMatchObject({ id: "proxy_xyz" });
     expect(res.structuredContent?.usage).toBeNull();
+    // gateway is null on the core GET when nolist isn't provisioned yet.
     expect(res.structuredContent?.nolist_credentials).toBeNull();
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
@@ -459,14 +463,20 @@ describe("list_proxy_lists", () => {
     http.expect("GET", "/v1/proxies/prx_abc", {
       status: 200, headers: new Headers(),
       body: { success: true, data: { proxy: proxyResp("prx_abc", { lists: [{
-        id: "lst_1", name: "Default", login: "u", password: "p",
-        country: null, region: null, city: null, isp: null,
-        location_preset: "world_mix", countries: null, rotation_period: 0,
+        id: "lst_1", proxy_id: "prx_abc", name: "Default",
+        country: null, countries: ["us", "ca"], region: null, city: null, isp: null, zip: null,
+        rotation_period_seconds: 0, rotation_mode: "instant", format: "login_pass_host_port",
+        credentials: { host: "proxy.voidmob.com", port: 10000, protocol: "http", username: "u", password: "p" },
+        entries: ["u:p@proxy.voidmob.com:10000"], activation_note: "List active within 1-2 minutes.",
+        created_at: "2026-05-01T00:00:00Z",
       }] }) } },
     });
     const res = await listProxyListsHandler(http)({ proxy_id: "prx_abc" });
     expect(res.isError).toBeFalsy();
     expect(res.structuredContent?.lists).toHaveLength(1);
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("per-request");
+    expect(t.text).toContain("us,ca");
   });
 
   it("empty lists → toolError", async () => {
@@ -495,71 +505,77 @@ describe("list_proxy_lists", () => {
 // ── create_proxy_list ───────────────────────────────────────────────────────
 
 describe("create_proxy_list", () => {
-  function listFixture(id: string, preset = "world_mix") {
+  function listFixture(id: string, overrides: Record<string, unknown> = {}) {
     return {
-      id, name: "Test", login: "u", password: "p",
-      country: null, region: null, city: null, isp: null,
-      location_preset: preset, countries: null, rotation_period: 0,
+      id, proxy_id: "prx_abc", name: "Test",
+      country: null, countries: null, region: null, city: null, isp: null, zip: null,
+      rotation_period_seconds: 0, rotation_mode: "instant", format: "login_pass_host_port",
+      credentials: { host: "proxy.voidmob.com", port: 10000, protocol: "http", username: "u", password: "p" },
+      entries: ["u:p@proxy.voidmob.com:10000"], activation_note: "List active within 1-2 minutes.",
+      created_at: "2026-05-01T00:00:00Z",
+      ...overrides,
     };
   }
 
-  it("non-custom preset → POST /v1/proxies/:id/lists with idempotency key", async () => {
+  it("single country → POST /v1/proxies/:id/lists with country + defaults + idempotency key", async () => {
     const http = createMockHttpClient();
     http.expect("POST", "/v1/proxies/prx_abc/lists", {
       status: 201, headers: new Headers(),
-      body: { success: true, data: { list: listFixture("lst_new", "europe") } },
+      body: { success: true, data: { list: listFixture("lst_new", { country: "us" }) } },
     });
     const res = await createProxyListHandler(http)({
       proxy_id: "prx_abc",
       name: "Test",
-      location_preset: "europe",
-      rotation_period: 0,
+      country: "us",
     });
     expect(res.isError).toBeFalsy();
-    expect(http.history[0].body).toMatchObject({ name: "Test", location_preset: "europe" });
+    expect(http.history[0].body).toMatchObject({
+      name: "Test", country: "us", rotation_period_seconds: 0, rotation_mode: "instant", format: "login_pass_host_port",
+    });
     expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("u:p@proxy.voidmob.com:10000");
   });
 
-  it("custom preset without countries → toolError (no HTTP call)", async () => {
+  it("neither country nor countries → toolError (no HTTP call)", async () => {
+    const http = createMockHttpClient();
+    const res = await createProxyListHandler(http)({ proxy_id: "prx_abc", name: "Test" });
+    expect(res.isError).toBe(true);
+    expect(http.history).toHaveLength(0);
+  });
+
+  it("country AND countries together → toolError (no HTTP call)", async () => {
     const http = createMockHttpClient();
     const res = await createProxyListHandler(http)({
-      proxy_id: "prx_abc",
-      name: "Test",
-      location_preset: "custom",
-      rotation_period: 0,
+      proxy_id: "prx_abc", name: "Test", country: "us", countries: ["us", "gb"],
     });
     expect(res.isError).toBe(true);
     expect(http.history).toHaveLength(0);
   });
 
-  it("custom preset with empty countries array → toolError (no HTTP call)", async () => {
+  it("countries with a subfilter → toolError (no HTTP call)", async () => {
     const http = createMockHttpClient();
     const res = await createProxyListHandler(http)({
-      proxy_id: "prx_abc",
-      name: "Test",
-      location_preset: "custom",
-      countries: [],
-      rotation_period: 0,
+      proxy_id: "prx_abc", name: "Test", countries: ["us", "gb"], region: "California",
     });
     expect(res.isError).toBe(true);
     expect(http.history).toHaveLength(0);
   });
 
-  it("custom preset with countries → POST", async () => {
+  it("countries (multi) → POST with countries array, no subfilters", async () => {
     const http = createMockHttpClient();
     http.expect("POST", "/v1/proxies/prx_abc/lists", {
       status: 201, headers: new Headers(),
-      body: { success: true, data: { list: listFixture("lst_new", "custom") } },
+      body: { success: true, data: { list: listFixture("lst_new", { countries: ["us", "gb"] }) } },
     });
     const res = await createProxyListHandler(http)({
       proxy_id: "prx_abc",
       name: "Test",
-      location_preset: "custom",
-      countries: ["US", "GB"],
-      rotation_period: 0,
+      countries: ["us", "gb"],
     });
     expect(res.isError).toBeFalsy();
-    expect(http.history[0].body).toMatchObject({ location_preset: "custom", countries: ["US", "GB"] });
+    expect(http.history[0].body).toMatchObject({ countries: ["us", "gb"] });
+    expect(http.history[0].body).not.toHaveProperty("country");
   });
 });
 

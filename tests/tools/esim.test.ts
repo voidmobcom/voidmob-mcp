@@ -15,17 +15,21 @@ function productFixture(overrides: Partial<Record<string, unknown>> = {}) {
     id: "esim_product_jp7d",
     title: "Japan 5GB / 7 days",
     countries: ["JP"],
-    data_gb: 5,
+    region: "Asia",
+    country_count: 1,
+    routing_location: "JP",
+    data_limit_gb: 5,
     data_unlimited: false,
     validity_days: 7,
-    retail_price_cents: 999,
-    has_5g: true,
-    has_hotspot: true,
-    supports_topup: true,
-    network_type: "LTE/5G",
-    speed: "fast",
-    activation_policy: "first_use",
-    tags: ["asia", "popular"],
+    features: {
+      has_5g: true,
+      has_hotspot: true,
+      has_calls: false,
+      has_sms: false,
+      supports_topup: true,
+    },
+    price_cents: 999,
+    currency: "USD",
     ...overrides,
   };
 }
@@ -34,19 +38,23 @@ function esimFixture(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: "esim_abc",
     status: "completed",
-    plan_title: "Japan 5GB / 7 days",
-    countries: ["JP"],
-    data_gb_total: 5,
-    data_unlimited: false,
-    validity_days: 7,
-    charged_price_cents: 999,
-    activation_code: "LPA:1$smdp.voidmob.com$ABC123",
-    iccid: "8901123412345678901",
+    product_id: "esim_product_jp7d",
     is_topup: false,
     parent_order_id: null,
-    supports_topup: true,
-    expires_at: "2026-05-28T00:00:00Z",
+    iccid: "8901123412345678901",
+    activation_code: "LPA:1$smdp.voidmob.com$ABC123",
+    qr_code_url: "https://dashboard.voidmob.com/api/v1/esims/esim_abc/qr.png",
+    smdp_address: "smdp.voidmob.com",
+    data_limit_gb: 5,
+    data_unlimited: false,
+    validity_days: 7,
+    countries: ["JP"],
+    routing_location: "JP",
+    charged_price_cents: 999,
+    currency: "USD",
     created_at: "2026-05-21T00:00:00Z",
+    completed_at: "2026-05-21T00:00:00Z",
+    expires_at: "2026-05-28T00:00:00Z",
     ...overrides,
   };
 }
@@ -54,7 +62,7 @@ function esimFixture(overrides: Partial<Record<string, unknown>> = {}) {
 function usageFixture(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     esim_id: "esim_abc",
-    esim_status: "active",
+    esim_status: "completed",
     packages: [
       {
         name: "Plan A",
@@ -84,7 +92,7 @@ describe("search_esim_plans", () => {
       body: {
         success: true,
         data: {
-          esim_products: [productFixture()],
+          products: [productFixture()],
           next_cursor: null,
         },
       },
@@ -104,11 +112,11 @@ describe("search_esim_plans", () => {
     expect(plans).toHaveLength(1);
     // Full plan shape returned — no separate get_esim_plan_details tool needed
     expect(plans[0]).toMatchObject({
-      network_type: "LTE/5G",
-      speed: "fast",
-      activation_policy: "first_use",
-      supports_topup: true,
-      tags: ["asia", "popular"],
+      region: "Asia",
+      country_count: 1,
+      routing_location: "JP",
+      data_limit_gb: 5,
+      features: { has_5g: true, has_hotspot: true, supports_topup: true },
     });
   });
 
@@ -117,7 +125,7 @@ describe("search_esim_plans", () => {
     http.expect("GET", "/v1/esim_products?country=XX&limit=20", {
       status: 200,
       headers: new Headers(),
-      body: { success: true, data: { esim_products: [], next_cursor: null } },
+      body: { success: true, data: { products: [], next_cursor: null } },
     });
     const res = await searchEsimPlansHandler(http)({ country: "XX" });
     expect(res.isError).toBe(true);
@@ -219,7 +227,7 @@ describe("get_esim_status", () => {
     expect(res.structuredContent?.esim).toMatchObject({ id: "esim_abc" });
     expect(res.structuredContent?.usage).toMatchObject({
       esim_id: "esim_abc",
-      esim_status: "active",
+      esim_status: "completed",
     });
     expect((res.structuredContent?.usage as { packages: unknown[] }).packages).toHaveLength(1);
     const t = res.content[0];
@@ -266,8 +274,8 @@ describe("topup_esim", () => {
         data: {
           supports_topup: true,
           topups: [
-            productFixture({ id: "esim_topup_jp_3gb", title: "Japan +3GB", retail_price_cents: 599, data_gb: 3 }),
-            productFixture({ id: "esim_topup_jp_10gb", title: "Japan +10GB", retail_price_cents: 1499, data_gb: 10 }),
+            productFixture({ id: "esim_topup_jp_3gb", title: "Japan +3GB", price_cents: 599, data_limit_gb: 3 }),
+            productFixture({ id: "esim_topup_jp_10gb", title: "Japan +10GB", price_cents: 1499, data_limit_gb: 10 }),
           ],
         },
       },
@@ -300,7 +308,7 @@ describe("topup_esim", () => {
       headers: new Headers(),
       body: {
         success: true,
-        data: { product: productFixture({ id: "esim_topup_jp_3gb", title: "Japan +3GB", retail_price_cents: 599, data_gb: 3 }) },
+        data: { product: productFixture({ id: "esim_topup_jp_3gb", title: "Japan +3GB", price_cents: 599, data_limit_gb: 3 }) },
       },
     });
     http.expect("POST", "/v1/esims/esim_abc/topups", {
@@ -311,11 +319,16 @@ describe("topup_esim", () => {
         data: {
           esim: esimFixture({
             id: "esim_topup_xyz",
-            plan_title: "Japan +3GB",
-            data_gb_total: 3,
+            product_id: "esim_topup_jp_3gb",
+            data_limit_gb: null,
+            validity_days: 7,
             charged_price_cents: 599,
             is_topup: true,
             parent_order_id: "esim_abc",
+            iccid: null,
+            activation_code: null,
+            qr_code_url: null,
+            smdp_address: null,
           }),
         },
       },

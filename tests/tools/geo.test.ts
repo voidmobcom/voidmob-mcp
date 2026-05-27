@@ -9,11 +9,11 @@ function countryFixture(overrides: Partial<Record<string, unknown>> = {}) {
 }
 
 function regionFixture(overrides: Partial<Record<string, unknown>> = {}) {
-  return { code: "California", name: "California", available_nodes: 250, ...overrides };
+  return { name: "California", available_nodes: 250, ...overrides };
 }
 
 function cityFixture(overrides: Partial<Record<string, unknown>> = {}) {
-  return { code: "Los Angeles", name: "Los Angeles", available_nodes: 80, ...overrides };
+  return { name: "Los Angeles", available_nodes: 80, ...overrides };
 }
 
 function ispFixture(overrides: Partial<Record<string, unknown>> = {}) {
@@ -64,7 +64,7 @@ describe("get_geo", () => {
     expect(t.text).toContain("California");
     const regions = res.structuredContent?.regions as Array<Record<string, unknown>>;
     expect(regions).toHaveLength(1);
-    expect(regions[0]).toMatchObject({ code: "California", available_nodes: 250 });
+    expect(regions[0]).toMatchObject({ name: "California", available_nodes: 250 });
   });
 
   it("with country + region hits cascading geo and renders cities", async () => {
@@ -74,7 +74,7 @@ describe("get_geo", () => {
       headers: new Headers(),
       body: {
         success: true,
-        data: { cities: [cityFixture(), cityFixture({ code: "San Francisco", name: "San Francisco", available_nodes: 45 })] },
+        data: { cities: [cityFixture(), cityFixture({ name: "San Francisco", available_nodes: 45 })] },
       },
     });
     const res = await getGeoHandler(http)({ country: "US", region: "California" });
