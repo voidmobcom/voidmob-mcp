@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/voidmobcom-voidmob-mcp-badge.png)](https://mseep.ai/app/voidmobcom-voidmob-mcp)
+
 # VoidMob MCP
 
 [![npm version](https://img.shields.io/npm/v/@voidmob/mcp)](https://www.npmjs.com/package/@voidmob/mcp)
