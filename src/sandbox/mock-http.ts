@@ -50,7 +50,7 @@ const SERVICES: SmsService[] = [
   { id: "svc_discord", name: "Discord", quoted_price_cents: 120, available: true, ltr_7d_price_cents: 480, ltr_30d_price_cents: 1400 },
   { id: "svc_tiktok", name: "TikTok", quoted_price_cents: 250, available: true, ltr_7d_price_cents: 900 },
   { id: "svc_openai", name: "OpenAI", quoted_price_cents: 300, available: true, ltr_7d_price_cents: 1100, ltr_30d_price_cents: 3000 },
-  { id: "svc_dedicated_28d", name: "Dedicated (all services)", quoted_price_cents: 3500, available: true, ltr_28d_price_cents: 3500 },
+  { id: "svc_dedicated_28d", name: "Dedicated (all services)", quoted_price_cents: 3500, available: true },
 ];
 
 const esimFeatures = (over: Partial<EsimProduct["features"]> = {}): EsimProduct["features"] => ({

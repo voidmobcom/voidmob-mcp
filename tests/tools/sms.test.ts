@@ -214,7 +214,7 @@ describe("rent_number (verification path)", () => {
   });
 });
 
-describe("rent_number (rental + dedicated paths)", () => {
+describe("rent_number (rental path)", () => {
   // Real rental shape: rental_type (not kind), uppercase duration, country, etc.
   function rentalResp(id: string, overrides: Record<string, unknown> = {}) {
     return {
@@ -258,36 +258,6 @@ describe("rent_number (rental + dedicated paths)", () => {
       body: { success: true, data: { services: [{ id: "svc_tg", name: "Telegram", quoted_price_cents: 35, ltr_7d_price_cents: 0 }] } },
     });
     const res = await rentNumberHandler(http)({ service_id: "svc_tg", kind: "rental", duration: "7d" });
-    expect(res.isError).toBe(true);
-    expect(http.history).toHaveLength(1);
-  });
-
-  it("dedicated kind → POST /v1/rentals with svc_dedicated_28d + 28D using ltr_28d_price_cents", async () => {
-    const http = createMockHttpClient();
-    http.expect("GET", "/v1/services", {
-      status: 200, headers: new Headers(),
-      body: { success: true, data: { services: [
-        { id: "svc_tg", name: "Telegram", quoted_price_cents: 35 },
-        { id: "svc_dedicated_28d", name: "Dedicated Number", quoted_price_cents: 1999, ltr_28d_price_cents: 1999 },
-      ] } },
-    });
-    http.expect("POST", "/v1/rentals", {
-      status: 201, headers: new Headers(),
-      body: { success: true, data: rentalResp("ren_ded", { duration: "28D", charged_price_cents: 1999 }) },
-    });
-    const res = await rentNumberHandler(http)({ service_id: "svc_tg", kind: "dedicated" });
-    expect(res.isError).toBeFalsy();
-    expect(http.history[1].body).toMatchObject({ service_id: "svc_dedicated_28d", duration: "28D", max_price_cents: 1999 });
-    expect(res.structuredContent?.rental).toMatchObject({ id: "ren_ded" });
-  });
-
-  it("dedicated kind when svc_dedicated_28d not in catalog → toolError", async () => {
-    const http = createMockHttpClient();
-    http.expect("GET", "/v1/services", {
-      status: 200, headers: new Headers(),
-      body: { success: true, data: { services: [{ id: "svc_tg", name: "Telegram", quoted_price_cents: 35 }] } },
-    });
-    const res = await rentNumberHandler(http)({ service_id: "svc_tg", kind: "dedicated" });
     expect(res.isError).toBe(true);
     expect(http.history).toHaveLength(1);
   });

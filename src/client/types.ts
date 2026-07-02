@@ -37,8 +37,6 @@ export const SmsService = z.object({
   ltr_7d_price_cents: z.number().int().optional(),
   ltr_14d_price_cents: z.number().int().optional(),
   ltr_30d_price_cents: z.number().int().optional(),
-  // Only present on the svc_dedicated_28d row (the 28-day dedicated number tier).
-  ltr_28d_price_cents: z.number().int().optional(),
 });
 export type SmsService = z.infer<typeof SmsService>;
 

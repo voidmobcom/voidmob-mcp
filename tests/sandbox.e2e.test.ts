@@ -51,7 +51,7 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
     okResult(await reuseNumberHandler(http)({ rental_id: id, paid: true }));
   });
 
-  it("SMS long-term + dedicated lifecycle", async () => {
+  it("SMS long-term rental lifecycle", async () => {
     const ren = okResult(await rentNumberHandler(http)({ service_id: "svc_telegram", kind: "rental", duration: "7d" }));
     const id = sc(ren).rental.id as string;
     expect(id.startsWith("ren_")).toBe(true);
@@ -59,7 +59,6 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
     okResult(await getRentalHandler(http)({ rental_id: id }));
     okResult(await reRentRentalHandler(http)({ rental_id: id }));
     okResult(await cancelRentalHandler(http)({ rental_id: id }));
-    okResult(await rentNumberHandler(http)({ service_id: "svc_dedicated_28d", kind: "dedicated" }));
   });
 
   it("eSIM lifecycle", async () => {

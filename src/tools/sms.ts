@@ -24,9 +24,6 @@ import {
   INVALID_RENTAL_ID,
 } from "../constants/rental-id.js";
 
-// The catalog service id for the 28-day dedicated number tier.
-const DEDICATED_SERVICE_ID = "svc_dedicated_28d";
-
 // ── search_sms_services ─────────────────────────────────────────────────────
 
 export const searchSmsServicesHandler = (http: HttpClient) =>
@@ -72,7 +69,7 @@ export const getRentalHandler = (http: HttpClient) =>
 // ── rent_number ─────────────────────────────────────────────────────────────
 
 export const rentNumberHandler = (http: HttpClient) =>
-  wrapToolErrors(async (args: { service_id: string; kind?: "verification" | "rental" | "dedicated"; duration?: "3d" | "7d" | "14d" | "30d" }): Promise<ToolResult> => {
+  wrapToolErrors(async (args: { service_id: string; kind?: "verification" | "rental"; duration?: "3d" | "7d" | "14d" | "30d" }): Promise<ToolResult> => {
     const kind = args.kind ?? "verification";
     if (kind === "rental" && !args.duration) {
       return toolError("rent_number kind='rental' requires a duration (3d|7d|14d|30d).");
@@ -94,42 +91,26 @@ export const rentNumberHandler = (http: HttpClient) =>
       return structuredOk(`Verification ${v.id} created.\n\n${renderVerification(v)}`, { verification: v });
     }
 
-    // Long-term + dedicated both POST /v1/rentals with an uppercase duration.
-    // Dedicated is the dedicated 28-day catalog service (svc_dedicated_28d, 28D).
-    let serviceId: string;
-    let duration: "3D" | "7D" | "14D" | "30D" | "28D";
-    let quotedCents: number;
-    if (kind === "dedicated") {
-      serviceId = DEDICATED_SERVICE_ID;
-      duration = "28D";
-      const ded = parsed.services.find((s) => s.id === DEDICATED_SERVICE_ID);
-      if (!ded || !ded.ltr_28d_price_cents) {
-        return toolError("Dedicated 28-day numbers are not currently available.");
-      }
-      quotedCents = ded.ltr_28d_price_cents;
-    } else {
-      serviceId = args.service_id;
-      const svc = parsed.services.find((s) => s.id === args.service_id);
-      if (!svc) {
-        return toolError(`Service '${args.service_id}' not found. Use search_sms_services to list available services.`);
-      }
-      const tier = args.duration as "3d" | "7d" | "14d" | "30d";
-      const priceByTier: Record<typeof tier, number | undefined> = {
-        "3d": svc.ltr_3d_price_cents,
-        "7d": svc.ltr_7d_price_cents,
-        "14d": svc.ltr_14d_price_cents,
-        "30d": svc.ltr_30d_price_cents,
-      };
-      const v = priceByTier[tier];
-      if (!v) {
-        return toolError(`Long-term rental ${args.duration} is not offered for ${svc.name}. Try a different duration or kind='dedicated'.`);
-      }
-      quotedCents = v;
-      duration = tier.toUpperCase() as "3D" | "7D" | "14D" | "30D";
+    // Long-term rentals POST /v1/rentals with an uppercase duration.
+    const svc = parsed.services.find((s) => s.id === args.service_id);
+    if (!svc) {
+      return toolError(`Service '${args.service_id}' not found. Use search_sms_services to list available services.`);
     }
+    const tier = args.duration as "3d" | "7d" | "14d" | "30d";
+    const priceByTier: Record<typeof tier, number | undefined> = {
+      "3d": svc.ltr_3d_price_cents,
+      "7d": svc.ltr_7d_price_cents,
+      "14d": svc.ltr_14d_price_cents,
+      "30d": svc.ltr_30d_price_cents,
+    };
+    const quotedCents = priceByTier[tier];
+    if (!quotedCents) {
+      return toolError(`Long-term rental ${args.duration} is not offered for ${svc.name}. Try a different duration.`);
+    }
+    const duration = tier.toUpperCase() as "3D" | "7D" | "14D" | "30D";
     // /v1/rentals returns the rental object flat (no { rental: ... } wrapper)
     const created = await callApi<unknown>(http, "POST", "/v1/rentals", {
-      body: { service_id: serviceId, duration, max_price_cents: quotedCents },
+      body: { service_id: args.service_id, duration, max_price_cents: quotedCents },
       idempotencyKey: newIdempotencyKey(),
     });
     const r = Rental.parse(created);
@@ -267,24 +248,24 @@ export function renderRental(r: RentalT): string {
 export function registerSmsTools(server: McpServer, http: HttpClient) {
   server.tool(
     "search_sms_services",
-    "Search available US non-VoIP SMS services with prices per row. Returns each service's verification price plus LTR/dedicated tiers when offered.",
+    "Search available US non-VoIP SMS services with prices per row. Returns each service's verification price plus LTR tiers when offered.",
     { query: z.string().optional().describe("Substring filter on service name (e.g. 'telegram').") },
     searchSmsServicesHandler(http),
   );
 
   server.tool(
     "get_rental",
-    "Read a rental's current status and any messages received. Pass the ID you got from rent_number (ver_xxx for verifications, ren_xxx for long-term/dedicated). SMS codes typically arrive 10-60s after rent_number; poll this tool until status changes.",
+    "Read a rental's current status and any messages received. Pass the ID you got from rent_number (ver_xxx for verifications, ren_xxx for long-term rentals). SMS codes typically arrive 10-60s after rent_number; poll this tool until status changes.",
     { rental_id: z.string().describe("ver_xxx or ren_xxx") },
     getRentalHandler(http),
   );
 
   server.tool(
     "rent_number",
-    "Rent a US non-VoIP phone number. kind='verification' (single SMS, 20min); kind='rental' (timed LTR with duration); kind='dedicated' (28-day all-services number). Quote-then-commit: the tool fetches the live price and ties max_price_cents to the quote so you never pay above what you saw.",
+    "Rent a US non-VoIP phone number. kind='verification' (single SMS, 20min); kind='rental' (timed LTR with duration). For a private all-services monthly number, use purchase_dedicated_number instead. Quote-then-commit: the tool fetches the live price and ties max_price_cents to the quote so you never pay above what you saw.",
     {
       service_id: z.string().describe("svc_xxx from search_sms_services"),
-      kind: z.enum(["verification", "rental", "dedicated"]).default("verification"),
+      kind: z.enum(["verification", "rental"]).default("verification"),
       duration: z.enum(["3d", "7d", "14d", "30d"]).optional().describe("Required when kind='rental'"),
     },
     rentNumberHandler(http),
@@ -292,7 +273,7 @@ export function registerSmsTools(server: McpServer, http: HttpClient) {
 
   server.tool(
     "cancel_rental",
-    "Cancel a rental. For verifications (ver_xxx) the API may refund if no message arrived. For long-term/dedicated rentals (ren_xxx) cancellation is typically non-refundable - check the response.",
+    "Cancel a rental. For verifications (ver_xxx) the API may refund if no message arrived. For long-term rentals (ren_xxx) cancellation is typically non-refundable - check the response.",
     { rental_id: z.string() },
     cancelRentalHandler(http),
   );
