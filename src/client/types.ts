@@ -116,6 +116,38 @@ export const Rental = z.object({
 });
 export type Rental = z.infer<typeof Rental>;
 
+// ── Dedicated numbers (/v1/dedicated/*) ─────────────────────────────────────
+
+export const DedicatedCountry = z.object({
+  country: z.string(),
+  name: z.string(),
+  quoted_price_cents: z.number().int(),
+  base_price_cents: z.number().int(),
+  in_stock: z.boolean(),
+});
+export type DedicatedCountry = z.infer<typeof DedicatedCountry>;
+
+export const DedicatedNumber = z.object({
+  id: z.string(),
+  display_id: z.string().nullable().optional(),
+  status: z.enum(["active", "expired"]),
+  phone_number: z.string(),
+  country: z.string(),
+  country_name: z.string(),
+  billing_period: z.string(),
+  nickname: z.string().nullable().optional(),
+  quoted_price_cents: z.number().int(),
+  charged_price_cents: z.number().int(),
+  next_renewal_price_cents: z.number().int(),
+  auto_renew: z.boolean(),
+  created_at: z.string(),
+  paid_until: z.string(),
+  expires_at: z.string(),
+  // Empty on list/purchase/auto-renew responses; populated on the detail GET.
+  messages: z.array(RentalMessage).optional(),
+});
+export type DedicatedNumber = z.infer<typeof DedicatedNumber>;
+
 // ── eSIM products + orders ──────────────────────────────────────────────────
 
 export const EsimProductFeatures = z.object({
