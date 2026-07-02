@@ -10,6 +10,8 @@ import type {
   Proxy,
   ProxyList,
   ProxyPlan,
+  DedicatedCountry,
+  DedicatedNumber,
 } from "../client/types.js";
 import { formatUsd } from "../utils/format.js";
 
@@ -37,7 +39,8 @@ const DAY = 86_400_000;
 
 // Time (ms) before a verification's code "arrives" / a proxy goes active, so the
 // poll-until-ready flow the tools describe is demonstrable without a long wait.
-const READY_AFTER_MS = 1_500;
+// Exported so e2e tests can wait exactly this long rather than duplicating the value.
+export const READY_AFTER_MS = 1_500;
 
 // ── catalog (static, shaped to the live Zod schemas) ─────────────────────────
 
@@ -50,8 +53,19 @@ const SERVICES: SmsService[] = [
   { id: "svc_discord", name: "Discord", quoted_price_cents: 120, available: true, ltr_7d_price_cents: 480, ltr_30d_price_cents: 1400 },
   { id: "svc_tiktok", name: "TikTok", quoted_price_cents: 250, available: true, ltr_7d_price_cents: 900 },
   { id: "svc_openai", name: "OpenAI", quoted_price_cents: 300, available: true, ltr_7d_price_cents: 1100, ltr_30d_price_cents: 3000 },
-  { id: "svc_dedicated_28d", name: "Dedicated (all services)", quoted_price_cents: 3500, available: true },
 ];
+
+// Real live retail prices (public dashboard prices); hk is out of stock to demo that path.
+const DEDICATED_COUNTRIES: DedicatedCountry[] = [
+  { country: "us", name: "United States", quoted_price_cents: 1999, base_price_cents: 1999, in_stock: true },
+  { country: "uk", name: "United Kingdom", quoted_price_cents: 1699, base_price_cents: 1699, in_stock: true },
+  { country: "de", name: "Germany", quoted_price_cents: 4899, base_price_cents: 4899, in_stock: true },
+  { country: "au", name: "Australia", quoted_price_cents: 3299, base_price_cents: 3299, in_stock: true },
+  { country: "hk", name: "Hong Kong", quoted_price_cents: 2699, base_price_cents: 2699, in_stock: false },
+];
+
+const DED_DIAL: Record<string, string> = { us: "+1", uk: "+44", de: "+49", au: "+61", hk: "+852" };
+const dedPhone = (country: string): string => `${DED_DIAL[country] ?? "+1"}${rnd(200, 989)}${rnd(200, 989)}${rnd(1000, 9999)}`;
 
 const esimFeatures = (over: Partial<EsimProduct["features"]> = {}): EsimProduct["features"] => ({
   has_5g: true,
@@ -106,6 +120,7 @@ class Store {
   rentals = new Map<string, Rental>();
   esims = new Map<string, Esim>();
   proxies = new Map<string, Proxy>();
+  dedicateds = new Map<string, DedicatedNumber>();
   createdAtMs = new Map<string, number>(); // entity id -> creation epoch ms
 }
 
@@ -163,6 +178,16 @@ export function createSandboxHttpClient(): HttpClient {
   const settleProxy = (p: Proxy): Proxy => {
     if (p.status === "provisioning" && isReady(p.id)) p.status = "active";
     return p;
+  };
+
+  // A dedicated number "receives" its first SMS once ready, so the poll flow
+  // get_dedicated_number describes is demonstrable.
+  const settleDedicated = (d: DedicatedNumber): DedicatedNumber => {
+    if ((d.messages?.length ?? 0) === 0 && isReady(d.id)) {
+      const code = smsCode();
+      d.messages = [{ id: uid("msg_"), code, text: `Your verification code is ${code}`, received_at: iso() }];
+    }
+    return d;
   };
 
   function route(method: string, rawPath: string, query: URLSearchParams, opts: HttpRequestOpts): HttpResponse {
@@ -309,6 +334,56 @@ export function createSandboxHttpClient(): HttpClient {
       if (method === "POST" && seg[3] === "auto_renew") {
         r.auto_renew = Boolean(body.auto_renew);
         return ok(r);
+      }
+    }
+
+    // ── dedicated numbers ──
+    if (rawPath === "/v1/dedicated/countries" && method === "GET") {
+      return ok(DEDICATED_COUNTRIES);
+    }
+    if (rawPath === "/v1/dedicated/numbers" && method === "GET") {
+      // messages are always empty on the list endpoint
+      return ok([...db.dedicateds.values()].map((d) => ({ ...d, messages: [] })));
+    }
+    if (rawPath === "/v1/dedicated/numbers" && method === "POST") {
+      const c = DEDICATED_COUNTRIES.find((x) => x.country === String(body.country ?? "").toLowerCase());
+      if (!c) return fail(404, "DEDICATED_NOT_AVAILABLE", "No dedicated numbers for this country.");
+      if (!c.in_stock) return fail(503, "SERVICE_OUT_OF_STOCK", "This country is out of stock.");
+      if (body.max_price_cents != null && c.quoted_price_cents > Number(body.max_price_cents)) {
+        return fail(409, "PRICE_OVER_CAP", "Current price exceeds max_price_cents.");
+      }
+      const paid = charge(c.quoted_price_cents);
+      if (paid) return paid;
+      const id = uid("ded_");
+      const d: DedicatedNumber = {
+        id,
+        display_id: id.slice(4, 10).toUpperCase(),
+        status: "active",
+        phone_number: dedPhone(c.country),
+        country: c.country,
+        country_name: c.name,
+        billing_period: "monthly",
+        nickname: null,
+        quoted_price_cents: c.quoted_price_cents,
+        charged_price_cents: c.quoted_price_cents,
+        next_renewal_price_cents: c.quoted_price_cents,
+        auto_renew: Boolean(body.auto_renew),
+        created_at: iso(),
+        paid_until: iso(30 * DAY),
+        expires_at: iso(30 * DAY),
+        messages: [],
+      };
+      db.dedicateds.set(id, d);
+      db.createdAtMs.set(id, Date.now());
+      return ok(d, 201);
+    }
+    if (seg[1] === "dedicated" && seg[2] === "numbers" && seg[3]) {
+      const d = db.dedicateds.get(seg[3]);
+      if (!d) return fail(404, "NOT_FOUND", "Dedicated number not found.");
+      if (method === "GET" && !seg[4]) return ok(settleDedicated(d));
+      if (method === "POST" && seg[4] === "auto_renew") {
+        d.auto_renew = Boolean(body.enabled);
+        return ok({ ...d, messages: [] });
       }
     }
 

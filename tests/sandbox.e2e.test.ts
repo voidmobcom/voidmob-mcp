@@ -5,12 +5,15 @@
 // active) are exercised in their pre-transition state, which is still valid.
 import { describe, it, expect } from "vitest";
 import type { ToolResult } from "../src/utils/render.js";
-import { createSandboxHttpClient } from "../src/sandbox/mock-http.js";
+import { createSandboxHttpClient, READY_AFTER_MS } from "../src/sandbox/mock-http.js";
 import { getAccountHandler } from "../src/tools/account.js";
 import {
   searchSmsServicesHandler, getRentalHandler, rentNumberHandler,
   cancelRentalHandler, reuseNumberHandler, reRentRentalHandler, toggleAutoRenewHandler,
 } from "../src/tools/sms.js";
+import {
+  searchDedicatedCountriesHandler, purchaseDedicatedNumberHandler, getDedicatedNumberHandler,
+} from "../src/tools/dedicated.js";
 import {
   searchEsimPlansHandler, purchaseEsimHandler, getEsimStatusHandler,
   topupEsimHandler, getEsimQrHandler,
@@ -29,6 +32,11 @@ const okResult = (r: ToolResult) => {
   expect(r.isError ?? false, (r.content[0] as { text?: string })?.text).toBe(false);
   return r;
 };
+// Timing-gated transitions elsewhere in this file are exercised pre-transition
+// (see file header); the dedicated lifecycle below is the one flow that needs
+// to observe a post-transition state (the first message arriving), so it waits
+// past the mock's READY_AFTER_MS.
+const waitUntilReady = () => new Promise((r) => setTimeout(r, READY_AFTER_MS + 100));
 
 describe("sandbox e2e (every tool resolves against the mock)", () => {
   it("account + catalogs + geo cascade", async () => {
@@ -87,4 +95,25 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
   it("list_orders aggregates across kinds", async () => {
     okResult(await listOrdersHandler(http)({}));
   });
+
+  it("dedicated number lifecycle: search -> purchase -> poll messages -> auto-renew -> list", async () => {
+    const search = okResult(await searchDedicatedCountriesHandler(http)({}));
+    expect((search.structuredContent?.countries as unknown[]).length).toBeGreaterThan(0);
+
+    const buy = okResult(await purchaseDedicatedNumberHandler(http)({ country: "uk" }));
+    const id = (buy.structuredContent?.dedicated_number as { id: string }).id;
+    expect(id.startsWith("ded_")).toBe(true);
+
+    await waitUntilReady();
+
+    const got = okResult(await getDedicatedNumberHandler(http)({ number_id: id }));
+    const msgs = (got.structuredContent?.dedicated_number as { messages: unknown[] }).messages;
+    expect(msgs.length).toBeGreaterThan(0);
+
+    const tog = okResult(await toggleAutoRenewHandler(http)({ rental_id: id, auto_renew: true }));
+    expect((tog.structuredContent?.dedicated_number as { auto_renew: boolean }).auto_renew).toBe(true);
+
+    const orders = okResult(await listOrdersHandler(http)({ kind: "dedicated" }));
+    expect((orders.structuredContent?.orders as unknown[]).length).toBeGreaterThan(0);
+  }, 10_000);
 });
