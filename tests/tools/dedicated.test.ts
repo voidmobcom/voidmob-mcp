@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { DedicatedCountry, DedicatedNumber } from "../../src/client/types.js";
 import { isDedicatedId } from "../../src/constants/rental-id.js";
-import { searchDedicatedCountriesHandler, getDedicatedNumberHandler } from "../../src/tools/dedicated.js";
+import { searchDedicatedCountriesHandler, getDedicatedNumberHandler, purchaseDedicatedNumberHandler } from "../../src/tools/dedicated.js";
 import { createMockHttpClient } from "../mock-http.js";
 
 const okBody = (data: unknown) => ({ status: 200, headers: new Headers(), body: { success: true, data } });
@@ -91,5 +91,50 @@ describe("get_dedicated_number", () => {
     const res = await getDedicatedNumberHandler(http)({ number_id: "ren_abc" });
     expect(res.isError).toBe(true);
     expect(http.history).toHaveLength(0);
+  });
+});
+
+describe("purchase_dedicated_number", () => {
+  const catalog = [
+    dedCountryFixture({ country: "us", name: "United States", quoted_price_cents: 1999, base_price_cents: 1999 }),
+    dedCountryFixture({ country: "uk", name: "United Kingdom", quoted_price_cents: 1699, base_price_cents: 1699 }),
+    dedCountryFixture({ country: "hk", name: "Hong Kong", quoted_price_cents: 2699, base_price_cents: 2699, in_stock: false }),
+  ];
+
+  it("resolves country by code, ties max_price_cents to the quote, sends idempotency key", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/dedicated/countries", okBody(catalog));
+    http.expect("POST", "/v1/dedicated/numbers", { status: 201, headers: new Headers(), body: { success: true, data: dedNumberFixture({ country: "uk", country_name: "United Kingdom" }) } });
+    const res = await purchaseDedicatedNumberHandler(http)({ country: "UK" });
+    expect(res.isError).toBeFalsy();
+    expect(http.history[1].body).toMatchObject({ country: "uk", auto_renew: false, max_price_cents: 1699 });
+    expect(http.history[1].headers["Idempotency-Key"]).toBeTruthy();
+  });
+
+  it("resolves country by name substring", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/dedicated/countries", okBody(catalog));
+    http.expect("POST", "/v1/dedicated/numbers", { status: 201, headers: new Headers(), body: { success: true, data: dedNumberFixture({ country: "us", country_name: "United States" }) } });
+    const res = await purchaseDedicatedNumberHandler(http)({ country: "united sta", auto_renew: true });
+    expect(res.isError).toBeFalsy();
+    expect(http.history[1].body).toMatchObject({ country: "us", auto_renew: true });
+  });
+
+  it("unknown country -> toolError listing available codes, no purchase call", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/dedicated/countries", okBody(catalog));
+    const res = await purchaseDedicatedNumberHandler(http)({ country: "france" });
+    expect(res.isError).toBe(true);
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("us, uk, hk");
+    expect(http.history).toHaveLength(1);
+  });
+
+  it("out-of-stock country -> toolError, no purchase call", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/dedicated/countries", okBody(catalog));
+    const res = await purchaseDedicatedNumberHandler(http)({ country: "hk" });
+    expect(res.isError).toBe(true);
+    expect(http.history).toHaveLength(1);
   });
 });

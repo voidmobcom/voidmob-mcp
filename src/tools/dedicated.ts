@@ -44,6 +44,38 @@ export const getDedicatedNumberHandler = (http: HttpClient) =>
     return structuredOk(renderDedicated(d), { dedicated_number: d });
   });
 
+// ── purchase_dedicated_number ───────────────────────────────────────────────
+
+export const purchaseDedicatedNumberHandler = (http: HttpClient) =>
+  wrapToolErrors(async (args: { country: string; auto_renew?: boolean }): Promise<ToolResult> => {
+    const raw = await callApi<unknown>(http, "GET", "/v1/dedicated/countries");
+    const countries = Countries.parse(raw);
+    const q = args.country.trim().toLowerCase();
+    const match =
+      countries.find((c) => c.country.toLowerCase() === q) ??
+      countries.find((c) => c.name.toLowerCase().includes(q));
+    if (!match) {
+      return toolError(
+        `No dedicated numbers offered for '${args.country}'. Available: ${countries.map((c) => c.country).join(", ")}.`,
+      );
+    }
+    if (!match.in_stock) {
+      return toolError(
+        `${match.name} dedicated numbers are out of stock right now. Run search_dedicated_countries to pick an in-stock country, or retry later.`,
+      );
+    }
+    const created = await callApi<unknown>(http, "POST", "/v1/dedicated/numbers", {
+      body: {
+        country: match.country,
+        auto_renew: args.auto_renew ?? false,
+        max_price_cents: match.quoted_price_cents,
+      },
+      idempotencyKey: newIdempotencyKey(),
+    });
+    const d = DedicatedNumber.parse(created);
+    return structuredOk(`Dedicated number ${d.id} purchased.\n\n${renderDedicated(d)}`, { dedicated_number: d });
+  });
+
 // ── render helper ───────────────────────────────────────────────────────────
 
 function renderDedicated(d: DedicatedNumberT): string {
