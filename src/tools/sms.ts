@@ -7,6 +7,7 @@ import {
   VerificationCancelResult,
   Rental,
   ServicesResponse,
+  DedicatedNumber,
   type Verification as VerificationT,
   type Rental as RentalT,
 } from "../client/types.js";
@@ -16,8 +17,10 @@ import { newIdempotencyKey } from "../client/idempotency.js";
 import {
   VER_PREFIX,
   REN_PREFIX,
+  DED_PREFIX,
   isVerificationId,
   isRentalId,
+  isDedicatedId,
   INVALID_RENTAL_ID,
 } from "../constants/rental-id.js";
 
@@ -194,8 +197,17 @@ export const reRentRentalHandler = (http: HttpClient) =>
 export const toggleAutoRenewHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { rental_id: string; auto_renew: boolean }): Promise<ToolResult> => {
     const id = args.rental_id;
+    if (isDedicatedId(id)) {
+      // Dedicated numbers take { enabled }, not { auto_renew }.
+      const out = await callApi<unknown>(http, "POST", `/v1/dedicated/numbers/${id}/auto_renew`, {
+        body: { enabled: args.auto_renew },
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const d = DedicatedNumber.parse(out);
+      return structuredOk(`Auto-renew on ${d.id} is now ${d.auto_renew ? "on" : "off"}.`, { dedicated_number: d });
+    }
     if (!isRentalId(id)) {
-      return toolError(`toggle_auto_renew requires ${REN_PREFIX}xxx. Got '${id}'.`);
+      return toolError(`toggle_auto_renew requires ${REN_PREFIX}xxx or ${DED_PREFIX}xxx. Got '${id}'.`);
     }
     const out = await callApi<unknown>(http, "POST", `/v1/rentals/${id}/auto_renew`, {
       body: { auto_renew: args.auto_renew },
@@ -306,9 +318,9 @@ export function registerSmsTools(server: McpServer, http: HttpClient) {
 
   server.tool(
     "toggle_auto_renew",
-    "Turn auto-renewal on/off for an LTR or dedicated rental.",
+    "Turn auto-renewal on/off for a long-term rental (ren_xxx) or a dedicated number (ded_xxx).",
     {
-      rental_id: z.string().describe("ren_xxx"),
+      rental_id: z.string().describe("ren_xxx or ded_xxx"),
       auto_renew: z.boolean(),
     },
     toggleAutoRenewHandler(http),

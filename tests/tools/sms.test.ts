@@ -9,6 +9,7 @@ import {
   toggleAutoRenewHandler,
 } from "../../src/tools/sms.js";
 import { createMockHttpClient } from "../mock-http.js";
+import { dedNumberFixture } from "./dedicated.test.js";
 
 describe("search_sms_services", () => {
   it("calls GET /v1/services and renders a table", async () => {
@@ -369,5 +370,23 @@ describe("reuse_number, re_rent_rental, toggle_auto_renew", () => {
     http.expect("POST", "/v1/rentals/ren_xyz/auto_renew", { status: 200, headers: new Headers(), body: rntResp("ren_xyz", true) });
     await toggleAutoRenewHandler(http)({ rental_id: "ren_xyz", auto_renew: true });
     expect(http.history[0].body).toMatchObject({ auto_renew: true });
+  });
+
+  it("ded_ id -> POST /v1/dedicated/numbers/:id/auto_renew with { enabled }", async () => {
+    const http = createMockHttpClient();
+    http.expect("POST", "/v1/dedicated/numbers/ded_abc123/auto_renew", {
+      status: 200, headers: new Headers(),
+      body: { success: true, data: dedNumberFixture({ auto_renew: true }) },
+    });
+    const res = await toggleAutoRenewHandler(http)({ rental_id: "ded_abc123", auto_renew: true });
+    expect(res.isError).toBeFalsy();
+    expect(http.history[0].body).toEqual({ enabled: true });
+    expect(res.structuredContent?.dedicated_number).toMatchObject({ auto_renew: true });
+  });
+
+  it("still rejects ver_ ids", async () => {
+    const http = createMockHttpClient();
+    const res = await toggleAutoRenewHandler(http)({ rental_id: "ver_abc", auto_renew: true });
+    expect(res.isError).toBe(true);
   });
 });
