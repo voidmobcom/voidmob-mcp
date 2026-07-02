@@ -9,7 +9,7 @@ import {
   toggleAutoRenewHandler,
 } from "../../src/tools/sms.js";
 import { createMockHttpClient } from "../mock-http.js";
-import { dedNumberFixture } from "./dedicated.test.js";
+import { dedNumberFixture } from "../fixtures/dedicated.js";
 
 describe("search_sms_services", () => {
   it("calls GET /v1/services and renders a table", async () => {

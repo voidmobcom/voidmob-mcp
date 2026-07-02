@@ -7,7 +7,7 @@ import {
   DedicatedNumber,
   type DedicatedNumber as DedicatedNumberT,
 } from "../client/types.js";
-import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
+import { structuredOk, toolError, wrapToolErrors, renderMessages, type ToolResult } from "../utils/render.js";
 import { formatUsd, formatTimeRemaining } from "../utils/format.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
 import { DED_PREFIX, isDedicatedId } from "../constants/rental-id.js";
@@ -93,11 +93,7 @@ function renderDedicated(d: DedicatedNumberT): string {
   ];
   if (d.nickname) lines.splice(3, 0, `  Nickname:     ${d.nickname}`);
   if (d.messages && d.messages.length > 0) {
-    lines.push(``, `  Messages (${d.messages.length}):`);
-    for (const m of d.messages) {
-      lines.push(`    [${m.received_at.slice(11, 19)}] ${m.text}`);
-      if (m.code) lines.push(`      Code: ${m.code}`);
-    }
+    lines.push(...renderMessages(d.messages));
   }
   return lines.join("\n");
 }

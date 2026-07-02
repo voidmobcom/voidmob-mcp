@@ -39,6 +39,17 @@ export function toolError(message: string): ToolResult {
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
+// Shared "  Messages (N):" block for resources that carry RentalMessage-shaped
+// SMS lists (rentals, dedicated numbers). Returns lines to spread into a render.
+export function renderMessages(messages: Array<{ code?: string | null; text: string; received_at: string }>): string[] {
+  const lines = [``, `  Messages (${messages.length}):`];
+  for (const m of messages) {
+    lines.push(`    [${m.received_at.slice(11, 19)}] ${m.text}`);
+    if (m.code) lines.push(`      Code: ${m.code}`);
+  }
+  return lines;
+}
+
 /**
  * Wrap a tool handler so error surfaces become clean, white-labeled tool
  * results instead of opaque protocol crashes:

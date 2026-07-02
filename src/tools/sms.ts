@@ -11,7 +11,7 @@ import {
   type Verification as VerificationT,
   type Rental as RentalT,
 } from "../client/types.js";
-import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
+import { structuredOk, toolError, wrapToolErrors, renderMessages, type ToolResult } from "../utils/render.js";
 import { formatUsd, formatTimeRemaining } from "../utils/format.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
 import {
@@ -234,11 +234,7 @@ export function renderRental(r: RentalT): string {
     `  Expires:      ${formatTimeRemaining(new Date(r.expires_at).getTime())}`,
   ];
   if (r.messages && r.messages.length > 0) {
-    lines.push(``, `  Messages (${r.messages.length}):`);
-    for (const m of r.messages) {
-      lines.push(`    [${m.received_at.slice(11, 19)}] ${m.text}`);
-      if (m.code) lines.push(`      Code: ${m.code}`);
-    }
+    lines.push(...renderMessages(r.messages));
   }
   return lines.join("\n");
 }

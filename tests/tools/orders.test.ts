@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { listOrdersHandler } from "../../src/tools/orders.js";
 import { createMockHttpClient } from "../mock-http.js";
-import { dedNumberFixture } from "./dedicated.test.js";
+import { dedNumberFixture } from "../fixtures/dedicated.js";
 
 // ── Fixture builders ────────────────────────────────────────────────────────
 

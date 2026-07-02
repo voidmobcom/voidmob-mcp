@@ -31,7 +31,7 @@ const alnum = (n: number): string => {
   const c = "abcdefghijkmnpqrstuvwxyz23456789";
   return Array.from({ length: n }, () => c[rnd(0, c.length - 1)]).join("");
 };
-const phone = (): string => `+1${rnd(200, 989)}${rnd(200, 989)}${rnd(1000, 9999)}`;
+const phone = (dial = "+1"): string => `${dial}${rnd(200, 989)}${rnd(200, 989)}${rnd(1000, 9999)}`;
 const smsCode = (): string => String(rnd(100000, 999999));
 const ip = (): string => `${rnd(11, 223)}.${rnd(1, 254)}.${rnd(1, 254)}.${rnd(1, 254)}`;
 const iso = (offsetMs = 0): string => new Date(Date.now() + offsetMs).toISOString();
@@ -65,7 +65,7 @@ const DEDICATED_COUNTRIES: DedicatedCountry[] = [
 ];
 
 const DED_DIAL: Record<string, string> = { us: "+1", uk: "+44", de: "+49", au: "+61", hk: "+852" };
-const dedPhone = (country: string): string => `${DED_DIAL[country] ?? "+1"}${rnd(200, 989)}${rnd(200, 989)}${rnd(1000, 9999)}`;
+const dedPhone = (country: string): string => phone(DED_DIAL[country] ?? "+1");
 
 const esimFeatures = (over: Partial<EsimProduct["features"]> = {}): EsimProduct["features"] => ({
   has_5g: true,
