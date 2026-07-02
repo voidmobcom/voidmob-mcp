@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/node/v/@voidmob/mcp)](https://nodejs.org)
 
-Mobile proxies, non-VoIP SMS verifications, and global eSIMs - exposed as 25 tools your AI agent can call directly.
+Mobile proxies, non-VoIP SMS verifications, dedicated numbers, and global eSIMs - exposed as 28 tools your AI agent can call directly.
 
 ```bash
 npx -y @voidmob/mcp
@@ -72,7 +72,7 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 
 ## Tools
 
-25 tools across five domains.
+28 tools across six domains.
 
 ### Account (1)
 
@@ -85,12 +85,20 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 | Tool | Description |
 |---|---|
 | `search_sms_services` | List services with prices |
-| `rent_number` | Rent a US number (verification / rental / dedicated) |
+| `rent_number` | Rent a US number (verification / long-term rental) |
 | `get_rental` | Read status and received messages |
 | `cancel_rental` | Cancel a verification or long-term rental |
 | `reuse_number` | Free or paid reuse of a completed verification |
 | `re_rent_rental` | Extend a long-term rental for another period |
-| `toggle_auto_renew` | Turn auto-renewal on or off |
+| `toggle_auto_renew` | Turn auto-renewal on or off (rentals and dedicated numbers) |
+
+### Dedicated numbers (3)
+
+| Tool | Description |
+|---|---|
+| `search_dedicated_countries` | Countries, monthly prices, and stock |
+| `purchase_dedicated_number` | Buy a private all-services monthly number |
+| `get_dedicated_number` | Status and received SMS with parsed codes |
 
 ### eSIM (5)
 
@@ -122,7 +130,7 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 | Tool | Description |
 |---|---|
 | `get_geo` | Cascading country/region/city/ISP for targeting |
-| `list_orders` | Active SMS / eSIM / proxy orders |
+| `list_orders` | Active SMS / dedicated number / eSIM / proxy orders |
 
 ## Example prompts
 
