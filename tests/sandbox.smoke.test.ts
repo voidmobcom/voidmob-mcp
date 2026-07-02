@@ -17,9 +17,9 @@ const liveServer = () =>
   buildLiveServer({ sandbox: false, apiKey: "vmk_live_" + "a".repeat(32), baseUrl: "https://x", debug: false });
 
 describe("smoke (live)", () => {
-  it("registers exactly 25 live tools matching the checked-in fixture", () => {
+  it("registers exactly 28 live tools matching the checked-in fixture", () => {
     const names = toolNames(liveServer());
-    expect(names.length).toBe(25);
+    expect(names.length).toBe(28);
 
     const fixturePath = join(__dirname, "fixtures/tools-list-v1.json");
     const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as { tools: string[] };

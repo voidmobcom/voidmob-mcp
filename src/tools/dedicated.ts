@@ -1,3 +1,4 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { HttpClient } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
@@ -99,4 +100,32 @@ function renderDedicated(d: DedicatedNumberT): string {
     }
   }
   return lines.join("\n");
+}
+
+// ── registration ────────────────────────────────────────────────────────────
+
+export function registerDedicatedTools(server: McpServer, http: HttpClient) {
+  server.tool(
+    "search_dedicated_countries",
+    "List countries where dedicated numbers are offered, with your monthly price and stock status. A dedicated number is a private number that receives SMS for ALL services, renews monthly, and stays yours until you stop renewing.",
+    {},
+    searchDedicatedCountriesHandler(http),
+  );
+
+  server.tool(
+    "purchase_dedicated_number",
+    "Buy a dedicated monthly number in a country from search_dedicated_countries. Quote-then-commit: the tool fetches your live price and ties max_price_cents to it so you never pay above the quote. Returns a ded_xxx id - poll get_dedicated_number to read incoming SMS.",
+    {
+      country: z.string().describe("Country code or name from search_dedicated_countries (e.g. 'us', 'uk', 'germany')"),
+      auto_renew: z.boolean().default(false).describe("Auto-charge at the end of each monthly period"),
+    },
+    purchaseDedicatedNumberHandler(http),
+  );
+
+  server.tool(
+    "get_dedicated_number",
+    "Read a dedicated number's status and received SMS messages (parsed codes included). Messages keep arriving for the life of the number; poll this tool after directing an SMS at it.",
+    { number_id: z.string().describe("ded_xxx from purchase_dedicated_number or list_orders") },
+    getDedicatedNumberHandler(http),
+  );
 }

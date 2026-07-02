@@ -9,6 +9,7 @@ import { registerEsimTools } from "../tools/esim.js";
 import { registerProxyTools } from "../tools/proxy.js";
 import { registerGeoTools } from "../tools/geo.js";
 import { registerOrdersTools } from "../tools/orders.js";
+import { registerDedicatedTools } from "../tools/dedicated.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, "../../package.json"), "utf8")) as { version: string };
@@ -22,6 +23,7 @@ export function buildSandboxServer(): McpServer {
 
   registerAccountTools(server, http);
   registerSmsTools(server, http);
+  registerDedicatedTools(server, http);
   registerEsimTools(server, http);
   registerProxyTools(server, http);
   registerGeoTools(server, http);
