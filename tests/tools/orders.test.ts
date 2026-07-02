@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { listOrdersHandler } from "../../src/tools/orders.js";
 import { createMockHttpClient } from "../mock-http.js";
+import { dedNumberFixture } from "./dedicated.test.js";
 
 // ── Fixture builders ────────────────────────────────────────────────────────
 
@@ -86,9 +87,9 @@ function proxyFixture(overrides: Partial<Record<string, unknown>> = {}) {
 // ── list_orders ─────────────────────────────────────────────────────────────
 
 describe("list_orders", () => {
-  it("with no kind filter fans out to all 3 endpoints, merges, sorts desc by created_at", async () => {
+  it("with no kind filter fans out to all 4 endpoints, merges, sorts desc by created_at", async () => {
     const http = createMockHttpClient();
-    // FIFO: handler enqueues sms → esim → proxy in order
+    // FIFO: handler enqueues sms → esim → proxy → dedicated in order
     http.expect("GET", "/v1/rentals", {
       status: 200,
       headers: new Headers(),
@@ -104,30 +105,38 @@ describe("list_orders", () => {
       headers: new Headers(),
       body: { success: true, data: { proxies: [proxyFixture()] } },
     });
+    http.expect("GET", "/v1/dedicated/numbers?limit=100", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: [dedNumberFixture({ id: "ded_mid", created_at: "2026-05-15T00:00:00Z" })] },
+    });
 
     const res = await listOrdersHandler(http)({});
     expect(res.isError).toBeFalsy();
 
-    // All three GETs occurred
+    // All four GETs occurred
     expect(http.history.map((h) => h.path)).toEqual([
       "/v1/rentals",
       "/v1/esims",
       "/v1/proxies",
+      "/v1/dedicated/numbers?limit=100",
     ]);
 
     const orders = res.structuredContent?.orders as Array<Record<string, unknown>>;
-    expect(orders).toHaveLength(3);
-    // Sorted by created_at desc: proxy(2026-05-20) > esim(2026-05-10) > rental(2026-05-01)
+    expect(orders).toHaveLength(4);
+    // Sorted by created_at desc: proxy(2026-05-20) > dedicated(2026-05-15) > esim(2026-05-10) > rental(2026-05-01)
     expect(orders[0]).toMatchObject({ kind: "proxy", id: "px_new" });
-    expect(orders[1]).toMatchObject({ kind: "esim", id: "esim_mid" });
-    expect(orders[2]).toMatchObject({ kind: "sms", id: "ren_old" });
+    expect(orders[1]).toMatchObject({ kind: "dedicated", id: "ded_mid" });
+    expect(orders[2]).toMatchObject({ kind: "esim", id: "esim_mid" });
+    expect(orders[3]).toMatchObject({ kind: "sms", id: "ren_old" });
 
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
-    expect(t.text).toContain("3 order(s)");
+    expect(t.text).toContain("4 order(s)");
     expect(t.text).toContain("SMS");
     expect(t.text).toContain("ESIM");
     expect(t.text).toContain("PROXY");
+    expect(t.text).toContain("DEDICATED");
   });
 
   it("with kind='sms' only fetches /v1/rentals", async () => {
@@ -242,11 +251,25 @@ describe("list_orders", () => {
     http.expect("GET", "/v1/rentals", empty);
     http.expect("GET", "/v1/esims", { status: 200, headers: new Headers(), body: { success: true, data: { esims: [] } } });
     http.expect("GET", "/v1/proxies", { status: 200, headers: new Headers(), body: { success: true, data: { proxies: [] } } });
+    http.expect("GET", "/v1/dedicated/numbers?limit=100", empty);
 
     const res = await listOrdersHandler(http)({});
     expect(res.isError).toBe(true);
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
     expect(t.text).toContain("No orders found.");
+  });
+
+  it("kind=dedicated fetches /v1/dedicated/numbers and renders rows", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/dedicated/numbers?limit=100", {
+      status: 200, headers: new Headers(),
+      body: { success: true, data: [dedNumberFixture()] },
+    });
+    const res = await listOrdersHandler(http)({ kind: "dedicated" });
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("ded_abc123");
+    expect(t.text).toContain("DEDICATED");
+    expect(res.structuredContent?.orders).toHaveLength(1);
   });
 });

@@ -2,12 +2,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { HttpClient } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
-import { Rental, Esim, Proxy } from "../client/types.js";
+import { Rental, Esim, Proxy, DedicatedNumber } from "../client/types.js";
 import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { formatUsd } from "../utils/format.js";
 
 interface OrderRow {
-  kind: "sms" | "esim" | "proxy";
+  kind: "sms" | "esim" | "proxy" | "dedicated";
   id: string;
   status: string;
   charged_price_cents: number;
@@ -16,12 +16,13 @@ interface OrderRow {
 }
 
 export const listOrdersHandler = (http: HttpClient) =>
-  wrapToolErrors(async (args: { kind?: "sms" | "esim" | "proxy"; limit?: number }): Promise<ToolResult> => {
+  wrapToolErrors(async (args: { kind?: "sms" | "esim" | "proxy" | "dedicated"; limit?: number }): Promise<ToolResult> => {
     const limit = args.limit ?? 20;
     const tasks: Promise<OrderRow[]>[] = [];
     if (!args.kind || args.kind === "sms") tasks.push(fetchRentals(http));
     if (!args.kind || args.kind === "esim") tasks.push(fetchEsims(http));
     if (!args.kind || args.kind === "proxy") tasks.push(fetchProxies(http));
+    if (!args.kind || args.kind === "dedicated") tasks.push(fetchDedicated(http));
     const settled = await Promise.allSettled(tasks);
     const rows: OrderRow[] = [];
     const warnings: string[] = [];
@@ -48,7 +49,7 @@ export const listOrdersHandler = (http: HttpClient) =>
       ``,
       ...page.map(
         (r) =>
-          `  [${r.kind.toUpperCase().padEnd(5)}] ${r.id.padEnd(20)} ${r.status.padEnd(14)} ${formatUsd(r.charged_price_cents).padStart(8)} ${r.created_at.slice(0, 16)}  ${r.summary}`,
+          `  [${r.kind.toUpperCase().padEnd(9)}] ${r.id.padEnd(20)} ${r.status.padEnd(14)} ${formatUsd(r.charged_price_cents).padStart(8)} ${r.created_at.slice(0, 16)}  ${r.summary}`,
       ),
       warnings.length ? `\n${warnings.join("\n")}` : "",
     ]
@@ -96,12 +97,26 @@ async function fetchProxies(http: HttpClient): Promise<OrderRow[]> {
   }));
 }
 
+async function fetchDedicated(http: HttpClient): Promise<OrderRow[]> {
+  // Pagination fields live outside `data`; 100 is the API's max page size.
+  const data = await callApi<unknown[]>(http, "GET", "/v1/dedicated/numbers?limit=100");
+  const items = z.array(DedicatedNumber).parse(data);
+  return items.map((d) => ({
+    kind: "dedicated" as const,
+    id: d.id,
+    status: d.status,
+    charged_price_cents: d.charged_price_cents,
+    created_at: d.created_at,
+    summary: `${d.country_name} ${d.phone_number} monthly`,
+  }));
+}
+
 export function registerOrdersTools(server: McpServer, http: HttpClient) {
   server.tool(
     "list_orders",
-    "List the user's active and past orders across SMS rentals, eSIMs, and proxies. Note: ephemeral verifications (20-min single-SMS) are NOT listable - the rental id you got from rent_number is your handle to them.",
+    "List the user's active and past orders across SMS rentals, dedicated numbers, eSIMs, and proxies. Note: ephemeral verifications (20-min single-SMS) are NOT listable - the rental id you got from rent_number is your handle to them.",
     {
-      kind: z.enum(["sms", "esim", "proxy"]).optional().describe("Filter by kind"),
+      kind: z.enum(["sms", "esim", "proxy", "dedicated"]).optional().describe("Filter by kind"),
       limit: z.number().min(1).max(100).default(20),
     },
     listOrdersHandler(http),
