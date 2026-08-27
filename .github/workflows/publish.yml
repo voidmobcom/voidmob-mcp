@@ -8,7 +8,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # GitHub release creation (also covers checkout read)
       id-token: write   # npm provenance + MCP registry OIDC auth
     steps:
       - uses: actions/checkout@v5
@@ -23,7 +23,20 @@ jobs:
       - run: npm run build
       - run: npm test
 
-      - run: npm publish --access public --provenance
+      # Re-pushing a tag must be safe: skip publishing when this version is
+      # already on npm so a rerun stays green instead of failing on the PUT.
+      - name: Check npm for this version
+        id: npm_check
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if npm view "@voidmob/mcp@$V" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.npm_check.outputs.published == 'false'
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -32,10 +45,21 @@ jobs:
       # repo's GitHub identity, which owns the io.github.voidmobcom/* namespace.
       # Reads server.json, which version-sync has already pinned to package.json.
       - name: Install mcp-publisher
+        if: steps.npm_check.outputs.published == 'false'
         run: |
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
 
       - name: Publish to MCP Registry
+        if: steps.npm_check.outputs.published == 'false'
         run: |
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
+
+      # Last so a release entry only ever exists for versions that actually
+      # shipped. Skips quietly if the release was already created.
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
