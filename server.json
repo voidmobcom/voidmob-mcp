@@ -7,12 +7,12 @@
     "url": "https://github.com/voidmobcom/voidmob-mcp",
     "source": "github"
   },
-  "version": "1.1.4",
+  "version": "1.1.5",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@voidmob/mcp",
-      "version": "1.1.4",
+      "version": "1.1.5",
       "transport": {
         "type": "stdio"
       }
