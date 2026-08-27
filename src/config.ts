@@ -27,11 +27,11 @@ export function parseEnv(env: NodeJS.ProcessEnv | Record<string, string | undefi
     return { sandbox: true, apiKey: null, baseUrl, debug };
   }
 
+  // No key and no sandbox is a valid config: the server boots in
+  // "unconfigured" mode (tools listed, every call returns setup instructions)
+  // so MCP clients and registry crawlers can enumerate the tool surface.
   if (!rawKey) {
-    throw new ConfigError(
-      `Set VOIDMOB_API_KEY=vmk_live_... or VOIDMOB_SANDBOX=1.\n` +
-      `Generate a key at ${SETUP_URL}`,
-    );
+    return { sandbox: false, apiKey: null, baseUrl, debug };
   }
 
   if (!KEY_RE.test(rawKey)) {

@@ -20,8 +20,10 @@ describe("parseEnv", () => {
     expect(cfg.sandbox).toBe(false);
   });
 
-  it("throws ConfigError when no mode selected", () => {
-    expect(() => parseEnv({})).toThrow(ConfigError);
+  it("no key and no sandbox yields unconfigured mode (null apiKey)", () => {
+    const cfg = parseEnv({});
+    expect(cfg.sandbox).toBe(false);
+    expect(cfg.apiKey).toBeNull();
   });
 
   it("throws ConfigError on bad key prefix", () => {
@@ -46,10 +48,12 @@ describe("parseEnv", () => {
   });
 
   it("error message points the user to the docs URL", () => {
-    expect(() => parseEnv({})).toThrowError(/dashboard\.voidmob\.com/);
+    expect(() => parseEnv({ VOIDMOB_API_KEY: "sk_test_abc" })).toThrowError(/dashboard\.voidmob\.com/);
   });
 
-  it("empty VOIDMOB_API_KEY in live mode is treated as missing", () => {
-    expect(() => parseEnv({ VOIDMOB_API_KEY: "" })).toThrow(ConfigError);
+  it("empty VOIDMOB_API_KEY is treated as missing (unconfigured mode)", () => {
+    const cfg = parseEnv({ VOIDMOB_API_KEY: "" });
+    expect(cfg.apiKey).toBeNull();
+    expect(cfg.sandbox).toBe(false);
   });
 });
