@@ -556,7 +556,7 @@ export function createSandboxHttpClient(): HttpClient {
       if (seg[3] === "usage" && method === "GET") {
         return ok({ usage: { total_gb: proxy.data_gb_total, used_gb: Number((proxy.data_bytes_used / 1024 ** 3).toFixed(2)) } });
       }
-      if (seg[3] === "nolist_credentials" && method === "POST") {
+      if (seg[3] === "flex_credentials" && method === "POST") {
         settleProxy(proxy);
         if (proxy.status === "active" && !proxy.gateway) proxy.gateway = makeGateway(geoHint);
         return ok({ proxy });
