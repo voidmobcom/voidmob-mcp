@@ -65,9 +65,13 @@ export const getProxyStatusHandler = (http: HttpClient) =>
     // The core GET is the source of truth (and enforces auth/ownership). Usage
     // and the Flex gateway are best-effort enrichment: degrade either to null
     // on ANY API/network error so a transient secondary failure never sinks a
-    // status read. Non-API throws (bugs) still propagate.
+    // status read. Non-API throws (bugs) still propagate. Logged, so a moved
+    // endpoint (v1.1.5's silent 404) shows up instead of hiding as "no gateway".
     const degradeToNull = (e: unknown) => {
-      if (e instanceof HttpError || e instanceof NetworkError) return null;
+      if (e instanceof HttpError || e instanceof NetworkError) {
+        process.stderr.write(`[voidmob-mcp] get_proxy_status enrichment degraded: ${e.message}\n`);
+        return null;
+      }
       throw e;
     };
     const [coreRaw, usageRaw] = await Promise.all([
@@ -77,13 +81,16 @@ export const getProxyStatusHandler = (http: HttpClient) =>
     const core = Proxy.parse(coreRaw.proxy);
     // An active shared proxy has no gateway until the Flex credentials are
     // first requested (get-or-create). Only then call it, and take ONLY the
-    // gateway from it: the endpoint replays its first response for a stable
-    // idempotency key, so its proxy snapshot goes stale. Once created, the
-    // core GET carries the gateway itself.
+    // gateway from it: the endpoint replays its first response per idempotency
+    // key, so its proxy snapshot goes stale. Once created, the core GET carries
+    // the gateway itself. The key is per 10-minute window: polls inside a window
+    // share one create, and a cached failure is retried in the next window
+    // instead of replaying for the key's 24h lifetime.
     let gateway = core.gateway;
     if (!gateway && core.status === "active") {
+      const slot = Math.floor(Date.now() / 600_000);
       const flexRaw = await callApi<{ proxy: unknown }>(http, "POST", `/v1/proxies/${args.proxy_id}/flex_credentials`, {
-        idempotencyKey: `flex-${args.proxy_id}`,
+        idempotencyKey: `flex-${args.proxy_id}-${slot}`,
       }).catch(degradeToNull);
       gateway = flexRaw ? Proxy.parse(flexRaw.proxy).gateway : null;
     }

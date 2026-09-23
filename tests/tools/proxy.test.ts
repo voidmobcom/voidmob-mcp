@@ -224,7 +224,7 @@ describe("get_proxy_status", () => {
     // Regression: v1.1.5 called the removed nolist_credentials alias and the
     // 404 was swallowed, so the gateway never appeared.
     expect(http.history.map((h) => `${h.method} ${h.path}`)).toContain("POST /v1/proxies/proxy_xyz/flex_credentials");
-    expect(http.history.find((h) => h.path.endsWith("/flex_credentials"))?.headers["Idempotency-Key"]).toBe("flex-proxy_xyz");
+    expect(http.history.find((h) => h.path.endsWith("/flex_credentials"))?.headers["Idempotency-Key"]).toMatch(/^flex-proxy_xyz-\d+$/);
     expect(res.structuredContent?.proxy).toMatchObject({ id: "proxy_xyz" });
     expect(res.structuredContent?.usage).toMatchObject({ total_bytes: 1073741824 });
     expect(res.structuredContent?.nolist_credentials).toMatchObject({ username: "vm_abc123" });
