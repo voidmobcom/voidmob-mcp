@@ -63,27 +63,31 @@ export const purchaseProxyHandler = (http: HttpClient) =>
 export const getProxyStatusHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
     // The core GET is the source of truth (and enforces auth/ownership). Usage
-    // and the NoList gateway are best-effort enrichment: degrade either to null
+    // and the Flex gateway are best-effort enrichment: degrade either to null
     // on ANY API/network error so a transient secondary failure never sinks a
     // status read. Non-API throws (bugs) still propagate.
     const degradeToNull = (e: unknown) => {
       if (e instanceof HttpError || e instanceof NetworkError) return null;
       throw e;
     };
-    const [coreRaw, usageRaw, nolistRaw] = await Promise.all([
+    const [coreRaw, usageRaw] = await Promise.all([
       callApi<{ proxy: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}`),
       callApi<{ usage: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}/usage`).catch(degradeToNull),
-      // Idempotent get-or-create for the package-level NoList gateway. A stable
-      // per-proxy key (not a fresh UUID) means concurrent/repeat status polls
-      // dedup to a single provisioning instead of racing to overwrite the
-      // gateway password.
-      callApi<{ proxy: unknown }>(http, "POST", `/v1/proxies/${args.proxy_id}/nolist_credentials`, {
-        idempotencyKey: `nolist-${args.proxy_id}`,
-      }).catch(degradeToNull),
     ]);
-    // Prefer the nolist response (gateway populated once active) over the core
-    // GET, whose gateway is null until nolist credentials are provisioned.
-    const proxy = Proxy.parse((nolistRaw?.proxy as unknown) ?? coreRaw.proxy);
+    const core = Proxy.parse(coreRaw.proxy);
+    // An active shared proxy has no gateway until the Flex credentials are
+    // first requested (get-or-create). Only then call it, and take ONLY the
+    // gateway from it: the endpoint replays its first response for a stable
+    // idempotency key, so its proxy snapshot goes stale. Once created, the
+    // core GET carries the gateway itself.
+    let gateway = core.gateway;
+    if (!gateway && core.status === "active") {
+      const flexRaw = await callApi<{ proxy: unknown }>(http, "POST", `/v1/proxies/${args.proxy_id}/flex_credentials`, {
+        idempotencyKey: `flex-${args.proxy_id}`,
+      }).catch(degradeToNull);
+      gateway = flexRaw ? Proxy.parse(flexRaw.proxy).gateway : null;
+    }
+    const proxy = { ...core, gateway };
     const lines = [
       `Proxy ${proxy.id}`,
       ``,

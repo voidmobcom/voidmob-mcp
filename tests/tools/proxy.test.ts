@@ -190,28 +190,28 @@ describe("purchase_proxy", () => {
 // ── get_proxy_status ────────────────────────────────────────────────────────
 
 describe("get_proxy_status", () => {
-  it("happy path: 3 parallel calls (proxy GET, usage GET, nolist POST), merged response", async () => {
+  const usageOk = {
+    status: 200,
+    headers: new Headers(),
+    body: {
+      success: true,
+      data: { usage: { daily_bytes: 0, weekly_bytes: 0, monthly_bytes: 0, total_bytes: 1073741824, total_gb_allocated: 5, remaining_bytes: 4 } },
+    },
+  };
+
+  it("active proxy without a gateway: provisions it via POST flex_credentials (the only credentials endpoint)", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxies/proxy_xyz", {
       status: 200,
       headers: new Headers(),
-      // Core GET has gateway null until nolist provisions it.
+      // Core GET has gateway null until the Flex credentials are first requested.
       body: {
         success: true,
         data: { proxy: proxyResp("proxy_xyz", { data_bytes_used: 1073741824, gateway: null }) },
       },
     });
-    http.expect("GET", "/v1/proxies/proxy_xyz/usage", {
-      status: 200,
-      headers: new Headers(),
-      body: {
-        success: true,
-        data: { usage: { daily_bytes: 0, weekly_bytes: 0, monthly_bytes: 0, total_bytes: 1073741824, total_gb_allocated: 5, remaining_bytes: 4 } },
-      },
-    });
-    // nolist is an idempotent get-or-create POST that returns the proxy with
-    // gateway populated.
-    http.expect("POST", "/v1/proxies/proxy_xyz/nolist_credentials", {
+    http.expect("GET", "/v1/proxies/proxy_xyz/usage", usageOk);
+    http.expect("POST", "/v1/proxies/proxy_xyz/flex_credentials", {
       status: 200,
       headers: new Headers(),
       body: {
@@ -221,6 +221,10 @@ describe("get_proxy_status", () => {
     });
     const res = await getProxyStatusHandler(http)({ proxy_id: "proxy_xyz" });
     expect(res.isError).toBeFalsy();
+    // Regression: v1.1.5 called the removed nolist_credentials alias and the
+    // 404 was swallowed, so the gateway never appeared.
+    expect(http.history.map((h) => `${h.method} ${h.path}`)).toContain("POST /v1/proxies/proxy_xyz/flex_credentials");
+    expect(http.history.find((h) => h.path.endsWith("/flex_credentials"))?.headers["Idempotency-Key"]).toBe("flex-proxy_xyz");
     expect(res.structuredContent?.proxy).toMatchObject({ id: "proxy_xyz" });
     expect(res.structuredContent?.usage).toMatchObject({ total_bytes: 1073741824 });
     expect(res.structuredContent?.nolist_credentials).toMatchObject({ username: "vm_abc123" });
@@ -231,7 +235,40 @@ describe("get_proxy_status", () => {
     expect(t.text).toContain("p4ssw0rd");
   });
 
-  it("partial failure: usage and nolist return 503 → still succeeds with those fields null", async () => {
+  it("gateway already provisioned: no flex call, live core values win", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/proxy_xyz", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: proxyResp("proxy_xyz", { data_bytes_used: 3221225472 }) } },
+    });
+    http.expect("GET", "/v1/proxies/proxy_xyz/usage", usageOk);
+    const res = await getProxyStatusHandler(http)({ proxy_id: "proxy_xyz" });
+    expect(res.isError).toBeFalsy();
+    expect(http.history).toHaveLength(2);
+    expect(res.structuredContent?.proxy).toMatchObject({ data_bytes_used: 3221225472 });
+    expect(res.structuredContent?.nolist_credentials).toMatchObject({ username: "vm_abc123" });
+  });
+
+  it("takes only the gateway from flex_credentials, never its (replayable, stale) proxy snapshot", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/proxy_xyz", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: proxyResp("proxy_xyz", { data_bytes_used: 3221225472, gateway: null }) } },
+    });
+    http.expect("GET", "/v1/proxies/proxy_xyz/usage", usageOk);
+    http.expect("POST", "/v1/proxies/proxy_xyz/flex_credentials", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: proxyResp("proxy_xyz", { data_bytes_used: 0 }) } },
+    });
+    const res = await getProxyStatusHandler(http)({ proxy_id: "proxy_xyz" });
+    expect(res.structuredContent?.proxy).toMatchObject({ data_bytes_used: 3221225472 });
+    expect(res.structuredContent?.nolist_credentials).toMatchObject({ username: "vm_abc123" });
+  });
+
+  it("provisioning proxy: no flex call; usage failure degrades to null", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxies/proxy_xyz", {
       status: 200,
@@ -254,28 +291,36 @@ describe("get_proxy_status", () => {
         },
       },
     });
-    http.expect("POST", "/v1/proxies/proxy_xyz/nolist_credentials", {
-      status: 409,
-      headers: new Headers(),
-      body: {
-        success: false,
-        error: {
-          code: "PROXY_NOT_READY",
-          message: "not provisioned yet",
-          request_id: "req_nolist_409",
-          docs_url: "",
-        },
-      },
-    });
     const res = await getProxyStatusHandler(http)({ proxy_id: "proxy_xyz" });
     expect(res.isError).toBeFalsy();
+    expect(http.history).toHaveLength(2);
     expect(res.structuredContent?.proxy).toMatchObject({ id: "proxy_xyz" });
     expect(res.structuredContent?.usage).toBeNull();
-    // gateway is null on the core GET when nolist isn't provisioned yet.
     expect(res.structuredContent?.nolist_credentials).toBeNull();
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
     expect(t.text).toContain("not yet provisioned");
+  });
+
+  it("flex_credentials failure on an active proxy degrades to no gateway, never an error", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/proxy_xyz", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: proxyResp("proxy_xyz", { gateway: null }) } },
+    });
+    http.expect("GET", "/v1/proxies/proxy_xyz/usage", usageOk);
+    http.expect("POST", "/v1/proxies/proxy_xyz/flex_credentials", {
+      status: 409,
+      headers: new Headers(),
+      body: {
+        success: false,
+        error: { code: "PROXY_NOT_READY", message: "not ready", request_id: "req_flex_409", docs_url: "" },
+      },
+    });
+    const res = await getProxyStatusHandler(http)({ proxy_id: "proxy_xyz" });
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent?.nolist_credentials).toBeNull();
   });
 });
 
