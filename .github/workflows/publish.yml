@@ -3,6 +3,10 @@ name: Publish
 on:
   push:
     tags: [ 'v*.*.*' ]
+  # Recovery: re-drive a tagged version whose registry or release step failed.
+  # Every publish step below is idempotent, so a manual run only does what is
+  # still missing.
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -17,6 +21,12 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
+      # A manual run publishes whatever version main carries - only allow one
+      # that was released by tag.
+      - name: Require a release tag for manual runs
+        if: github.event_name == 'workflow_dispatch'
+        run: git ls-remote --exit-code --tags origin "refs/tags/v$(node -p "require('./package.json').version")"
 
       - run: npm ci
       - run: npm run version-sync
@@ -40,17 +50,43 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # Gated on the registry's own state, not npm's: a rerun after npm
+      # succeeded must still be able to list the version.
+      - name: Check MCP registry for this version
+        id: registry_check
+        run: |
+          V=$(node -p "require('./package.json').version")
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://registry.modelcontextprotocol.io/v0/servers/io.github.voidmobcom%2Fvoidmob-mcp/versions/$V")
+          if [ "$CODE" = "200" ]; then
+            echo "listed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "listed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The registry validates the npm version exists, and npm takes a moment
+      # to serve a fresh publish (v1.1.6 was rejected seconds after npm publish).
+      - name: Wait for npm to serve this version
+        if: steps.registry_check.outputs.listed == 'false'
+        run: |
+          V=$(node -p "require('./package.json').version")
+          for i in $(seq 1 30); do
+            npm view "@voidmob/mcp@$V" version >/dev/null 2>&1 && exit 0
+            sleep 10
+          done
+          echo "npm still does not serve @voidmob/mcp@$V after 5 minutes" >&2
+          exit 1
+
       # Refresh the MCP registry listing in lockstep with npm. OIDC auth (no
       # stored token): the id-token:write permission above authenticates as this
       # repo's GitHub identity, which owns the io.github.voidmobcom/* namespace.
       # Reads server.json, which version-sync has already pinned to package.json.
       - name: Install mcp-publisher
-        if: steps.npm_check.outputs.published == 'false'
+        if: steps.registry_check.outputs.listed == 'false'
         run: |
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
 
       - name: Publish to MCP Registry
-        if: steps.npm_check.outputs.published == 'false'
+        if: steps.registry_check.outputs.listed == 'false'
         run: |
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
@@ -61,5 +97,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          TAG="v$(node -p "require('./package.json').version")"
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
