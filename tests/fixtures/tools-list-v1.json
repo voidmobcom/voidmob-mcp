@@ -25,6 +25,7 @@
     "search_esim_plans",
     "search_proxies",
     "search_sms_services",
+    "set_proxy_auto_renew",
     "toggle_auto_renew",
     "topup_esim",
     "topup_proxy"

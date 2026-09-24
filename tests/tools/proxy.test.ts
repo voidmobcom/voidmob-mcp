@@ -10,6 +10,7 @@ import {
   listProxyListsHandler,
   createProxyListHandler,
   deleteProxyListHandler,
+  setProxyAutoRenewHandler,
 } from "../../src/tools/proxy.js";
 import { createMockHttpClient } from "../mock-http.js";
 
@@ -55,6 +56,40 @@ function proxyResp(id: string, overrides: Partial<Record<string, unknown>> = {})
     created_at: "2026-05-21T00:00:00Z",
     ...overrides,
   };
+}
+
+function dedicatedPlanFixture(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: "plan_DED_US_NY",
+    name: "United States Verizon New York (monthly)",
+    type: "dedicated_standard",
+    country: "us",
+    country_name: "United States",
+    carrier: "Verizon",
+    region: "New York",
+    data_gb: null,
+    duration_days: 30,
+    period: "monthly",
+    quoted_price_cents: 6900,
+    available: true,
+    ...overrides,
+  };
+}
+
+function dedicatedResp(id: string, overrides: Partial<Record<string, unknown>> = {}) {
+  return proxyResp(id, {
+    type: "dedicated_standard",
+    country: "us",
+    carrier: "Verizon",
+    plan_id: "plan_DED_US_NY",
+    data_gb_total: 0,
+    charged_price_cents: 6900,
+    auto_renew: false,
+    next_renewal_price_cents: 6900,
+    gateway: { host: "h1.example.net", port: 8001, protocol: "http", username: "u1", password: "p1", socks_port: 9001 },
+    rotation_url: "https://dashboard.voidmob.com/api/proxy/rotate/tok",
+    ...overrides,
+  });
 }
 
 // ── search_proxies ──────────────────────────────────────────────────────────
@@ -127,14 +162,14 @@ describe("search_proxies", () => {
 // ── purchase_proxy ──────────────────────────────────────────────────────────
 
 describe("purchase_proxy", () => {
-  it("quote-then-commit: GET plans, find plan, POST /v1/proxies with tied max_price_cents and idempotency", async () => {
+  it("quote-then-commit: GET the plan, POST /v1/proxies with tied max_price_cents and idempotency", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/proxy_plans", {
+    http.expect("GET", "/v1/proxy_plans/proxy_plan_us_shared_5gb", {
       status: 200,
       headers: new Headers(),
       body: {
         success: true,
-        data: { plans: [planFixture()] },
+        data: { plan: planFixture() },
       },
     });
     http.expect("POST", "/v1/proxies", {
@@ -169,12 +204,12 @@ describe("purchase_proxy", () => {
 
   it("plan not found → toolError without commit attempt", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/proxy_plans", {
-      status: 200,
+    http.expect("GET", "/v1/proxy_plans/proxy_plan_does_not_exist", {
+      status: 404,
       headers: new Headers(),
       body: {
-        success: true,
-        data: { plans: [planFixture()] },
+        success: false,
+        error: { code: "PROXY_PLAN_NOT_FOUND", message: "Unknown proxy plan id.", request_id: "req_nf", docs_url: "" },
       },
     });
     const res = await purchaseProxyHandler(http)({ plan_id: "proxy_plan_does_not_exist" });
@@ -360,22 +395,14 @@ describe("rotate_proxy_ip", () => {
 // ── renew_proxy ─────────────────────────────────────────────────────────────
 
 describe("renew_proxy", () => {
-  it("happy path: fetch core, fetch plans, POST renew with tied max_price_cents + idempotency", async () => {
+  it("charges exactly the proxy's own renewal quote: GET core, POST renew with it as max_price_cents + idempotency", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxies/proxy_xyz", {
       status: 200,
       headers: new Headers(),
       body: {
         success: true,
-        data: { proxy: proxyResp("proxy_xyz") },
-      },
-    });
-    http.expect("GET", "/v1/proxy_plans", {
-      status: 200,
-      headers: new Headers(),
-      body: {
-        success: true,
-        data: { plans: [planFixture()] },
+        data: { proxy: proxyResp("proxy_xyz", { next_renewal_price_cents: 1299 }) },
       },
     });
     http.expect("POST", "/v1/proxies/proxy_xyz/renew", {
@@ -384,47 +411,84 @@ describe("renew_proxy", () => {
       body: {
         success: true,
         data: {
-          proxy: proxyResp("proxy_xyz", { expires_at: "2026-07-20T00:00:00Z" }),
+          proxy: proxyResp("proxy_xyz", { expires_at: "2026-07-20T00:00:00Z", next_renewal_price_cents: 1299 }),
         },
       },
     });
     const res = await renewProxyHandler(http)({ proxy_id: "proxy_xyz" });
     expect(res.isError).toBeFalsy();
-    expect(http.history).toHaveLength(3);
-    expect(http.history[2].method).toBe("POST");
-    expect(http.history[2].path).toBe("/v1/proxies/proxy_xyz/renew");
-    expect(http.history[2].body).toMatchObject({ max_price_cents: 1499 });
-    expect(http.history[2].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(http.history).toHaveLength(2);
+    expect(http.history[1].method).toBe("POST");
+    expect(http.history[1].path).toBe("/v1/proxies/proxy_xyz/renew");
+    expect(http.history[1].body).toMatchObject({ max_price_cents: 1299 });
+    expect(http.history[1].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
     expect(res.structuredContent?.proxy).toMatchObject({
       id: "proxy_xyz",
       expires_at: "2026-07-20T00:00:00Z",
     });
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("$12.99");
+    expect(t.text).toContain("2026-07-20T00:00:00Z");
   });
 
-  it("proxy has null plan_id → toolError, no plan fetch or POST", async () => {
+  it("dedicated proxy renews at its locked-in price, not the plan's current one", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/prx_ded", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: dedicatedResp("prx_ded", { next_renewal_price_cents: 5520 }) } },
+    });
+    http.expect("POST", "/v1/proxies/prx_ded/renew", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: dedicatedResp("prx_ded", { expires_at: "2026-11-01T00:00:00Z" }) } },
+    });
+    const res = await renewProxyHandler(http)({ proxy_id: "prx_ded" });
+    expect(res.isError).toBeFalsy();
+    expect(http.history.map((h) => `${h.method} ${h.path}`)).toEqual(["GET /v1/proxies/prx_ded", "POST /v1/proxies/prx_ded/renew"]);
+    expect(http.history[1].body).toMatchObject({ max_price_cents: 5520 });
+  });
+
+  it("no renewal quote → toolError, no POST", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxies/proxy_legacy", {
       status: 200,
       headers: new Headers(),
       body: {
         success: true,
-        data: { proxy: proxyResp("proxy_legacy", { plan_id: null }) },
+        data: { proxy: proxyResp("proxy_legacy", { plan_id: null, status: "refunded", next_renewal_price_cents: null }) },
       },
     });
     const res = await renewProxyHandler(http)({ proxy_id: "proxy_legacy" });
     expect(res.isError).toBe(true);
-    expect(http.history).toHaveLength(1); // Stopped before plans + renew
+    expect(http.history).toHaveLength(1);
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
     expect(t.text).toContain("proxy_legacy");
-    expect(t.text).toContain("no plan_id");
+    expect(t.text).toContain("cannot be renewed");
+  });
+
+  it("expired dedicated proxy → explains it can only renew while active, no POST", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/prx_ded", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: dedicatedResp("prx_ded", { status: "expired", next_renewal_price_cents: null, gateway: null }) } },
+    });
+    const res = await renewProxyHandler(http)({ proxy_id: "prx_ded" });
+    expect(res.isError).toBe(true);
+    expect(http.history).toHaveLength(1);
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("only be renewed while active");
   });
 });
 
 // ── topup_proxy ─────────────────────────────────────────────────────────────
 
 describe("topup_proxy", () => {
-  it("quote-then-commit: GET proxy + plans, POST topup with additional_gb + tied max_price_cents + idempotency", async () => {
+  it("quote-then-commit: GET proxy + plan, POST topup with additional_gb + tied max_price_cents + idempotency", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxies/proxy_xyz", {
       status: 200,
@@ -434,12 +498,12 @@ describe("topup_proxy", () => {
         data: { proxy: proxyResp("proxy_xyz") },
       },
     });
-    http.expect("GET", "/v1/proxy_plans", {
+    http.expect("GET", "/v1/proxy_plans/proxy_plan_us_shared_5gb", {
       status: 200,
       headers: new Headers(),
       body: {
         success: true,
-        data: { plans: [planFixture()] },
+        data: { plan: planFixture() },
       },
     });
     http.expect("POST", "/v1/proxies/proxy_xyz/topup", {
@@ -637,3 +701,197 @@ describe("delete_proxy_list", () => {
     expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
   });
 });
+
+// ── dedicated proxies ───────────────────────────────────────────────────────
+
+describe("search_proxies - dedicated", () => {
+  it("type=dedicated maps to dedicated_standard, passes available/cursor, renders location + stock, returns next_cursor", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxy_plans?type=dedicated_standard&country=US&available=true&cursor=abc", {
+      status: 200,
+      headers: new Headers(),
+      body: {
+        success: true,
+        data: { plans: [dedicatedPlanFixture(), dedicatedPlanFixture({ id: "plan_DED_US_TX", region: "Texas", available: false })], next_cursor: "def" },
+      },
+    });
+    const res = await searchProxiesHandler(http)({ type: "dedicated", country: "US", available_only: true, cursor: "abc" });
+    expect(res.isError).toBeFalsy();
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("Verizon / New York");
+    expect(t.text).toContain("unmetered");
+    expect(t.text).toContain("$69.00");
+    expect(t.text).toContain("(sold out)");
+    expect(t.text).toContain('cursor="def"');
+    expect(res.structuredContent?.next_cursor).toBe("def");
+  });
+
+  it("without type keeps the original shared-only request (no available/cursor params)", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxy_plans?country=US", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { plans: [planFixture()] } },
+    });
+    const res = await searchProxiesHandler(http)({ country: "US", available_only: true, cursor: "abc" });
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent?.next_cursor).toBeNull();
+  });
+});
+
+describe("purchase_proxy - dedicated", () => {
+  it("sold-out plan → toolError, no POST", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxy_plans/plan_DED_US_NY", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { plan: dedicatedPlanFixture({ available: false }) } },
+    });
+    const res = await purchaseProxyHandler(http)({ plan_id: "plan_DED_US_NY" });
+    expect(res.isError).toBe(true);
+    expect(http.history).toHaveLength(1);
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("sold out");
+  });
+
+  it("active on purchase → says so and points at get_proxy_status", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxy_plans/plan_DED_US_NY", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { plan: dedicatedPlanFixture() } },
+    });
+    http.expect("POST", "/v1/proxies", {
+      status: 202,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: dedicatedResp("prx_ded") } },
+    });
+    const res = await purchaseProxyHandler(http)({ plan_id: "plan_DED_US_NY" });
+    expect(res.isError).toBeFalsy();
+    expect(http.history[1].body).toMatchObject({ plan_id: "plan_DED_US_NY", max_price_cents: 6900 });
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("is active");
+    expect(t.text).toContain("get_proxy_status");
+  });
+
+  it("provisioning dedicated → mentions the ~5 minute window and the automatic refund", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxy_plans/plan_DED_US_NY", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { plan: dedicatedPlanFixture() } },
+    });
+    http.expect("POST", "/v1/proxies", {
+      status: 202,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: dedicatedResp("prx_ded", { status: "provisioning", gateway: null }) } },
+    });
+    const res = await purchaseProxyHandler(http)({ plan_id: "plan_DED_US_NY" });
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("5 minutes");
+    expect(t.text).toContain("refunded");
+  });
+});
+
+describe("get_proxy_status - dedicated", () => {
+  it("shows location, unmetered data, SOCKS5 port, auto-renew and renewal price; no flex call; the usage 404 is ignored", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/prx_ded", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: dedicatedResp("prx_ded", { auto_renew: true, next_renewal_price_cents: 5520 }) } },
+    });
+    http.expect("GET", "/v1/proxies/prx_ded/usage", {
+      status: 404,
+      headers: new Headers(),
+      body: { success: false, error: { code: "PROXY_NOT_FOUND", message: "Proxy not found.", request_id: "req_u", docs_url: "" } },
+    });
+    const res = await getProxyStatusHandler(http)({ proxy_id: "prx_ded" });
+    expect(res.isError).toBeFalsy();
+    expect(http.history).toHaveLength(2);
+    expect(res.structuredContent?.usage).toBeNull();
+    expect(res.structuredContent?.nolist_credentials).toMatchObject({ host: "h1.example.net", socks_port: 9001 });
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("US / Verizon");
+    expect(t.text).toContain("unmetered");
+    expect(t.text).toContain("SOCKS5:    9001");
+    expect(t.text).toContain("Auto-renew:    on");
+    expect(t.text).toContain("$55.20");
+  });
+
+  it("an active Premium proxy never triggers a flex call and says where its credentials are", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/prx_prem", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: dedicatedResp("prx_prem", { type: "dedicated_premium", gateway: null, next_renewal_price_cents: null }) } },
+    });
+    http.expect("GET", "/v1/proxies/prx_prem/usage", {
+      status: 404,
+      headers: new Headers(),
+      body: { success: false, error: { code: "PROXY_NOT_FOUND", message: "Proxy not found.", request_id: "req_u", docs_url: "" } },
+    });
+    const res = await getProxyStatusHandler(http)({ proxy_id: "prx_prem" });
+    expect(res.isError).toBeFalsy();
+    expect(http.history).toHaveLength(2);
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("dashboard");
+  });
+});
+
+describe("topup_proxy - dedicated", () => {
+  it("refuses locally - dedicated data is unmetered - without fetching the plan", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/prx_ded", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: dedicatedResp("prx_ded") } },
+    });
+    const res = await topupProxyHandler(http)({ proxy_id: "prx_ded", additional_gb: 5 });
+    expect(res.isError).toBe(true);
+    expect(http.history).toHaveLength(1);
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("unmetered");
+  });
+});
+
+describe("set_proxy_auto_renew", () => {
+  it("POSTs the explicit state and reports the renewal price and timing", async () => {
+    const http = createMockHttpClient();
+    http.expect("POST", "/v1/proxies/prx_ded/auto_renew", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: dedicatedResp("prx_ded", { auto_renew: true, next_renewal_price_cents: 5520 }) } },
+    });
+    const res = await setProxyAutoRenewHandler(http)({ proxy_id: "prx_ded", enabled: true });
+    expect(res.isError).toBeFalsy();
+    expect(http.history[0].body).toEqual({ enabled: true });
+    expect(http.history[0].headers["Idempotency-Key"]).toBeUndefined();
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("Auto-renew is on");
+    expect(t.text).toContain("$55.20");
+  });
+
+  it("surfaces NOT_SUPPORTED for a shared proxy", async () => {
+    const http = createMockHttpClient();
+    http.expect("POST", "/v1/proxies/proxy_xyz/auto_renew", {
+      status: 422,
+      headers: new Headers(),
+      body: { success: false, error: { code: "NOT_SUPPORTED", message: "Not supported.", request_id: "req_ns", docs_url: "" } },
+    });
+    const res = await setProxyAutoRenewHandler(http)({ proxy_id: "proxy_xyz", enabled: true });
+    expect(res.isError).toBe(true);
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("req_ns");
+  });
+});
+

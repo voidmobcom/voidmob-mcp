@@ -89,7 +89,12 @@ const PROXY_PLANS: ProxyPlan[] = [
   { id: "pplan_us_10gb_30d", name: "US Mobile 10GB", type: "shared", country: "US", country_name: "United States", data_gb: 10, duration_days: 30, period: "monthly", quoted_price_cents: 3000, available: true },
   { id: "pplan_gb_5gb_30d", name: "UK Mobile 5GB", type: "shared", country: "GB", country_name: "United Kingdom", data_gb: 5, duration_days: 30, period: "monthly", quoted_price_cents: 2000, available: true },
   { id: "pplan_de_5gb_30d", name: "Germany Mobile 5GB", type: "shared", country: "DE", country_name: "Germany", data_gb: 5, duration_days: 30, period: "monthly", quoted_price_cents: 2100, available: true },
+  { id: "pplan_ded_us_ny_30d", name: "United States Carrier A New York (monthly)", type: "dedicated_standard", country: "us", country_name: "United States", carrier: "Carrier A", region: "New York", data_gb: null, duration_days: 30, period: "monthly", quoted_price_cents: 6900, available: true },
+  { id: "pplan_ded_gb_lon_7d", name: "United Kingdom Carrier B London (weekly)", type: "dedicated_standard", country: "gb", country_name: "United Kingdom", carrier: "Carrier B", region: "London", data_gb: null, duration_days: 7, period: "weekly", quoted_price_cents: 2900, available: true },
+  { id: "pplan_ded_de_ber_30d", name: "Germany Carrier A Berlin (monthly)", type: "dedicated_standard", country: "de", country_name: "Germany", carrier: "Carrier A", region: "Berlin", data_gb: null, duration_days: 30, period: "monthly", quoted_price_cents: 7400, available: false },
 ];
+
+const isDedicatedProxy = (p: Proxy): boolean => p.type === "dedicated_standard" || p.type === "dedicated_premium";
 
 const GEO: Record<string, { name: string; available_nodes: number; code?: string }[]> = {
   countries: [
@@ -512,12 +517,22 @@ export function createSandboxHttpClient(): HttpClient {
 
     // ── proxy plans ──
     if (rawPath === "/v1/proxy_plans" && method === "GET") {
-      let plans = PROXY_PLANS;
+      const type = query.get("type");
       const country = query.get("country");
       const minGb = query.get("min_gb");
-      if (country) plans = plans.filter((p) => p.country === country.toUpperCase());
-      if (minGb) plans = plans.filter((p) => p.data_gb >= Number(minGb));
-      return ok({ plans });
+      // Without type the catalog is shared-only (the original response).
+      let plans = PROXY_PLANS.filter((p) =>
+        type === "all" ? true : p.type === (type === "dedicated_standard" ? "dedicated_standard" : "shared"),
+      );
+      if (country) plans = plans.filter((p) => p.country?.toUpperCase() === country.toUpperCase());
+      if (minGb) plans = plans.filter((p) => (p.data_gb ?? 0) >= Number(minGb));
+      if (!type) return ok({ plans });
+      if (query.get("available") === "true") plans = plans.filter((p) => p.available !== false);
+      return ok({ plans, next_cursor: null });
+    }
+    if (seg[1] === "proxy_plans" && seg[2] && method === "GET") {
+      const plan = PROXY_PLANS.find((p) => p.id === seg[2]);
+      return plan ? ok({ plan }) : fail(404, "PROXY_PLAN_NOT_FOUND", "Unknown proxy plan id.");
     }
 
     // ── proxies ──
@@ -526,21 +541,36 @@ export function createSandboxHttpClient(): HttpClient {
     }
     if (rawPath === "/v1/proxies" && method === "POST") {
       const plan = PROXY_PLANS.find((p) => p.id === body.plan_id);
-      if (!plan) return fail(404, "NOT_FOUND", "Plan not found.");
+      if (!plan) return fail(404, "PROXY_PLAN_NOT_FOUND", "Unknown proxy plan id.");
+      if (Number(body.max_price_cents) < plan.quoted_price_cents) {
+        return fail(409, "PRICE_MISMATCH", "Price exceeds the supplied max_price_cents.");
+      }
+      if (plan.available === false) {
+        return fail(503, "SERVICE_OUT_OF_STOCK", "This service is temporarily unavailable. Please try again shortly.");
+      }
       const paid = charge(plan.quoted_price_cents);
       if (paid) return paid;
       const id = uid("prx_");
+      const dedicated = plan.type === "dedicated_standard";
+      // A dedicated modem is issued on the spot; a shared package provisions.
       const proxy: Proxy = {
         id,
-        status: "provisioning",
+        status: dedicated ? "active" : "provisioning",
+        type: plan.type,
+        country: dedicated ? plan.country : null,
+        carrier: dedicated ? plan.carrier ?? null : null,
         plan_id: plan.id,
-        data_gb_total: plan.data_gb,
+        data_gb_total: plan.data_gb ?? 0,
         data_bytes_used: 0,
         charged_price_cents: plan.quoted_price_cents,
         expires_at: iso(plan.duration_days * DAY),
-        gateway: null,
+        auto_renew: false,
+        next_renewal_price_cents: plan.quoted_price_cents,
+        gateway: dedicated
+          ? { host: `${plan.country}-ded.gw.voidmob.com`, port: 8000 + rnd(0, 999), protocol: "http", username: `vm_${alnum(6)}`, password: alnum(12), socks_port: 9000 + rnd(0, 999) }
+          : null,
         lists: [],
-        rotation_url: null,
+        rotation_url: dedicated ? `https://dashboard.voidmob.com/api/proxy/rotate/${alnum(24)}` : null,
         created_at: iso(),
       };
       db.proxies.set(id, proxy);
@@ -554,6 +584,7 @@ export function createSandboxHttpClient(): HttpClient {
 
       if (method === "GET" && !seg[3]) return ok({ proxy: settleProxy(proxy) });
       if (seg[3] === "usage" && method === "GET") {
+        if (isDedicatedProxy(proxy)) return fail(404, "PROXY_NOT_FOUND", "Proxy not found.");
         return ok({ usage: { total_gb: proxy.data_gb_total, used_gb: Number((proxy.data_bytes_used / 1024 ** 3).toFixed(2)) } });
       }
       if (seg[3] === "flex_credentials" && method === "POST") {
@@ -565,13 +596,26 @@ export function createSandboxHttpClient(): HttpClient {
         return ok({ proxy_id: proxy.id, rotated_at: iso(), current_ip: ip() });
       }
       if (seg[3] === "renew" && method === "POST") {
-        const paid = charge(Number(body.max_price_cents ?? proxy.charged_price_cents));
+        if (isDedicatedProxy(proxy) && proxy.status !== "active") {
+          return fail(409, "PROXY_EXPIRED", "Proxy has expired.");
+        }
+        const renewalPrice = proxy.next_renewal_price_cents ?? proxy.charged_price_cents;
+        if (Number(body.max_price_cents) < renewalPrice) {
+          return fail(409, "PRICE_MISMATCH", "Price exceeds the supplied max_price_cents.");
+        }
+        const paid = charge(renewalPrice);
         if (paid) return paid;
         const days = PROXY_PLANS.find((p) => p.id === proxy.plan_id)?.duration_days ?? 30;
         proxy.expires_at = iso(days * DAY);
         return ok({ proxy });
       }
+      if (seg[3] === "auto_renew" && method === "POST") {
+        if (proxy.type !== "dedicated_standard") return fail(422, "NOT_SUPPORTED", "Not supported for this proxy.");
+        proxy.auto_renew = Boolean(body.enabled);
+        return ok({ proxy: settleProxy(proxy) });
+      }
       if (seg[3] === "topup" && method === "POST") {
+        if (isDedicatedProxy(proxy)) return fail(422, "NOT_SUPPORTED", "Not supported for this proxy.");
         const paid = charge(Number(body.max_price_cents ?? 0));
         if (paid) return paid;
         proxy.data_gb_total += Number(body.additional_gb ?? 0);
