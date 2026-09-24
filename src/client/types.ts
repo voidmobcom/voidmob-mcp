@@ -223,7 +223,10 @@ export const ProxyGateway = z.object({
   protocol: z.enum(["http", "socks5"]),
   username: z.string(),
   password: z.string(),
+  // Mobile/GB gateway only: per-request geo/session parameters for the username.
   username_geo_hint: z.string().optional(),
+  // Dedicated only: SOCKS5 port on the same host and credentials.
+  socks_port: z.number().int().nullable().optional(),
 });
 
 export const ProxyCredentials = z.object({
@@ -254,14 +257,22 @@ export const ProxyList = z.object({
 });
 export type ProxyList = z.infer<typeof ProxyList>;
 
+export const ProxyType = z.enum(["shared", "dedicated_standard", "dedicated_premium"]);
+
 export const Proxy = z.object({
   id: z.string(),
   status: z.enum(["provisioning", "active", "expired", "refunded", "exhausted"]),
+  type: ProxyType.optional(),
+  country: z.string().nullable().optional(),
+  carrier: z.string().nullable().optional(),
   plan_id: z.string().nullable().optional(),
   data_gb_total: z.number().int(),
   data_bytes_used: z.number().int(),
   charged_price_cents: z.number().int(),
   expires_at: z.string(),
+  auto_renew: z.boolean().optional(),
+  // What a renew (or auto-renew) charges now; null when it cannot be renewed.
+  next_renewal_price_cents: z.number().int().nullable().optional(),
   gateway: ProxyGateway.nullable(),
   lists: z.array(ProxyList).default([]),
   rotation_url: z.string().nullable().optional(),
@@ -272,10 +283,14 @@ export type Proxy = z.infer<typeof Proxy>;
 export const ProxyPlan = z.object({
   id: z.string(),
   name: z.string(),
-  type: z.enum(["shared"]),
+  type: z.enum(["shared", "dedicated_standard"]),
   country: z.string().nullable(),
   country_name: z.string().nullable().optional(),
-  data_gb: z.number().int(),
+  // Dedicated plans only
+  carrier: z.string().nullable().optional(),
+  region: z.string().nullable().optional(),
+  // Null for dedicated plans (unmetered)
+  data_gb: z.number().int().nullable(),
   duration_days: z.number().int(),
   period: z.enum(["daily", "weekly", "monthly"]).optional(),
   quoted_price_cents: z.number().int(),

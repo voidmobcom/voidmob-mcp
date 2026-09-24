@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/node/v/@voidmob/mcp)](https://nodejs.org)
 
-Mobile proxies, non-VoIP SMS verifications, dedicated numbers, and global eSIMs - exposed as 28 tools your AI agent can call directly.
+Mobile proxies, non-VoIP SMS verifications, dedicated numbers, and global eSIMs - exposed as 29 tools your AI agent can call directly.
 
 ```bash
 npx -y @voidmob/mcp
@@ -72,7 +72,7 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 
 ## Tools
 
-28 tools across six domains.
+29 tools across six domains.
 
 ### Account (1)
 
@@ -110,16 +110,17 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 | `topup_esim` | Browse and buy top-ups |
 | `get_esim_qr` | Fetch the activation QR as an inline image |
 
-### Proxy (10)
+### Proxy (11)
 
 | Tool | Description |
 |---|---|
-| `search_proxies` | List available mobile proxy plans |
-| `purchase_proxy` | Buy a mobile proxy |
-| `get_proxy_status` | Status, usage, and gateway credentials |
+| `search_proxies` | List mobile (shared) and dedicated proxy plans, with dedicated stock |
+| `purchase_proxy` | Buy a mobile or dedicated proxy |
+| `get_proxy_status` | Status, usage, expiry, auto-renew and connection credentials |
 | `rotate_proxy_ip` | Rotate a dedicated proxy to a new IP |
-| `renew_proxy` | Extend expiry |
-| `topup_proxy` | Add data |
+| `renew_proxy` | Extend expiry at the proxy's current renewal price |
+| `set_proxy_auto_renew` | Turn auto-renew on or off for a dedicated proxy |
+| `topup_proxy` | Add data to a mobile proxy |
 | `regenerate_proxy_password` | Rotate the gateway password |
 | `list_proxy_lists` | List geo-targeted sub-pools |
 | `create_proxy_list` | Create a geo-targeted sub-pool |

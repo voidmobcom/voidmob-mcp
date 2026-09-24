@@ -94,7 +94,9 @@ async function fetchProxies(http: HttpClient): Promise<OrderRow[]> {
     status: p.status,
     charged_price_cents: p.charged_price_cents,
     created_at: p.created_at ?? "",
-    summary: `${p.data_gb_total}GB ${p.lists.length} list(s)`,
+    summary: p.type === "dedicated_standard" || p.type === "dedicated_premium"
+      ? `dedicated ${[p.country?.toUpperCase(), p.carrier].filter(Boolean).join(" ")}`.trim()
+      : `${p.data_gb_total}GB ${p.lists.length} list(s)`,
   }));
 }
 
