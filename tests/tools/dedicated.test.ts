@@ -40,11 +40,12 @@ describe("search_dedicated_countries", () => {
     expect(res.structuredContent?.countries).toHaveLength(2);
   });
 
-  it("empty catalog -> toolError", async () => {
+  it("empty catalog -> a normal empty result, not an error", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/dedicated/countries", okBody([]));
     const res = await searchDedicatedCountriesHandler(http)({});
-    expect(res.isError).toBe(true);
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent?.countries).toEqual([]);
   });
 });
 

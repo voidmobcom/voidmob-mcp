@@ -120,7 +120,7 @@ describe("search_esim_plans", () => {
     });
   });
 
-  it("returns toolError when no plans match", async () => {
+  it("no matching plans is a normal empty result with a hint, not an error", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/esim_products?country=XX&limit=20", {
       status: 200,
@@ -128,7 +128,11 @@ describe("search_esim_plans", () => {
       body: { success: true, data: { products: [], next_cursor: null } },
     });
     const res = await searchEsimPlansHandler(http)({ country: "XX" });
-    expect(res.isError).toBe(true);
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent?.esim_plans).toEqual([]);
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("No eSIM plans matched");
   });
 
   it("surfaces upstream error with request_id", async () => {
@@ -174,6 +178,31 @@ describe("purchase_esim", () => {
     });
     expect(http.history[1].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
     expect(res.structuredContent?.esim).toMatchObject({ id: "esim_abc" });
+  });
+
+  it("purchase output carries the LPA string, or says to poll while processing", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/esim_products/esim_product_jp7d", { status: 200, headers: new Headers(), body: { success: true, data: { product: productFixture() } } });
+    http.expect("POST", "/v1/esims", {
+      status: 201,
+      headers: new Headers(),
+      body: { success: true, data: { esim: esimFixture({ activation_code: "K2-AAAAAA-BBBBBB", smdp_address: "smdp.example.com" }) } },
+    });
+    const done = await purchaseEsimHandler(http)({ plan_id: "esim_product_jp7d" });
+    const t1 = done.content[0];
+    if (t1.type !== "text") throw new Error("text");
+    expect(t1.text).toContain("LPA:1$smdp.example.com$K2-AAAAAA-BBBBBB");
+
+    http.expect("GET", "/v1/esim_products/esim_product_jp7d", { status: 200, headers: new Headers(), body: { success: true, data: { product: productFixture() } } });
+    http.expect("POST", "/v1/esims", {
+      status: 202,
+      headers: new Headers(),
+      body: { success: true, data: { esim: esimFixture({ status: "processing", activation_code: null, smdp_address: null, iccid: null, qr_code_url: null }) } },
+    });
+    const pending = await purchaseEsimHandler(http)({ plan_id: "esim_product_jp7d" });
+    const t2 = pending.content[0];
+    if (t2.type !== "text") throw new Error("text");
+    expect(t2.text).toContain("poll get_esim_status");
   });
 
   it("maps PRICE_OVER_CAP from commit step with request_id", async () => {
@@ -236,6 +265,56 @@ describe("get_esim_status", () => {
     expect(t.text).toContain("5120 MB");
   });
 
+  it("renders every package on the eSIM plus an eSIM-level total - never just packages[0]", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/esims/esim_abc", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { esim: esimFixture() } },
+    });
+    const base = usageFixture().packages[0];
+    http.expect("GET", "/v1/esims/esim_abc/usage", {
+      status: 200,
+      headers: new Headers(),
+      body: {
+        success: true,
+        data: {
+          usage: usageFixture({
+            packages: [
+              { ...base, used_mb: 5120, remaining_mb: 0, percent_used: 100 },
+              { ...base, name: "Top-up", total_mb: 3072, used_mb: 1024, remaining_mb: 2048, percent_used: 33.3, activation_date: "2026-05-25T00:00:00Z", expiration_date: "2026-06-01T00:00:00Z" },
+            ],
+          }),
+        },
+      },
+    });
+    const res = await getEsimStatusHandler(http)({ esim_id: "esim_abc" });
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("Usage (2 packages)");
+    expect(t.text).toContain("Package 1: 5120 MB / 5120 MB used (100%), 0 MB left");
+    expect(t.text).toContain("Package 2: 1024 MB / 3072 MB used (33.3%), 2048 MB left, 2026-05-25 to 2026-06-01");
+    expect(t.text).toContain("Total:     6144 MB / 8192 MB used, 2048 MB left");
+    // Carrier-supplied package names stay out of the text.
+    expect(t.text).not.toContain("Plan A");
+  });
+
+  it("prints the LPA string built from smdp_address + activation_code", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/esims/esim_abc", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { esim: esimFixture({ activation_code: "K2-2VOZBJ-22QT3D", smdp_address: "smdp.example.com" }) } },
+    });
+    http.expect("GET", "/v1/esims/esim_abc/usage", { status: 200, headers: new Headers(), body: { success: true, data: { usage: usageFixture() } } });
+    const res = await getEsimStatusHandler(http)({ esim_id: "esim_abc" });
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("LPA string:     LPA:1$smdp.example.com$K2-2VOZBJ-22QT3D");
+    expect(t.text).toContain("SM-DP+ address: smdp.example.com");
+    expect(t.text).toContain("Activation code: K2-2VOZBJ-22QT3D");
+  });
+
   it("USAGE_UNAVAILABLE: degrades gracefully with usage=null", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/esims/esim_abc", {
@@ -290,7 +369,7 @@ describe("topup_esim", () => {
     expect((res.structuredContent?.topups as unknown[])).toHaveLength(2);
   });
 
-  it("browse: supports_topup=false → toolError", async () => {
+  it("browse: supports_topup=false → normal empty result", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/esims/esim_abc/topups", {
       status: 200,
@@ -298,7 +377,8 @@ describe("topup_esim", () => {
       body: { success: true, data: { supports_topup: false, topups: [] } },
     });
     const res = await topupEsimHandler(http)({ esim_id: "esim_abc" });
-    expect(res.isError).toBe(true);
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent?.topups).toEqual([]);
   });
 
   it("purchase: topup_product_id supplied → quote then POST /v1/esims/:id/topups", async () => {

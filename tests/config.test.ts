@@ -15,9 +15,8 @@ describe("parseEnv", () => {
     expect(cfg.baseUrl).toBe("https://dashboard.voidmob.com/api");
   });
 
-  it("accepts vmk_test_ keys", () => {
-    const cfg = parseEnv({ VOIDMOB_API_KEY: "vmk_test_" + "b".repeat(32) });
-    expect(cfg.sandbox).toBe(false);
+  it("rejects vmk_test_ keys (only vmk_live_ keys are issued)", () => {
+    expect(() => parseEnv({ VOIDMOB_API_KEY: "vmk_test_" + "b".repeat(32) })).toThrow(ConfigError);
   });
 
   it("no key and no sandbox yields unconfigured mode (null apiKey)", () => {
@@ -40,6 +39,16 @@ describe("parseEnv", () => {
       VOIDMOB_BASE_URL: "http://localhost:4000",
     });
     expect(cfg.baseUrl).toBe("http://localhost:4000");
+  });
+
+  it("VOIDMOB_BASE_URL accepts https and http only for localhost / 127.0.0.1", () => {
+    const key = "vmk_live_" + "a".repeat(32);
+    expect(parseEnv({ VOIDMOB_API_KEY: key, VOIDMOB_BASE_URL: "https://staging.example.com/api" }).baseUrl).toBe("https://staging.example.com/api");
+    expect(parseEnv({ VOIDMOB_API_KEY: key, VOIDMOB_BASE_URL: "http://127.0.0.1:4000/api" }).baseUrl).toBe("http://127.0.0.1:4000/api");
+    expect(() => parseEnv({ VOIDMOB_API_KEY: key, VOIDMOB_BASE_URL: "http://evil.example.com/api" })).toThrow(/https/);
+    expect(() => parseEnv({ VOIDMOB_API_KEY: key, VOIDMOB_BASE_URL: "http://localhost.evil.example/api" })).toThrow(ConfigError);
+    expect(() => parseEnv({ VOIDMOB_API_KEY: key, VOIDMOB_BASE_URL: "ftp://localhost/api" })).toThrow(ConfigError);
+    expect(() => parseEnv({ VOIDMOB_API_KEY: key, VOIDMOB_BASE_URL: "not a url" })).toThrow(ConfigError);
   });
 
   it("VOIDMOB_DEBUG=1 enables debug", () => {

@@ -1,4 +1,4 @@
-import { HttpClient, HttpError } from "./http.js";
+import { HttpClient, HttpError, parseRetryAfter } from "./http.js";
 
 interface SuccessEnvelope<T> { success: true; data: T }
 interface ErrorEnvelope {
@@ -23,6 +23,7 @@ export async function callApi<T>(
   if (res.status === 204) return undefined as T;
   const env = res.body as ApiEnvelope<T>;
   if (env && env.success === true) return env.data;
+  const meta = { method, retryAfterSeconds: parseRetryAfter(res.headers?.get("Retry-After")) };
   // Handles mock test clients and 2xx responses carrying success:false.
   if (env && env.success === false) {
     throw new HttpError(
@@ -31,7 +32,8 @@ export async function callApi<T>(
       env.error.request_id,
       env.error.details,
       env.error.message ?? env.error.code,
+      meta,
     );
   }
-  throw new HttpError(res.status, "UNKNOWN_ERROR", "", undefined, "Unexpected response shape");
+  throw new HttpError(res.status, "UNKNOWN_ERROR", "", undefined, "Unexpected response shape", meta);
 }

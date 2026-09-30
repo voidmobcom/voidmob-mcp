@@ -40,7 +40,7 @@ const waitUntilReady = () => new Promise((r) => setTimeout(r, READY_AFTER_MS + 1
 
 describe("sandbox e2e (every tool resolves against the mock)", () => {
   it("account + catalogs + geo cascade", async () => {
-    okResult(await getAccountHandler(http)());
+    okResult(await getAccountHandler(http)({}));
     okResult(await searchSmsServicesHandler(http)({}));
     okResult(await searchEsimPlansHandler(http)({ country: "US" }));
     okResult(await searchProxiesHandler(http)({ country: "US" }));
@@ -54,9 +54,16 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
     const ver = okResult(await rentNumberHandler(http)({ service_id: "svc_telegram", kind: "verification" }));
     const id = sc(ver).verification.id as string;
     expect(id.startsWith("ver_")).toBe(true);
+    // Prod window: 15 minutes.
+    const expiresInMs = new Date(sc(ver).verification.expires_at).getTime() - Date.now();
+    expect(expiresInMs).toBeGreaterThan(14 * 60_000);
+    expect(expiresInMs).toBeLessThanOrEqual(15 * 60_000);
     okResult(await getRentalHandler(http)({ rental_id: id }));
     okResult(await reuseNumberHandler(http)({ rental_id: id }));
     okResult(await reuseNumberHandler(http)({ rental_id: id, paid: true }));
+    // Verifications are listable (the recovery path after a lost response).
+    const orders = okResult(await listOrdersHandler(http)({ kind: "sms" }));
+    expect((sc(orders).orders as Array<{ id: string }>).some((o) => o.id === id)).toBe(true);
   });
 
   it("SMS long-term rental lifecycle", async () => {
@@ -66,31 +73,46 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
     okResult(await toggleAutoRenewHandler(http)({ rental_id: id, auto_renew: true }));
     okResult(await getRentalHandler(http)({ rental_id: id }));
     okResult(await reRentRentalHandler(http)({ rental_id: id }));
-    okResult(await cancelRentalHandler(http)({ rental_id: id }));
+    const cancelled = okResult(await cancelRentalHandler(http)({ rental_id: id }));
+    expect((cancelled.content[0] as { text: string }).text).toContain("Refunded");
   });
 
   it("eSIM lifecycle", async () => {
     const esim = okResult(await purchaseEsimHandler(http)({ plan_id: "prod_us_5gb_30d" }));
     const id = sc(esim).esim.id as string;
+    expect((esim.content[0] as { text: string }).text).toMatch(/LPA string: +LPA:1\$[^$]+\$K2-/);
     okResult(await getEsimStatusHandler(http)({ esim_id: id }));
     okResult(await getEsimQrHandler(http)({ esim_id: id }));
     okResult(await topupEsimHandler(http)({ esim_id: id }));
     okResult(await topupEsimHandler(http)({ esim_id: id, topup_product_id: "prod_topup_5gb" }));
+    // After a top-up the status shows both packages and a total.
+    const status = okResult(await getEsimStatusHandler(http)({ esim_id: id }));
+    const text = (status.content[0] as { text: string }).text;
+    expect(text).toContain("Usage (2 packages)");
+    expect(text).toContain("Total:");
   });
 
   it("proxy lifecycle + lists", async () => {
-    const prx = okResult(await purchaseProxyHandler(http)({ plan_id: "pplan_us_5gb_30d" }));
+    const prx = okResult(await purchaseProxyHandler(http)({ plan_id: "plan_US5GB30D" }));
     const id = sc(prx).proxy.id as string;
-    okResult(await getProxyStatusHandler(http)({ proxy_id: id }));
-    okResult(await rotateProxyIpHandler(http)({ proxy_id: id }));
+    okResult(await getProxyStatusHandler(http)({ proxy_id: id })); // still provisioning
+    await waitUntilReady();
+    const status = okResult(await getProxyStatusHandler(http)({ proxy_id: id })); // active: gateway set up
+    expect((status.content[0] as { text: string }).text).toMatch(/HTTP URL: +http:\/\/vm_\w+:\w+@proxy\.voidmob\.com:10092/);
     okResult(await topupProxyHandler(http)({ proxy_id: id, additional_gb: 5 }));
     okResult(await renewProxyHandler(http)({ proxy_id: id }));
     okResult(await regenerateProxyPasswordHandler(http)({ proxy_id: id }));
     const list = okResult(await createProxyListHandler(http)({ proxy_id: id, name: "la", country: "us", city: "Los Angeles" }));
     const listId = sc(list).list.id as string;
+    expect(listId.startsWith("list_")).toBe(true);
+    expect(sc(list).list.entries[0]).toMatch(/^vm_\w+:\w+@proxy\.voidmob\.com:10000$/);
     okResult(await listProxyListsHandler(http)({ proxy_id: id }));
     okResult(await deleteProxyListHandler(http)({ proxy_id: id, list_id: listId }));
-  });
+
+    // IP rotation is a dedicated-proxy action.
+    const ded = okResult(await purchaseProxyHandler(http)({ plan_id: "plan_DEDUSNY30D" }));
+    okResult(await rotateProxyIpHandler(http)({ proxy_id: sc(ded).proxy.id as string }));
+  }, 10_000);
 
   it("list_orders aggregates across kinds", async () => {
     okResult(await listOrdersHandler(http)({}));

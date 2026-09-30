@@ -111,6 +111,7 @@ export const Rental = z.object({
   can_cancel: z.boolean(),
   cancel_window_expires_at: z.string().nullable().optional(),
   messages: z.array(RentalMessage).optional(),
+  refunded_cents: z.number().int().optional(),
 });
 export type Rental = z.infer<typeof Rental>;
 

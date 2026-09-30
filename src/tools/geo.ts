@@ -4,6 +4,7 @@ import { HttpClient } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
 import { GeoCountry, GeoRegion, GeoCity, GeoIsp } from "../client/types.js";
 import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
+import { READ_ONLY } from "../utils/annotations.js";
 
 interface GeoKind {
   key: "isps" | "cities" | "regions" | "countries";
@@ -61,13 +62,19 @@ export const getGeoHandler = (http: HttpClient) =>
   });
 
 export function registerGeoTools(server: McpServer, http: HttpClient) {
-  server.tool(
+  server.registerTool(
     "get_geo",
-    "Cascading geo discovery for proxy list targeting. No params -> countries; country=US -> regions; country=US&region=California -> cities; +city=Los%20Angeles -> ISPs.",
     {
-      country: z.string().optional().describe("ISO 3166-1 alpha-2 (e.g., US)"),
-      region: z.string().optional(),
-      city: z.string().optional(),
+      title: "Proxy geo targets",
+      description:
+        "Cascading geo discovery for shared-proxy list targeting (create_proxy_list). No params -> countries; country=US -> regions; " +
+        "country=US + region=California -> cities; + city='Los Angeles' -> ISPs. Each row shows available nodes.",
+      inputSchema: {
+        country: z.string().optional().describe("ISO 3166-1 alpha-2 (e.g., US)"),
+        region: z.string().optional(),
+        city: z.string().optional(),
+      },
+      annotations: READ_ONLY,
     },
     getGeoHandler(http),
   );

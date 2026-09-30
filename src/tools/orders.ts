@@ -1,10 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { HttpClient } from "../client/http.js";
+import { HttpClient, HttpError, NetworkError } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
-import { Rental, Esim, Proxy, DedicatedNumber } from "../client/types.js";
+import { mapApiError } from "../client/errors.js";
+import { Rental, Esim, Proxy, DedicatedNumber, Verification } from "../client/types.js";
 import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { formatUsd } from "../utils/format.js";
+import { READ_ONLY } from "../utils/annotations.js";
 
 interface OrderRow {
   kind: "sms" | "esim" | "proxy" | "dedicated";
@@ -20,7 +22,7 @@ export const listOrdersHandler = (http: HttpClient) =>
     const limit = args.limit ?? 20;
     const warnings: string[] = [];
     const tasks: Promise<OrderRow[]>[] = [];
-    if (!args.kind || args.kind === "sms") tasks.push(fetchRentals(http));
+    if (!args.kind || args.kind === "sms") tasks.push(fetchRentals(http), fetchVerifications(http));
     if (!args.kind || args.kind === "esim") tasks.push(fetchEsims(http));
     if (!args.kind || args.kind === "proxy") tasks.push(fetchProxies(http));
     if (!args.kind || args.kind === "dedicated") tasks.push(fetchDedicated(http, warnings));
@@ -29,7 +31,8 @@ export const listOrdersHandler = (http: HttpClient) =>
     for (const r of settled) {
       if (r.status === "fulfilled") rows.push(...r.value);
       else {
-        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        // White-labeled copy for API errors; never raw parser output.
+        const msg = r.reason instanceof HttpError || r.reason instanceof NetworkError ? mapApiError(r.reason) : "unexpected response";
         warnings.push(`(partial: ${msg})`);
       }
     }
@@ -42,7 +45,10 @@ export const listOrdersHandler = (http: HttpClient) =>
       if (warnings.length > 0) {
         return toolError(`Could not load orders. ${warnings.join(" ")}`);
       }
-      return toolError("No orders found.");
+      return structuredOk(
+        args.kind ? `No ${args.kind} orders found.` : "No orders found.",
+        { orders: [] },
+      );
     }
     const text = [
       `${rows.length} order(s)${rows.length > limit ? ` (showing ${limit})` : ""}:`,
@@ -69,6 +75,21 @@ async function fetchRentals(http: HttpClient): Promise<OrderRow[]> {
     charged_price_cents: r.charged_price_cents,
     created_at: r.created_at,
     summary: `${r.service_name} ${r.phone_number} ${r.duration ?? ""}`,
+  }));
+}
+
+// Newest page of one-time verifications - the recovery path for a purchase
+// whose response was lost.
+async function fetchVerifications(http: HttpClient): Promise<OrderRow[]> {
+  const data = await callApi<unknown[]>(http, "GET", "/v1/verifications");
+  const items = z.array(Verification).parse(data);
+  return items.map((v) => ({
+    kind: "sms" as const,
+    id: v.id,
+    status: v.status,
+    charged_price_cents: v.charged_price_cents,
+    created_at: v.created_at,
+    summary: `${v.service_name} ${v.phone_number} verification`,
   }));
 }
 
@@ -116,12 +137,19 @@ async function fetchDedicated(http: HttpClient, warnings: string[]): Promise<Ord
 }
 
 export function registerOrdersTools(server: McpServer, http: HttpClient) {
-  server.tool(
+  server.registerTool(
     "list_orders",
-    "List the user's active and past orders across SMS rentals, dedicated numbers, eSIMs, and proxies. Note: ephemeral verifications (20-min single-SMS) are NOT listable - the rental id you got from rent_number is your handle to them.",
     {
-      kind: z.enum(["sms", "esim", "proxy", "dedicated"]).optional().describe("Filter by kind"),
-      limit: z.number().min(1).max(100).default(20),
+      title: "List orders",
+      description:
+        "List your most recent orders, newest first, across SMS verifications (ver_...) and long-term rentals (ren_...), dedicated numbers (ded_...), eSIMs (esim_...) and proxies (prx_...), with status and price. " +
+        "Reads the newest page of each kind (not a full history). Use it to find an order whose purchase result was lost before buying again; " +
+        "then use the matching get tool with its id for details.",
+      inputSchema: {
+        kind: z.enum(["sms", "esim", "proxy", "dedicated"]).optional().describe("Filter by kind (sms = verifications and long-term rentals)"),
+        limit: z.number().int().min(1).max(100).default(20),
+      },
+      annotations: READ_ONLY,
     },
     listOrdersHandler(http),
   );

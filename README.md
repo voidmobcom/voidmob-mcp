@@ -18,7 +18,7 @@ npx -y @voidmob/mcp
 ### Claude Code
 
 ```bash
-claude mcp add voidmob -- env VOIDMOB_API_KEY=vmk_live_... npx -y @voidmob/mcp
+claude mcp add voidmob -e VOIDMOB_API_KEY=vmk_live_... -- npx -y @voidmob/mcp
 ```
 
 ### Cursor
@@ -53,6 +53,72 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
+### VS Code
+
+Add to `.vscode/mcp.json` (VS Code prompts for the key once and stores it securely):
+
+```json
+{
+  "inputs": [
+    { "type": "promptString", "id": "voidmob-api-key", "description": "VoidMob API key (vmk_live_...)", "password": true }
+  ],
+  "servers": {
+    "voidmob": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@voidmob/mcp"],
+      "env": { "VOIDMOB_API_KEY": "${input:voidmob-api-key}" }
+    }
+  }
+}
+```
+
+### Windsurf
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "voidmob": {
+      "command": "npx",
+      "args": ["-y", "@voidmob/mcp"],
+      "env": { "VOIDMOB_API_KEY": "vmk_live_..." }
+    }
+  }
+}
+```
+
+### Codex CLI
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.voidmob]
+command = "npx"
+args = ["-y", "@voidmob/mcp"]
+env = { VOIDMOB_API_KEY = "vmk_live_..." }
+```
+
+### Grok Bot
+
+1. In your Bot's **Secrets**, add a secret named `VOIDMOB_API_KEY` with your key as the value.
+2. In chat, send: *Add a custom MCP server called voidmob that runs: npx -y @voidmob/mcp*
+
+Never paste the key itself into a chat.
+
+## How money works
+
+- **Prepaid balance.** Everything is paid from your USD balance, which you top up with crypto in the [dashboard](https://dashboard.voidmob.com/wallet). The MCP cannot add funds. The API key has no separate spend cap: your balance is the limit, so keep on it only what you are happy for an agent to spend.
+- **Quote, then buy.** Search tools show your live prices. Every buy, renewal and top-up debits the balance immediately. A buy tool re-reads the live price just before buying and charges at most that price, which can differ from an earlier search; if it moves again in that moment, nothing is charged and the tool says so. Every result shows what was charged.
+- **No double charges on retries.** Every purchase carries an idempotency key. If the connection drops, this MCP server retries once with the same key, which the API never charges twice.
+- **When a result is uncertain,** the tool says the purchase may have gone through. Check `list_orders`, the matching get tool or `get_account` before buying again.
+- **SMS verifications cost nothing if no SMS arrives.** A number stays open for up to 15 minutes and can receive several codes. If none arrives, the price is refunded automatically (status `cancelled`). Rare exception: services marked non-refundable end as `expired` without a refund. You can also cancel before any SMS arrives for a full refund; frequent cancellations can temporarily pause SMS purchasing.
+- **Long-term rentals** can be cancelled with a full refund within 60 minutes of purchase.
+- **Dedicated numbers** are billed monthly and cannot be cancelled; leave auto-renew off and the number simply expires at the end of the month.
+- **eSIMs** cannot be cancelled through the MCP once issued. Contact support if one was bought by mistake and never installed.
+- **Proxies** that cannot be provisioned are refunded automatically.
+
 ## Try without a key (sandbox)
 
 ```bash
@@ -68,7 +134,7 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 | `VOIDMOB_API_KEY` | Bearer key from the dashboard | Live mode |
 | `VOIDMOB_SANDBOX` | Set to `1` for mock-data mode | No |
 | `VOIDMOB_DEBUG` | Set to `1` to log requests to stderr | No |
-| `VOIDMOB_BASE_URL` | Override API host (advanced) | No |
+| `VOIDMOB_BASE_URL` | Override API host (advanced; must be `https://`, plain `http://` only for localhost) | No |
 
 ## Tools
 
@@ -85,11 +151,11 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 | Tool | Description |
 |---|---|
 | `search_sms_services` | List services with prices |
-| `rent_number` | Rent a US number (verification / long-term rental) |
-| `get_rental` | Read status and received messages |
-| `cancel_rental` | Cancel a verification or long-term rental |
-| `reuse_number` | Free or paid reuse of a completed verification |
-| `re_rent_rental` | Extend a long-term rental for another period |
+| `rent_number` | Rent a US number: one-time verification (15 min, refunded if no SMS) or long-term rental |
+| `get_rental` | Read status, the latest code and received messages |
+| `cancel_rental` | Cancel a verification (before any SMS) or long-term rental (within 60 min), with a full refund |
+| `reuse_number` | Free or paid reuse of an earlier verification's number |
+| `re_rent_rental` | Re-rent an expired long-term rental's number for another period |
 | `toggle_auto_renew` | Turn auto-renewal on or off (rentals and dedicated numbers) |
 
 ### Dedicated numbers (3)
@@ -106,7 +172,7 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 |---|---|
 | `search_esim_plans` | Find global data plans |
 | `purchase_esim` | Buy a plan |
-| `get_esim_status` | Status and data usage |
+| `get_esim_status` | Status, install details (LPA string) and data usage across all packages |
 | `topup_esim` | Browse and buy top-ups |
 | `get_esim_qr` | Fetch the activation QR as an inline image |
 
@@ -116,7 +182,7 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 |---|---|
 | `search_proxies` | List mobile (shared) and dedicated proxy plans, with dedicated stock |
 | `purchase_proxy` | Buy a mobile or dedicated proxy |
-| `get_proxy_status` | Status, usage, expiry, auto-renew and connection credentials |
+| `get_proxy_status` | Status, usage, expiry, auto-renew and ready-to-paste connection URLs |
 | `rotate_proxy_ip` | Rotate a dedicated proxy to a new IP |
 | `renew_proxy` | Extend expiry at the proxy's current renewal price |
 | `set_proxy_auto_renew` | Turn auto-renew on or off for a dedicated proxy |
@@ -131,7 +197,7 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 | Tool | Description |
 |---|---|
 | `get_geo` | Cascading country/region/city/ISP for targeting |
-| `list_orders` | Active SMS / dedicated number / eSIM / proxy orders |
+| `list_orders` | Recent SMS verifications and rentals, dedicated numbers, eSIMs and proxies |
 
 ## Example prompts
 

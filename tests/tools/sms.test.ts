@@ -35,9 +35,9 @@ describe("search_sms_services", () => {
     expect(res.structuredContent?.services).toHaveLength(2);
   });
 
-  it("filters by query substring on service name", async () => {
+  it("passes query server-side as q and still filters by name", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/services", {
+    http.expect("GET", "/v1/services?q=tele", {
       status: 200,
       headers: new Headers(),
       body: {
@@ -53,6 +53,28 @@ describe("search_sms_services", () => {
     const handler = searchSmsServicesHandler(http);
     const res = await handler({ query: "tele" });
     expect(res.structuredContent?.services).toHaveLength(1);
+  });
+
+  it("says when output is truncated and keeps structuredContent to the printed rows", async () => {
+    const http = createMockHttpClient();
+    const services = Array.from({ length: 120 }, (_, i) => ({ id: `svc_s${i}`, name: `Service ${i}`, quoted_price_cents: 100 }));
+    http.expect("GET", "/v1/services", { status: 200, headers: new Headers(), body: { success: true, data: { services } } });
+    const res = await searchSmsServicesHandler(http)({});
+    expect(res.isError).toBeFalsy();
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("Showing 50 of 120");
+    expect(t.text).toContain("query");
+    expect(res.structuredContent?.services).toHaveLength(50);
+    expect(res.structuredContent).toMatchObject({ total: 120, truncated: true });
+  });
+
+  it("no match is a normal empty result with a hint, not an error", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/services?q=nothing", { status: 200, headers: new Headers(), body: { success: true, data: { services: [] } } });
+    const res = await searchSmsServicesHandler(http)({ query: "nothing" });
+    expect(res.isError).toBeFalsy();
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("No SMS services match 'nothing'");
   });
 });
 
@@ -110,6 +132,46 @@ describe("get_rental", () => {
     });
     const res = await getRentalHandler(http)({ rental_id: "ver_abc" });
     expect(res.structuredContent?.verification).toMatchObject({ id: "ver_abc" });
+  });
+
+  it("a waiting verification explains the open window and the automatic no-SMS refund", async () => {
+    const http = createMockHttpClient();
+    const expires = new Date(Date.now() + 12 * 60_000).toISOString();
+    http.expect("GET", "/v1/verifications/ver_abc", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { verification: { ...verFixture(), expires_at: expires } } },
+    });
+    const res = await getRentalHandler(http)({ rental_id: "ver_abc" });
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toMatch(/1[12]m left/);
+    expect(t.text).toContain("refunded automatically");
+    expect(t.text).toContain("cancelled");
+  });
+
+  it("a verification with a code shows the latest code and that more can arrive", async () => {
+    const http = createMockHttpClient();
+    const expires = new Date(Date.now() + 5 * 60_000).toISOString();
+    http.expect("GET", "/v1/verifications/ver_abc", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { verification: { ...verFixture(), status: "code_received", can_cancel: false, code: "492183", code_received_at: "2026-05-21T18:42:00Z", expires_at: expires } } },
+    });
+    const res = await getRentalHandler(http)({ rental_id: "ver_abc" });
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("Latest code:  492183");
+    expect(t.text).toContain("More codes can arrive");
+  });
+
+  it("encodes the id as a single path segment", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/verifications/ver_a%2F..%2Fb", {
+      status: 404,
+      headers: new Headers(),
+      body: { success: false, error: { code: "VERIFICATION_NOT_FOUND", message: "Verification not found.", request_id: "req_enc" } },
+    });
+    await getRentalHandler(http)({ rental_id: "ver_a/../b" });
+    expect(http.history[0].path).toBe("/v1/verifications/ver_a%2F..%2Fb");
   });
 
   it("routes ren_ ID to /v1/rentals/:id", async () => {
@@ -288,6 +350,17 @@ describe("cancel_rental", () => {
     expect(res.isError).toBeFalsy();
     expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
   });
+
+  it("ren_ cancel reports the full refund of the rental price", async () => {
+    const http = createMockHttpClient();
+    http.expect("DELETE", "/v1/rentals/ren_xyz", {
+      status: 200, headers: new Headers(),
+      body: { success: true, data: { id: "ren_xyz", status: "cancelled", phone_number: "x", service_id: "x", service_name: "x", country: "us", duration: "7D", rental_type: "rental", charged_price_cents: 900, auto_renew: false, next_renewal_price_cents: 900, re_rent_available: false, re_rent_price_cents: null, re_rent_blocked_at: null, paid_until: "x", expires_at: "x", created_at: "x", can_cancel: false, messages: [] } },
+    });
+    const res = await cancelRentalHandler(http)({ rental_id: "ren_xyz" });
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toBe("Rental ren_xyz cancelled. Refunded $9.00.");
+  });
 });
 
 describe("reuse_number, re_rent_rental, toggle_auto_renew", () => {
@@ -305,11 +378,15 @@ describe("reuse_number, re_rent_rental, toggle_auto_renew", () => {
     expect(res.isError).toBeFalsy();
   });
 
-  it("reuse_number paid path → POST /v1/verifications/:id/reuse/paid", async () => {
+  it("reuse_number paid path → reads the price, then POST /reuse/paid acknowledging it (accept_charge_cents)", async () => {
     const http = createMockHttpClient();
+    http.expect("GET", "/v1/verifications/ver_abc", { status: 200, headers: new Headers(), body: verResp("ver_abc") });
     http.expect("POST", "/v1/verifications/ver_abc/reuse/paid", { status: 200, headers: new Headers(), body: verResp("ver_abc") });
-    await reuseNumberHandler(http)({ rental_id: "ver_abc", paid: true });
-    expect(http.history[0].path).toBe("/v1/verifications/ver_abc/reuse/paid");
+    const res = await reuseNumberHandler(http)({ rental_id: "ver_abc", paid: true });
+    expect(res.isError).toBeFalsy();
+    expect(http.history[1].path).toBe("/v1/verifications/ver_abc/reuse/paid");
+    expect(http.history[1].body).toEqual({ accept_charge_cents: 50 });
+    expect(http.history[1].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("reuse_number rejects ren_ prefix", async () => {
@@ -335,11 +412,11 @@ describe("reuse_number, re_rent_rental, toggle_auto_renew", () => {
     expect(http.history).toHaveLength(0);
   });
 
-  it("toggle_auto_renew → POST /v1/rentals/:id/auto_renew", async () => {
+  it("toggle_auto_renew → POST /v1/rentals/:id/auto_renew with { enabled } (the API's field)", async () => {
     const http = createMockHttpClient();
     http.expect("POST", "/v1/rentals/ren_xyz/auto_renew", { status: 200, headers: new Headers(), body: rntResp("ren_xyz", true) });
     await toggleAutoRenewHandler(http)({ rental_id: "ren_xyz", auto_renew: true });
-    expect(http.history[0].body).toMatchObject({ auto_renew: true });
+    expect(http.history[0].body).toEqual({ enabled: true });
   });
 
   it("ded_ id -> POST /v1/dedicated/numbers/:id/auto_renew with { enabled }", async () => {

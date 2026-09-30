@@ -3,14 +3,17 @@ import { z } from "zod";
 import { HttpClient, HttpError, NetworkError } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
+import { path } from "../client/path.js";
 import { Proxy, ProxyPlan, ProxyList, type ProxyPlan as ProxyPlanT } from "../client/types.js";
 import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { formatUsd } from "../utils/format.js";
+import { READ_ONLY, SPENDS } from "../utils/annotations.js";
+import { ProxyId, ProxyListId, ProxyPlanId } from "../constants/ids.js";
 
 /** One plan with the caller's live quote; null when the plan does not exist (or is not sold via the API). */
 async function fetchProxyPlan(http: HttpClient, planId: string): Promise<ProxyPlanT | null> {
   try {
-    const data = await callApi<{ plan: unknown }>(http, "GET", `/v1/proxy_plans/${encodeURIComponent(planId)}`);
+    const data = await callApi<{ plan: unknown }>(http, "GET", path`/v1/proxy_plans/${planId}`);
     return ProxyPlan.parse(data.plan);
   } catch (e) {
     if (e instanceof HttpError && e.status === 404) return null;
@@ -19,6 +22,10 @@ async function fetchProxyPlan(http: HttpClient, planId: string): Promise<ProxyPl
 }
 
 const isDedicated = (type: string | undefined): boolean => type === "dedicated_standard" || type === "dedicated_premium";
+
+/** Ready-to-paste proxy URL; credentials are percent-encoded so any character survives. */
+const proxyUrl = (scheme: "http" | "socks5", username: string, password: string, host: string, port: number): string =>
+  `${scheme}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
 
 function planLine(p: ProxyPlanT): string {
   const where = p.country_name ?? p.country ?? "global";
@@ -50,11 +57,19 @@ export const searchProxiesHandler = (http: HttpClient) =>
     const typed = args.type !== undefined;
     if (typed && args.available_only) q.set("available", "true");
     if (typed && args.cursor) q.set("cursor", args.cursor);
-    const path = `/v1/proxy_plans${q.toString() ? `?${q}` : ""}`;
-    const data = await callApi<{ plans: unknown[]; next_cursor?: string | null }>(http, "GET", path);
+    const data = await callApi<{ plans: unknown[]; next_cursor?: string | null }>(
+      http,
+      "GET",
+      `/v1/proxy_plans${q.toString() ? `?${q}` : ""}`,
+    );
     const plans = z.array(ProxyPlan).parse(data.plans);
     const nextCursor = data.next_cursor ?? null;
-    if (plans.length === 0) return toolError("No proxy plans matched your filters.");
+    if (plans.length === 0) {
+      return structuredOk(
+        "No proxy plans matched your filters. Try another country, a lower min_data_gb, or type='all'.",
+        { proxy_plans: [], next_cursor: nextCursor },
+      );
+    }
     const text = [
       `Found ${plans.length} proxy plan(s):`,
       ``,
@@ -110,8 +125,8 @@ export const getProxyStatusHandler = (http: HttpClient) =>
     // once the type is known, so a dedicated proxy's (expected) usage 404 is
     // neither logged nor surfaced.
     const [coreRaw, usageSettled] = await Promise.all([
-      callApi<{ proxy: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}`),
-      callApi<{ usage: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}/usage`).then(
+      callApi<{ proxy: unknown }>(http, "GET", path`/v1/proxies/${args.proxy_id}`),
+      callApi<{ usage: unknown }>(http, "GET", path`/v1/proxies/${args.proxy_id}/usage`).then(
         (value) => ({ value, error: null }),
         (error: unknown) => ({ value: null, error }),
       ),
@@ -133,7 +148,7 @@ export const getProxyStatusHandler = (http: HttpClient) =>
     let gateway = core.gateway;
     if (!gateway && core.status === "active" && !dedicated) {
       const slot = Math.floor(Date.now() / 600_000);
-      const flexRaw = await callApi<{ proxy: unknown }>(http, "POST", `/v1/proxies/${args.proxy_id}/flex_credentials`, {
+      const flexRaw = await callApi<{ proxy: unknown }>(http, "POST", path`/v1/proxies/${args.proxy_id}/flex_credentials`, {
         idempotencyKey: `flex-${args.proxy_id}-${slot}`,
       }).catch(degradeToNull);
       gateway = flexRaw ? Proxy.parse(flexRaw.proxy).gateway : null;
@@ -158,18 +173,33 @@ export const getProxyStatusHandler = (http: HttpClient) =>
     if (proxy.next_renewal_price_cents != null) lines.push(`  Renewal price: ${formatUsd(proxy.next_renewal_price_cents)}`);
     if (proxy.rotation_url) lines.push(`  Rotation URL:  ${proxy.rotation_url}`);
     if (proxy.gateway) {
+      const gw = proxy.gateway;
       lines.push(
         ``,
         `  Gateway:`,
-        `    Host:      ${proxy.gateway.host}`,
-        `    Port:      ${proxy.gateway.port}`,
-        `    Protocol:  ${proxy.gateway.protocol}`,
+        `    Host:      ${gw.host}`,
+        `    Port:      ${gw.port}`,
+        `    Protocol:  ${gw.protocol}`,
       );
-      if (proxy.gateway.socks_port != null) lines.push(`    SOCKS5:    ${proxy.gateway.socks_port}`);
+      if (gw.socks_port != null) lines.push(`    SOCKS5:    ${gw.socks_port}`);
       lines.push(
-        `    User:      ${proxy.gateway.username}`,
-        `    Password:  ${proxy.gateway.password}`,
+        `    User:      ${gw.username}`,
+        `    Password:  ${gw.password}`,
+        `    HTTP URL:  ${proxyUrl("http", gw.username, gw.password, gw.host, gw.port)}`,
       );
+      if (gw.socks_port != null) {
+        lines.push(`    SOCKS5 URL: ${proxyUrl("socks5", gw.username, gw.password, gw.host, gw.socks_port)}`);
+      }
+      if (!dedicated) {
+        // Flex gateway: geo, sticky session and rotation ride on the username.
+        lines.push(
+          ``,
+          `  Per-request targeting (append to the username):`,
+          ...(gw.username_geo_hint ? [`    ${gw.username_geo_hint}`] : []),
+          `    US exit, new IP per request:  ${proxyUrl("http", `${gw.username}_c_US`, gw.password, gw.host, gw.port)}`,
+          `    Same US IP for 10 minutes:    ${proxyUrl("http", `${gw.username}_c_US_s_worker1_ttl_10m`, gw.password, gw.host, gw.port)}`,
+        );
+      }
     } else if (proxy.type === "dedicated_premium") {
       lines.push(``, `  Gateway:       (Premium proxy credentials are shown in the dashboard)`);
     } else {
@@ -186,11 +216,12 @@ export const getProxyStatusHandler = (http: HttpClient) =>
 
 export const rotateProxyIpHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
+    // No Idempotency-Key: the API does not honor one here (every call must
+    // rotate), so this write is also never retried automatically.
     const out = await callApi<{ proxy_id: string; rotated_at: string; current_ip: string | null }>(
       http,
       "POST",
-      `/v1/proxies/${args.proxy_id}/rotate_ip`,
-      { idempotencyKey: newIdempotencyKey() },
+      path`/v1/proxies/${args.proxy_id}/rotate_ip`,
     );
     return structuredOk(
       `Rotated ${out.proxy_id} at ${out.rotated_at}. New IP: ${out.current_ip ?? "(unknown)"}`,
@@ -205,7 +236,7 @@ export const renewProxyHandler = (http: HttpClient) =>
     const coreRaw = await callApi<{ proxy: unknown }>(
       http,
       "GET",
-      `/v1/proxies/${args.proxy_id}`,
+      path`/v1/proxies/${args.proxy_id}`,
     );
     const proxy = Proxy.parse(coreRaw.proxy);
     // The API quotes the exact renewal charge (a dedicated proxy renews at its
@@ -223,7 +254,7 @@ export const renewProxyHandler = (http: HttpClient) =>
     const out = await callApi<{ proxy: unknown }>(
       http,
       "POST",
-      `/v1/proxies/${args.proxy_id}/renew`,
+      path`/v1/proxies/${args.proxy_id}/renew`,
       {
         body: { max_price_cents: quote },
         idempotencyKey: newIdempotencyKey(),
@@ -244,7 +275,7 @@ export const setProxyAutoRenewHandler = (http: HttpClient) =>
     const out = await callApi<{ proxy: unknown }>(
       http,
       "POST",
-      `/v1/proxies/${args.proxy_id}/auto_renew`,
+      path`/v1/proxies/${args.proxy_id}/auto_renew`,
       { body: { enabled: args.enabled } },
     );
     const proxy = Proxy.parse(out.proxy);
@@ -264,7 +295,7 @@ export const topupProxyHandler = (http: HttpClient) =>
     const coreRaw = await callApi<{ proxy: unknown }>(
       http,
       "GET",
-      `/v1/proxies/${args.proxy_id}`,
+      path`/v1/proxies/${args.proxy_id}`,
     );
     const proxy = Proxy.parse(coreRaw.proxy);
     if (isDedicated(proxy.type)) {
@@ -282,7 +313,7 @@ export const topupProxyHandler = (http: HttpClient) =>
     const out = await callApi<{ proxy: unknown }>(
       http,
       "POST",
-      `/v1/proxies/${args.proxy_id}/topup`,
+      path`/v1/proxies/${args.proxy_id}/topup`,
       {
         body: { additional_gb: args.additional_gb, max_price_cents: maxPriceCents },
         idempotencyKey: newIdempotencyKey(),
@@ -305,7 +336,7 @@ export const regenerateProxyPasswordHandler = (http: HttpClient) =>
     const out = await callApi<{ proxy: unknown }>(
       http,
       "POST",
-      `/v1/proxies/${args.proxy_id}/regenerate_password`,
+      path`/v1/proxies/${args.proxy_id}/regenerate_password`,
       { idempotencyKey: newIdempotencyKey() },
     );
     const proxy = Proxy.parse(out.proxy);
@@ -317,10 +348,12 @@ export const regenerateProxyPasswordHandler = (http: HttpClient) =>
 
 export const listProxyListsHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
-    const coreRaw = await callApi<{ proxy: unknown }>(http, "GET", `/v1/proxies/${args.proxy_id}`);
+    const coreRaw = await callApi<{ proxy: unknown }>(http, "GET", path`/v1/proxies/${args.proxy_id}`);
     const proxy = Proxy.parse(coreRaw.proxy);
     const lists = proxy.lists;
-    if (lists.length === 0) return toolError(`No proxy lists on ${args.proxy_id}.`);
+    if (lists.length === 0) {
+      return structuredOk(`No proxy lists on ${args.proxy_id} yet. Create one with create_proxy_list.`, { lists: [] });
+    }
     const text = [
       `Lists for ${args.proxy_id}:`,
       ``,
@@ -342,6 +375,17 @@ export const listProxyListsHandler = (http: HttpClient) =>
 
 // ── create_proxy_list ───────────────────────────────────────────────────────
 
+const LIST_FORMATS = [
+  "login_pass_host_port",
+  "host_port_login_pass",
+  "http_url",
+  "socks5_url",
+  "host_port",
+  "login_pass_at_host_port",
+  "json",
+] as const;
+type ListFormat = (typeof LIST_FORMATS)[number];
+
 export const createProxyListHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: {
     proxy_id: string;
@@ -354,7 +398,7 @@ export const createProxyListHandler = (http: HttpClient) =>
     zip?: string;
     rotation_period_seconds?: number;
     rotation_mode?: "instant" | "delayed_5s" | "no_rotation_on_fail";
-    format?: string;
+    format?: ListFormat;
   }): Promise<ToolResult> => {
     // Geo: country (single) XOR countries (2-30). region/city/isp/zip only
     // valid with a single country. Mirror the API's validation locally to
@@ -385,15 +429,26 @@ export const createProxyListHandler = (http: HttpClient) =>
     } else {
       body.countries = args.countries;
     }
-    const out = await callApi<{ list: unknown }>(http, "POST", `/v1/proxies/${args.proxy_id}/lists`, {
+    const out = await callApi<{ list: unknown }>(http, "POST", path`/v1/proxies/${args.proxy_id}/lists`, {
       body,
       idempotencyKey: newIdempotencyKey(),
     });
     const list = ProxyList.parse(out.list);
-    const credLines = list.credentials
-      ? [`  Username: ${list.credentials.username}`, `  Password: ${list.credentials.password}`]
+    const c = list.credentials;
+    const credLines = c
+      ? [
+          `  Username: ${c.username}`,
+          `  Password: ${c.password}`,
+          `  HTTP URL:   ${proxyUrl("http", c.username, c.password, c.host, c.port)}`,
+          `  SOCKS5 URL: ${proxyUrl("socks5", c.username, c.password, c.host, c.port)}`,
+        ]
       : [`  Credentials: (provisioning - active within 1-2 minutes)`];
-    const text = [`Created list ${list.id}.`, ...credLines, ...list.entries.map((e) => `  ${e}`)].join("\n");
+    const text = [
+      `Created list ${list.id}.`,
+      ...credLines,
+      ...list.entries.map((e) => `  ${e}`),
+      ...(list.activation_note ? [`  ${list.activation_note}`] : []),
+    ].join("\n");
     return structuredOk(text, { list });
   });
 
@@ -401,7 +456,7 @@ export const createProxyListHandler = (http: HttpClient) =>
 
 export const deleteProxyListHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { proxy_id: string; list_id: string }): Promise<ToolResult> => {
-    await callApi<unknown>(http, "DELETE", `/v1/proxies/${args.proxy_id}/lists/${args.list_id}`, {
+    await callApi<unknown>(http, "DELETE", path`/v1/proxies/${args.proxy_id}/lists/${args.list_id}`, {
       idempotencyKey: newIdempotencyKey(),
     });
     return structuredOk(`List ${args.list_id} deleted.`, { proxy_id: args.proxy_id, list_id: args.list_id });
@@ -410,106 +465,177 @@ export const deleteProxyListHandler = (http: HttpClient) =>
 // ── registration ────────────────────────────────────────────────────────────
 
 export function registerProxyTools(server: McpServer, http: HttpClient) {
-  server.tool(
+  server.registerTool(
     "search_proxies",
-    "Search proxy plans. Shared plans are rotating mobile IPs billed by data; region/city/ISP targeting is set per list after purchase via create_proxy_list. Dedicated plans are one mobile modem of your own in a fixed country, carrier and region, with unmetered data and on-demand IP rotation. Each result includes the plan id, location, duration, price and (dedicated) whether it is in stock. Without type, only shared plans are returned.",
     {
-      type: z.enum(["shared", "dedicated", "all"]).optional().describe("Plan kind. Omit for shared plans only."),
-      country: z.string().optional().describe("ISO-3166-1 alpha-2 (e.g. 'US'). Many shared plans are worldwide and match any country."),
-      min_data_gb: z.number().optional().describe("Minimum included data allowance in GB (excludes dedicated plans)"),
-      available_only: z.boolean().optional().describe("With type set: only plans in stock right now"),
-      cursor: z.string().optional().describe("With type set: the cursor from a previous search_proxies result, to fetch more plans"),
+      title: "Search proxy plans",
+      description:
+        "Search mobile (4G/5G) proxy plans. Shared plans are rotating mobile IPs billed by data; geo (country/region/city/ISP), sticky sessions and rotation " +
+        "are chosen after purchase per request or per list. Dedicated plans are one mobile modem of your own in a fixed country, carrier and region, " +
+        "with unmetered data and on-demand IP rotation. Each result shows the plan id, location, duration, price and (dedicated) stock. " +
+        "Without type, only shared plans are returned. Next: purchase_proxy with the plan_ id.",
+      inputSchema: {
+        type: z.enum(["shared", "dedicated", "all"]).optional().describe("Plan kind. Omit for shared plans only."),
+        country: z.string().optional().describe("ISO-3166-1 alpha-2, any case (e.g. 'US'). Many shared plans are worldwide and match any country."),
+        min_data_gb: z.number().min(0).optional().describe("Minimum included data allowance in GB (excludes dedicated plans)"),
+        available_only: z.boolean().optional().describe("With type set: only plans in stock right now"),
+        cursor: z.string().optional().describe("With type set: the cursor from a previous search_proxies result, to fetch more plans"),
+      },
+      annotations: READ_ONLY,
     },
     searchProxiesHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "purchase_proxy",
-    "Purchase a proxy plan from search_proxies. Quote-then-commit: the tool fetches your live price and ties max_price_cents to it. A shared proxy becomes active in 1-2 minutes; a dedicated proxy is often active immediately, otherwise within about 5 minutes (refunded automatically if it cannot be provisioned). Poll get_proxy_status until status='active'.",
-    { plan_id: z.string() },
+    {
+      title: "Buy a proxy",
+      description:
+        "Buy a proxy plan from search_proxies, charged to your balance immediately. It charges your live price at that moment (re-read just before buying, so it can differ from an earlier search); " +
+        "show the user the price first. A shared proxy becomes active in 1-2 minutes; a dedicated proxy is often active immediately, otherwise within about 5 minutes. " +
+        "If it cannot be provisioned, the charge is refunded automatically. Poll get_proxy_status until status='active' for the connection details.",
+      inputSchema: { plan_id: ProxyPlanId.describe("plan_... id from search_proxies") },
+      annotations: SPENDS,
+    },
     purchaseProxyHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "get_proxy_status",
-    "Read a proxy's status, usage, expiry, auto-renew state and connection credentials in one call. Dedicated proxies also show their location, carrier and SOCKS5 port.",
-    { proxy_id: z.string() },
+    {
+      title: "Proxy status and connection details",
+      description:
+        "Read a proxy's status, usage, expiry, auto-renew state and ready-to-paste connection URLs. " +
+        "Shared proxies: the first call on an active proxy sets up its gateway login (free); country, sticky session and rotation are chosen per request " +
+        "by appending parameters to the username - the output shows the syntax and examples. Dedicated proxies also show their location, carrier and SOCKS5 URL.",
+      inputSchema: { proxy_id: ProxyId.describe("prx_... id from purchase_proxy or list_orders") },
+      // Not strictly read-only: for an active shared proxy without a gateway it
+      // creates the gateway login once (get-or-create, free, idempotent). Hinted
+      // read-only so hosts can poll it without a confirmation prompt each time.
+      annotations: READ_ONLY,
+    },
     getProxyStatusHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "rotate_proxy_ip",
-    "Rotate a dedicated proxy to a new IP. Shared proxies rotate per-request through their lists - use create_proxy_list / list_proxy_lists instead.",
-    { proxy_id: z.string() },
+    {
+      title: "Rotate dedicated proxy IP",
+      description:
+        "Force a new exit IP on a dedicated proxy; open connections drop. 60-second cooldown per proxy. " +
+        "Shared proxies rotate per request instead (list settings or gateway username parameters).",
+      inputSchema: { proxy_id: ProxyId.describe("prx_... id of a dedicated proxy") },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    },
     rotateProxyIpHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "renew_proxy",
-    "Extend a proxy's expiry by one more period of its plan (a shared proxy also gets its plan's GB added). Quote-then-commit: charges exactly the proxy's current renewal price. A dedicated proxy must still be active.",
-    { proxy_id: z.string() },
+    {
+      title: "Renew a proxy",
+      description:
+        "Extend a proxy by one more period of its plan, charged to your balance at its current renewal price (next_renewal_price_cents in get_proxy_status); " +
+        "a shared proxy also gets its plan's GB added. A dedicated proxy must still be active; a shared one can be renewed until 7 days after it expires.",
+      inputSchema: { proxy_id: ProxyId.describe("prx_... id") },
+      annotations: SPENDS,
+    },
     renewProxyHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "set_proxy_auto_renew",
-    "Turn auto-renew on or off for a dedicated proxy. With it on, the proxy renews itself about 12 hours before expiry, charged to your balance at its renewal price.",
     {
-      proxy_id: z.string(),
-      enabled: z.boolean(),
+      title: "Set proxy auto-renew",
+      description:
+        "Turn auto-renew on or off for a Standard dedicated proxy. With it on, the proxy renews itself about 12 hours before expiry, charged to your balance at its renewal price.",
+      inputSchema: {
+        proxy_id: ProxyId.describe("prx_... id of a dedicated proxy"),
+        enabled: z.boolean(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     setProxyAutoRenewHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "topup_proxy",
-    "Add more data to a shared proxy (dedicated proxies are unmetered). Quote-then-commit: derives per-GB price from the proxy's original plan and ties max_price_cents to (per_gb * additional_gb).",
     {
-      proxy_id: z.string(),
-      additional_gb: z.number().int().positive(),
+      title: "Add data to a shared proxy",
+      description:
+        "Add GB to a shared proxy (dedicated proxies are unmetered), charged to your balance immediately at the plan's per-GB price; the tool caps the charge at that prorated amount. " +
+        "Also re-activates a proxy that ran out of data or expired less than 7 days ago. Confirm the amount with the user first.",
+      inputSchema: {
+        proxy_id: ProxyId.describe("prx_... id of a shared proxy"),
+        additional_gb: z.number().int().positive().max(1000),
+      },
+      annotations: SPENDS,
     },
     topupProxyHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "regenerate_proxy_password",
-    "Rotate the main proxy gateway password. Returns the new credentials.",
-    { proxy_id: z.string() },
+    {
+      title: "Reset proxy gateway password",
+      description:
+        "Rotate a shared proxy's gateway password (the gateway shown by get_proxy_status). The old password stops working immediately - update every client using it. " +
+        "Lists keep their own credentials.",
+      inputSchema: { proxy_id: ProxyId.describe("prx_... id of a shared proxy") },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    },
     regenerateProxyPasswordHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "list_proxy_lists",
-    "List proxy lists for a shared proxy (geo-targeted sub-pools that share the proxy's bandwidth).",
-    { proxy_id: z.string() },
+    {
+      title: "List proxy lists",
+      description:
+        "List the proxy lists on a shared proxy: geo-targeted sub-pools, each with its own login and rotation settings, all sharing the proxy's data.",
+      inputSchema: { proxy_id: ProxyId.describe("prx_... id of a shared proxy") },
+      annotations: READ_ONLY,
+    },
     listProxyListsHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "create_proxy_list",
-    "Create a new geo-targeted proxy list on a shared proxy. Provide either a single country (with optional region/city/isp/zip subfilters) or a countries array (2-30, mutually exclusive with the subfilters). To edit an existing list, delete it and create a new one.",
     {
-      proxy_id: z.string(),
-      name: z.string(),
-      country: z.string().optional().describe("ISO-3166-1 alpha-2, lowercased. Mutually exclusive with countries."),
-      countries: z.array(z.string()).optional().describe("2-30 ISO-3166-1 alpha-2 codes. Mutually exclusive with country/subfilters."),
-      region: z.string().optional().describe("Only valid with a single country."),
-      city: z.string().optional().describe("Only valid with a single country."),
-      isp: z.string().optional().describe("Only valid with a single country."),
-      zip: z.string().optional().describe("Only valid with a single country."),
-      rotation_period_seconds: z.number().int().default(0).describe("0=per-request, -1=sticky, N=seconds (max 86400)"),
-      rotation_mode: z.enum(["instant", "delayed_5s", "no_rotation_on_fail"]).default("instant"),
-      format: z.string().default("login_pass_host_port").describe("Output format for entries[] (e.g. login_pass_host_port, http_url, socks5_url)"),
+      title: "Create proxy list",
+      description:
+        "Create a geo-targeted list with its own login on an active shared proxy (up to 100 lists, all sharing the proxy's data). " +
+        "Provide either a single country (optional region/city/isp/zip, see get_geo) or a countries array (2-30, no subfilters). " +
+        "Returns ready-to-paste http:// and socks5:// URLs; entries are always login:pass@host:port. " +
+        "This server has no edit tool: to change a list here, delete it and create a new one.",
+      inputSchema: {
+        proxy_id: ProxyId.describe("prx_... id of an active shared proxy"),
+        name: z.string().min(1).max(60),
+        country: z.string().optional().describe("ISO-3166-1 alpha-2, any case. Mutually exclusive with countries."),
+        countries: z.array(z.string()).optional().describe("2-30 ISO-3166-1 alpha-2 codes. Mutually exclusive with country/subfilters."),
+        region: z.string().optional().describe("Only valid with a single country."),
+        city: z.string().optional().describe("Only valid with a single country."),
+        isp: z.string().optional().describe("Only valid with a single country."),
+        zip: z.string().optional().describe("Only valid with a single country."),
+        rotation_period_seconds: z.number().int().min(-1).max(86400).default(0).describe("0=new IP per request, -1=sticky, N=keep the IP for N seconds (max 86400)"),
+        rotation_mode: z.enum(["instant", "delayed_5s", "no_rotation_on_fail"]).default("instant").describe("What happens when the current node fails"),
+        format: z.enum(LIST_FORMATS).default("login_pass_host_port").describe("Saved export-format preference for the dashboard. Does not change entries in the response."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     createProxyListHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "delete_proxy_list",
-    "Delete a proxy list. The list's credentials stop working immediately.",
     {
-      proxy_id: z.string(),
-      list_id: z.string(),
+      title: "Delete proxy list",
+      description: "Delete a proxy list. The list's credentials stop working immediately.",
+      inputSchema: {
+        proxy_id: ProxyId.describe("prx_... id"),
+        list_id: ProxyListId.describe("list_... id from list_proxy_lists"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     deleteProxyListHandler(http),
   );
