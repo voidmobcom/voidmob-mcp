@@ -131,6 +131,8 @@ Boots in-memory mocks with a $500 play-money balance. Every tool works against f
 
 For any agent with a shell and curl, MCP or not (Claude Code, Codex, Cursor, OpenClaw, Hermes and other Agent Skills clients), [`skills/voidmob`](skills/voidmob) is an [Agent Skills](https://agentskills.io) `SKILL.md` that teaches the same flows over the REST API: balance checks, quote-then-confirm purchases, idempotent retries, SMS codes, dedicated numbers, proxies and eSIMs. It is plain Markdown with no scripts. It reads the key from `VOIDMOB_API_KEY`; set that in your agent's environment or secret store, never in the skill files.
 
+The quickest way: tell your agent *Read https://voidmob.com/skill.md and follow it.*
+
 ```bash
 # skills.sh CLI (Claude Code, Codex, Cursor, OpenClaw, Hermes and more)
 npx skills add voidmobcom/voidmob-mcp --skill voidmob
