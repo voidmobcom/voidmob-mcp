@@ -127,6 +127,23 @@ VOIDMOB_SANDBOX=1 npx -y @voidmob/mcp
 
 Boots in-memory mocks with a $500 play-money balance. Every tool works against fake data. State resets on restart.
 
+## Agent skill
+
+For any agent with a shell and curl, MCP or not (Claude Code, Codex, Cursor, OpenClaw, Hermes and other Agent Skills clients), [`skills/voidmob`](skills/voidmob) is an [Agent Skills](https://agentskills.io) `SKILL.md` that teaches the same flows over the REST API: balance checks, quote-then-confirm purchases, idempotent retries, SMS codes, dedicated numbers, proxies and eSIMs. It is plain Markdown with no scripts. It reads the key from `VOIDMOB_API_KEY`; set that in your agent's environment or secret store, never in the skill files.
+
+```bash
+# skills.sh CLI (Claude Code, Codex, Cursor, OpenClaw, Hermes and more)
+npx skills add voidmobcom/voidmob-mcp --skill voidmob
+# or from voidmob.com
+npx skills add https://voidmob.com --skill voidmob
+
+# Hermes Agent
+hermes skills install voidmobcom/voidmob-mcp/skills/voidmob
+
+# OpenClaw (ClawHub)
+openclaw skills install @voidmob/voidmob
+```
+
 ## Configuration
 
 | Env var | Purpose | Required |
