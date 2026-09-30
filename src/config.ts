@@ -15,7 +15,23 @@ export interface Config {
 const DEFAULT_BASE_URL = "https://dashboard.voidmob.com/api";
 const SETUP_URL = "https://dashboard.voidmob.com/developers/api-keys";
 
-const KEY_RE = /^vmk_(live|test)_[A-Za-z0-9]{32}$/;
+const KEY_RE = /^vmk_live_[A-Za-z0-9]{32}$/;
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
+
+// The API key is sent to this URL, so it must be https (plain http only for a
+// local dev server).
+function validateBaseUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new ConfigError(`VOIDMOB_BASE_URL is not a valid URL: ${raw}`);
+  }
+  if (url.protocol === "https:" || (url.protocol === "http:" && LOCAL_HOSTS.has(url.hostname))) return raw;
+  throw new ConfigError(
+    `VOIDMOB_BASE_URL must use https:// (plain http:// is allowed only for localhost or 127.0.0.1). Got: ${raw}`,
+  );
+}
 
 export function parseEnv(env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env): Config {
   const sandbox = env.VOIDMOB_SANDBOX === "1";
@@ -36,10 +52,10 @@ export function parseEnv(env: NodeJS.ProcessEnv | Record<string, string | undefi
 
   if (!KEY_RE.test(rawKey)) {
     throw new ConfigError(
-      `VOIDMOB_API_KEY format is invalid. Expected vmk_live_ or vmk_test_ followed by 32 alphanumeric characters.\n` +
+      `VOIDMOB_API_KEY format is invalid. Expected vmk_live_ followed by 32 alphanumeric characters.\n` +
       `Generate a key at ${SETUP_URL}`,
     );
   }
 
-  return { sandbox: false, apiKey: rawKey, baseUrl, debug };
+  return { sandbox: false, apiKey: rawKey, baseUrl: validateBaseUrl(baseUrl), debug };
 }

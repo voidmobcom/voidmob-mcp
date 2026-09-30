@@ -23,7 +23,7 @@ describe("get_account", () => {
     });
 
     const handler = getAccountHandler(http);
-    const res = await handler();
+    const res = await handler({});
     expect(res.isError).toBeFalsy();
     const textBlock = res.content[0];
     if (textBlock.type !== "text") throw new Error("expected text block");
@@ -47,7 +47,7 @@ describe("get_account", () => {
       headers: new Headers(),
     });
     const handler = getAccountHandler(http);
-    const res = await handler();
+    const res = await handler({});
     expect(res.isError).toBe(true);
     const textBlock = res.content[0];
     if (textBlock.type !== "text") throw new Error("expected text block");

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { HttpClient } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
+import { path } from "../client/path.js";
 import {
   Verification,
   VerificationCancelResult,
@@ -13,6 +14,7 @@ import {
 } from "../client/types.js";
 import { structuredOk, toolError, wrapToolErrors, renderMessages, type ToolResult } from "../utils/render.js";
 import { formatUsd, formatTimeRemaining } from "../utils/format.js";
+import { READ_ONLY, SPENDS } from "../utils/annotations.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
 import {
   VER_PREFIX,
@@ -23,29 +25,51 @@ import {
   isDedicatedId,
   INVALID_RENTAL_ID,
 } from "../constants/rental-id.js";
+import {
+  VerificationOrRentalId,
+  VerificationId,
+  RentalId,
+  RentalOrDedicatedId,
+  ServiceId,
+} from "../constants/ids.js";
+
+// Rows printed by search_sms_services; structuredContent carries the same rows.
+const MAX_SERVICE_ROWS = 50;
 
 // ── search_sms_services ─────────────────────────────────────────────────────
 
 export const searchSmsServicesHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { query?: string }): Promise<ToolResult> => {
-    const raw = await callApi<unknown>(http, "GET", "/v1/services");
+    const query = args.query?.trim();
+    const raw = await callApi<unknown>(http, "GET", query ? `/v1/services?${new URLSearchParams({ q: query })}` : "/v1/services");
     const parsed = ServicesResponse.parse(raw);
     let services = parsed.services;
-    if (args.query) {
-      const q = args.query.toLowerCase();
+    if (query) {
+      const q = query.toLowerCase();
       services = services.filter((s) => s.name.toLowerCase().includes(q));
     }
-    if (services.length === 0) return toolError("No services matched.");
+    if (services.length === 0) {
+      return structuredOk(
+        query
+          ? `No SMS services match '${query}'. Try a shorter or different name, or omit query to list all services.`
+          : "No SMS services are listed right now.",
+        { services: [], total: 0, truncated: false },
+      );
+    }
+    const shown = services.slice(0, MAX_SERVICE_ROWS);
+    const truncated = services.length > shown.length;
     const text = [
-      `${services.length} SMS service(s):`,
+      truncated
+        ? `Showing ${shown.length} of ${services.length} SMS services - pass query (e.g. query='telegram') to narrow the list:`
+        : `${services.length} SMS service(s):`,
       ``,
-      ...services.slice(0, 50).map((s) =>
+      ...shown.map((s) =>
         `  ${s.name.padEnd(20)} ${s.id.padEnd(14)} verify=${formatUsd(s.quoted_price_cents)}${
           s.ltr_7d_price_cents ? `  7d=${formatUsd(s.ltr_7d_price_cents)}` : ""
-        }`,
+        }${s.available === false ? "  (out of stock)" : ""}`,
       ),
     ].join("\n");
-    return structuredOk(text, { services });
+    return structuredOk(text, { services: shown, total: services.length, truncated });
   });
 
 // ── get_rental ──────────────────────────────────────────────────────────────
@@ -54,12 +78,12 @@ export const getRentalHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { rental_id: string }): Promise<ToolResult> => {
     const id = args.rental_id;
     if (isVerificationId(id)) {
-      const raw = await callApi<{ verification: unknown }>(http, "GET", `/v1/verifications/${id}`);
+      const raw = await callApi<{ verification: unknown }>(http, "GET", path`/v1/verifications/${id}`);
       const v = Verification.parse(raw.verification);
       return structuredOk(renderVerification(v), { verification: v });
     }
     if (isRentalId(id)) {
-      const raw = await callApi<unknown>(http, "GET", `/v1/rentals/${id}`);
+      const raw = await callApi<unknown>(http, "GET", path`/v1/rentals/${id}`);
       const r = Rental.parse(raw);
       return structuredOk(renderRental(r), { rental: r });
     }
@@ -123,7 +147,7 @@ export const cancelRentalHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { rental_id: string }): Promise<ToolResult> => {
     const id = args.rental_id;
     if (isVerificationId(id)) {
-      const out = await callApi<{ verification: unknown }>(http, "POST", `/v1/verifications/${id}/cancel`, {
+      const out = await callApi<{ verification: unknown }>(http, "POST", path`/v1/verifications/${id}/cancel`, {
         idempotencyKey: newIdempotencyKey(),
       });
       const v = VerificationCancelResult.parse(out.verification);
@@ -131,11 +155,14 @@ export const cancelRentalHandler = (http: HttpClient) =>
       return structuredOk(`Verification ${v.id} cancelled.${refund}`, { verification: v });
     }
     if (isRentalId(id)) {
-      const out = await callApi<unknown>(http, "DELETE", `/v1/rentals/${id}`, {
+      const out = await callApi<unknown>(http, "DELETE", path`/v1/rentals/${id}`, {
         idempotencyKey: newIdempotencyKey(),
       });
       const r = Rental.parse(out);
-      return structuredOk(`Rental ${r.id} cancelled.`, { rental: r });
+      // A cancel inside the 60-minute window refunds the rental price in full.
+      const refunded = r.refunded_cents ?? r.charged_price_cents;
+      const refund = refunded > 0 ? ` Refunded ${formatUsd(refunded)}.` : "";
+      return structuredOk(`Rental ${r.id} cancelled.${refund}`, { rental: r });
     }
     return toolError(INVALID_RENTAL_ID(id));
   });
@@ -148,10 +175,20 @@ export const reuseNumberHandler = (http: HttpClient) =>
     if (!isVerificationId(id)) {
       return toolError(`reuse_number requires a verification id (${VER_PREFIX}xxx). Got '${id}'.`);
     }
-    const path = args.paid ? `/v1/verifications/${id}/reuse/paid` : `/v1/verifications/${id}/reuse`;
-    const out = await callApi<{ verification: unknown }>(http, "POST", path, {
-      idempotencyKey: newIdempotencyKey(),
-    });
+    let out: { verification: unknown };
+    if (args.paid) {
+      // Paid reuse must acknowledge the exact charge; read it from the resource.
+      const current = await callApi<{ verification: unknown }>(http, "GET", path`/v1/verifications/${id}`);
+      const price = Verification.parse(current.verification).paid_reuse_price_cents;
+      out = await callApi<{ verification: unknown }>(http, "POST", path`/v1/verifications/${id}/reuse/paid`, {
+        body: { accept_charge_cents: price },
+        idempotencyKey: newIdempotencyKey(),
+      });
+    } else {
+      out = await callApi<{ verification: unknown }>(http, "POST", path`/v1/verifications/${id}/reuse`, {
+        idempotencyKey: newIdempotencyKey(),
+      });
+    }
     const v = Verification.parse(out.verification);
     return structuredOk(renderVerification(v), { verification: v });
   });
@@ -166,7 +203,7 @@ export const reRentRentalHandler = (http: HttpClient) =>
     }
     // No request body: re-rents the same number for the same duration at the
     // current price. Only valid when re_rent_available is true on the rental.
-    const out = await callApi<unknown>(http, "POST", `/v1/rentals/${id}/re_rent`, {
+    const out = await callApi<unknown>(http, "POST", path`/v1/rentals/${id}/re_rent`, {
       idempotencyKey: newIdempotencyKey(),
     });
     const r = Rental.parse(out);
@@ -179,8 +216,7 @@ export const toggleAutoRenewHandler = (http: HttpClient) =>
   wrapToolErrors(async (args: { rental_id: string; auto_renew: boolean }): Promise<ToolResult> => {
     const id = args.rental_id;
     if (isDedicatedId(id)) {
-      // Dedicated numbers take { enabled }, not { auto_renew }.
-      const out = await callApi<unknown>(http, "POST", `/v1/dedicated/numbers/${id}/auto_renew`, {
+      const out = await callApi<unknown>(http, "POST", path`/v1/dedicated/numbers/${id}/auto_renew`, {
         body: { enabled: args.auto_renew },
         idempotencyKey: newIdempotencyKey(),
       });
@@ -190,8 +226,9 @@ export const toggleAutoRenewHandler = (http: HttpClient) =>
     if (!isRentalId(id)) {
       return toolError(`toggle_auto_renew requires ${REN_PREFIX}xxx or ${DED_PREFIX}xxx. Got '${id}'.`);
     }
-    const out = await callApi<unknown>(http, "POST", `/v1/rentals/${id}/auto_renew`, {
-      body: { auto_renew: args.auto_renew },
+    // Rentals take { enabled } too - an explicit state, safe to repeat.
+    const out = await callApi<unknown>(http, "POST", path`/v1/rentals/${id}/auto_renew`, {
+      body: { enabled: args.auto_renew },
       idempotencyKey: newIdempotencyKey(),
     });
     const r = Rental.parse(out);
@@ -201,6 +238,8 @@ export const toggleAutoRenewHandler = (http: HttpClient) =>
 // ── render helpers ──────────────────────────────────────────────────────────
 
 export function renderVerification(v: VerificationT): string {
+  const expiresMs = new Date(v.expires_at).getTime();
+  const open = expiresMs > Date.now();
   const lines = [
     `Verification ${v.id}`,
     ``,
@@ -208,13 +247,30 @@ export function renderVerification(v: VerificationT): string {
     `  Service:      ${v.service_name} (${v.service_id})`,
     `  Status:       ${v.status}`,
     `  Charged:      ${formatUsd(v.charged_price_cents)}`,
-    `  Expires:      ${formatTimeRemaining(new Date(v.expires_at).getTime())}`,
+    `  Expires:      ${formatTimeRemaining(expiresMs)}`,
   ];
-  if (v.status === "code_received" && v.code) {
-    lines.push(``, `  Code received: ${v.code}`);
+  if (v.code) {
+    lines.push(``, `  Latest code:  ${v.code}`);
     if (v.code_received_at) lines.push(`  At:           ${v.code_received_at}`);
-  } else if (v.status === "waiting_for_code") {
-    lines.push(``, `  No code yet. Try get_rental again in 10-30s.`);
+  }
+  if (v.status === "waiting_for_code") {
+    lines.push(
+      ``,
+      open
+        ? `  No ${v.code ? "new " : ""}SMS yet. The number stays open until expires_at (${formatTimeRemaining(expiresMs)} left); poll get_rental every 10-30s. ` +
+          `If no SMS arrives by then, the price is refunded automatically and the status becomes cancelled - no need to cancel.`
+        : `  The window has closed without an SMS; the automatic refund is being applied (status becomes cancelled).`,
+    );
+  } else if (v.status === "code_received" && open) {
+    lines.push(``, `  More codes can arrive on this number until it expires; get_rental always shows the latest.`);
+  } else if (v.status === "cancelled") {
+    lines.push(``, `  Cancelled - the price was refunded to your balance (it was cancelled, or no SMS arrived in time).`);
+  } else if (v.status === "expired") {
+    lines.push(
+      ``,
+      `  Expired without an SMS and without an automatic refund (this happens only for services marked non-refundable, ` +
+        `or when the refund could not be applied). Contact support if you believe a refund is due.`,
+    );
   }
   return lines.join("\n");
 }
@@ -233,6 +289,11 @@ export function renderRental(r: RentalT): string {
     `  Paid until:   ${r.paid_until ?? "-"}`,
     `  Expires:      ${formatTimeRemaining(new Date(r.expires_at).getTime())}`,
   ];
+  if (r.can_cancel) {
+    lines.push(
+      `  Cancel:       cancel_rental refunds it in full until ${r.cancel_window_expires_at ?? "60 minutes after purchase"}`,
+    );
+  }
   if (r.messages && r.messages.length > 0) {
     lines.push(...renderMessages(r.messages));
   }
@@ -242,63 +303,114 @@ export function renderRental(r: RentalT): string {
 // ── registration ────────────────────────────────────────────────────────────
 
 export function registerSmsTools(server: McpServer, http: HttpClient) {
-  server.tool(
+  server.registerTool(
     "search_sms_services",
-    "Search available US non-VoIP SMS services with prices per row. Returns each service's verification price plus LTR tiers when offered.",
-    { query: z.string().optional().describe("Substring filter on service name (e.g. 'telegram').") },
+    {
+      title: "Search SMS services",
+      description:
+        "Search US non-VoIP SMS services (OTP / phone verification) with your prices: the one-time verification price and, when offered, long-term rental prices. " +
+        "Shows up to 50 rows; pass query to narrow by service name. Next: rent_number with the svc_ id.",
+      inputSchema: { query: z.string().max(80).optional().describe("Case-insensitive substring of the service name (e.g. 'telegram').") },
+      annotations: READ_ONLY,
+    },
     searchSmsServicesHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "get_rental",
-    "Read a rental's current status and any messages received. Pass the ID you got from rent_number (ver_xxx for verifications, ren_xxx for long-term rentals). SMS codes typically arrive 10-60s after rent_number; poll this tool until status changes.",
-    { rental_id: z.string().describe("ver_xxx or ren_xxx") },
+    {
+      title: "Check SMS verification or rental",
+      description:
+        "Read an SMS verification (ver_...) or long-term rental (ren_...): status, time left, the latest code and received messages. " +
+        "After rent_number, poll every 10-30s until a code arrives. A verification stays open for up to 15 minutes (expires_at) and can receive several codes; the latest is shown. " +
+        "If no SMS arrives in the window, the price is refunded automatically and the status becomes cancelled - no need to cancel. " +
+        "For dedicated numbers (ded_...) use get_dedicated_number.",
+      inputSchema: { rental_id: VerificationOrRentalId.describe("ver_... or ren_... id from rent_number or list_orders") },
+      annotations: READ_ONLY,
+    },
     getRentalHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "rent_number",
-    "Rent a US non-VoIP phone number. kind='verification' (single SMS, 20min); kind='rental' (timed LTR with duration). For a private all-services monthly number, use purchase_dedicated_number instead. Quote-then-commit: the tool fetches the live price and ties max_price_cents to the quote so you never pay above what you saw.",
     {
-      service_id: z.string().describe("svc_xxx from search_sms_services"),
-      kind: z.enum(["verification", "rental"]).default("verification"),
-      duration: z.enum(["3d", "7d", "14d", "30d"]).optional().describe("Required when kind='rental'"),
+      title: "Rent an SMS number",
+      description:
+        "Buy a US non-VoIP phone number for one service, charged to your balance immediately. " +
+        "kind='verification' (default): a one-time number that stays open for up to 15 minutes (expires_at) and can receive several codes in that window. " +
+        "You pay only when an SMS arrives: if none arrives, the full price is refunded automatically and the verification ends as cancelled " +
+        "(rare exception: services marked non-refundable end as expired without a refund). " +
+        "kind='rental': the number is yours for 3/7/14/30 days and receives every SMS for that service; cancel_rental refunds it in full within 60 minutes of purchase. " +
+        "It charges the live price at that moment (re-read just before buying, so it can differ from an earlier search); show the user the price from search_sms_services first. " +
+        "For a private number that receives SMS from any service, use purchase_dedicated_number. Next: poll get_rental with the returned id.",
+      inputSchema: {
+        service_id: ServiceId.describe("svc_... id from search_sms_services"),
+        kind: z.enum(["verification", "rental"]).default("verification"),
+        duration: z.enum(["3d", "7d", "14d", "30d"]).optional().describe("Required when kind='rental'"),
+      },
+      annotations: SPENDS,
     },
     rentNumberHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "cancel_rental",
-    "Cancel a rental. For verifications (ver_xxx) the API may refund if no message arrived. For long-term rentals (ren_xxx) cancellation is typically non-refundable - check the response.",
-    { rental_id: z.string() },
+    {
+      title: "Cancel SMS verification or rental",
+      description:
+        "Cancel an SMS order and refund it in full. Verification (ver_...): only before any SMS arrives. Usually unnecessary - " +
+        "a verification that gets no SMS is refunded automatically when its window closes, and frequent cancellations can temporarily pause SMS purchasing. " +
+        "Long-term rental (ren_...): only within 60 minutes of purchase; after that it runs to its end date. The result shows the amount refunded.",
+      inputSchema: { rental_id: VerificationOrRentalId.describe("ver_... or ren_... id to cancel") },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    },
     cancelRentalHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "reuse_number",
-    "Reuse a completed/expired verification to receive another SMS. Free reuse is available when allow_reuse is true on the verification. Paid reuse ($0.50) is available when allow_paid_reuse is true.",
     {
-      rental_id: z.string().describe("ver_xxx from a verification"),
-      paid: z.boolean().default(false),
+      title: "Reuse a verification number",
+      description:
+        "Receive another SMS on the number of an earlier verification (ver_...). Free reuse: when allow_reuse is true. " +
+        "Paid reuse (paid=true): when allow_paid_reuse is true; charges paid_reuse_price_cents (currently $0.50), refunded automatically if the number is no longer available. " +
+        "Check both flags with get_rental first, then poll get_rental for the new code.",
+      inputSchema: {
+        rental_id: VerificationId.describe("ver_... id of an earlier verification"),
+        paid: z.boolean().default(false),
+      },
+      annotations: SPENDS,
     },
     reuseNumberHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "re_rent_rental",
-    "Re-rent the same number for another period at the current price. Only works on an expired rental whose re_rent_available is true (the provider has not yet released the number). Re-uses the rental's original duration; no duration argument.",
     {
-      rental_id: z.string().describe("ren_xxx from an expired LTR with re_rent_available=true"),
+      title: "Re-rent an expired rental",
+      description:
+        "Re-rent the same number for another period of its original duration, charged at re_rent_price_cents. Only works on an expired rental whose " +
+        "re_rent_available is true (the number has not been released yet). No duration argument.",
+      inputSchema: {
+        rental_id: RentalId.describe("ren_... id of an expired rental with re_rent_available=true"),
+      },
+      annotations: SPENDS,
     },
     reRentRentalHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "toggle_auto_renew",
-    "Turn auto-renewal on/off for a long-term rental (ren_xxx) or a dedicated number (ded_xxx).",
     {
-      rental_id: z.string().describe("ren_xxx or ded_xxx"),
-      auto_renew: z.boolean(),
+      title: "Set rental or dedicated number auto-renew",
+      description:
+        "Turn auto-renewal on or off for a long-term rental (ren_...) or a dedicated number (ded_...). When on, each new period is charged to your balance " +
+        "at next_renewal_price_cents; if that charge fails, auto-renew switches off and the number expires at the end of its period.",
+      inputSchema: {
+        rental_id: RentalOrDedicatedId.describe("ren_... or ded_..."),
+        auto_renew: z.boolean(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     toggleAutoRenewHandler(http),
   );

@@ -9,8 +9,11 @@ import {
 } from "../client/types.js";
 import { structuredOk, toolError, wrapToolErrors, renderMessages, type ToolResult } from "../utils/render.js";
 import { formatUsd, formatTimeRemaining } from "../utils/format.js";
+import { READ_ONLY, SPENDS } from "../utils/annotations.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
+import { path } from "../client/path.js";
 import { DED_PREFIX, isDedicatedId } from "../constants/rental-id.js";
+import { DedicatedId } from "../constants/ids.js";
 
 const Countries = z.array(DedicatedCountry);
 
@@ -20,7 +23,9 @@ export const searchDedicatedCountriesHandler = (http: HttpClient) =>
   wrapToolErrors(async (): Promise<ToolResult> => {
     const raw = await callApi<unknown>(http, "GET", "/v1/dedicated/countries");
     const countries = Countries.parse(raw);
-    if (countries.length === 0) return toolError("No dedicated-number countries are currently offered.");
+    if (countries.length === 0) {
+      return structuredOk("No dedicated-number countries are offered right now.", { countries: [] });
+    }
     const text = [
       `${countries.length} dedicated-number countries:`,
       ``,
@@ -40,7 +45,7 @@ export const getDedicatedNumberHandler = (http: HttpClient) =>
     if (!isDedicatedId(id)) {
       return toolError(`get_dedicated_number requires ${DED_PREFIX}xxx. Got '${id}'.`);
     }
-    const raw = await callApi<unknown>(http, "GET", `/v1/dedicated/numbers/${id}`);
+    const raw = await callApi<unknown>(http, "GET", path`/v1/dedicated/numbers/${id}`);
     const d = DedicatedNumber.parse(raw);
     return structuredOk(renderDedicated(d), { dedicated_number: d });
   });
@@ -101,27 +106,45 @@ function renderDedicated(d: DedicatedNumberT): string {
 // ── registration ────────────────────────────────────────────────────────────
 
 export function registerDedicatedTools(server: McpServer, http: HttpClient) {
-  server.tool(
+  server.registerTool(
     "search_dedicated_countries",
-    "List countries where dedicated numbers are offered, with your monthly price and stock status. A dedicated number is a private number that receives SMS for ALL services, renews monthly, and stays yours until you stop renewing.",
-    {},
+    {
+      title: "Dedicated number countries",
+      description:
+        "List countries where dedicated numbers are offered, with your monthly price and stock status. A dedicated number is a private number that receives SMS " +
+        "from ALL services, renews monthly, and stays yours until you stop renewing. Next: purchase_dedicated_number.",
+      inputSchema: {},
+      annotations: READ_ONLY,
+    },
     searchDedicatedCountriesHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "purchase_dedicated_number",
-    "Buy a dedicated monthly number in a country from search_dedicated_countries. Quote-then-commit: the tool fetches your live price and ties max_price_cents to it so you never pay above the quote. Returns a ded_xxx id - poll get_dedicated_number to read incoming SMS.",
     {
-      country: z.string().describe("Country code or name from search_dedicated_countries (e.g. 'us', 'uk', 'germany')"),
-      auto_renew: z.boolean().default(false).describe("Auto-charge at the end of each monthly period"),
+      title: "Buy a dedicated number",
+      description:
+        "Buy a dedicated monthly number in a country from search_dedicated_countries, charged to your balance immediately for the first month. " +
+        "It charges your live price at that moment (re-read just before buying, so it can differ from an earlier search); show the user the price first. " +
+        "There is no cancel or refund - to stop paying, leave auto_renew off and let the month run out. Returns a ded_ id - poll get_dedicated_number to read incoming SMS.",
+      inputSchema: {
+        country: z.string().min(2).max(40).describe("Country code or name from search_dedicated_countries (e.g. 'us', 'uk', 'germany')"),
+        auto_renew: z.boolean().default(false).describe("Charge the next month automatically at the end of each monthly period"),
+      },
+      annotations: SPENDS,
     },
     purchaseDedicatedNumberHandler(http),
   );
 
-  server.tool(
+  server.registerTool(
     "get_dedicated_number",
-    "Read a dedicated number's status and received SMS messages (parsed codes included). Messages keep arriving for the life of the number; poll this tool after directing an SMS at it.",
-    { number_id: z.string().describe("ded_xxx from purchase_dedicated_number or list_orders") },
+    {
+      title: "Get dedicated number",
+      description:
+        "Read a dedicated number's status and received SMS messages (parsed codes included). Messages keep arriving for the life of the number; poll this tool after directing an SMS at it.",
+      inputSchema: { number_id: DedicatedId.describe("ded_... id from purchase_dedicated_number or list_orders") },
+      annotations: READ_ONLY,
+    },
     getDedicatedNumberHandler(http),
   );
 }

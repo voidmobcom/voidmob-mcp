@@ -125,7 +125,7 @@ describe("search_proxies", () => {
     });
   });
 
-  it("returns toolError when no plans match", async () => {
+  it("no matching plans is a normal empty result, not an error", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxy_plans?country=ZZ", {
       status: 200,
@@ -133,7 +133,8 @@ describe("search_proxies", () => {
       body: { success: true, data: { plans: [] } },
     });
     const res = await searchProxiesHandler(http)({ country: "ZZ" });
-    expect(res.isError).toBe(true);
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent?.proxy_plans).toEqual([]);
   });
 
   it("surfaces upstream error with request_id", async () => {
@@ -270,6 +271,31 @@ describe("get_proxy_status", () => {
     expect(t.text).toContain("p4ssw0rd");
   });
 
+  it("shared gateway: prints a ready http:// URL, the targeting hint and flex username examples", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/prx_flex", {
+      status: 200,
+      headers: new Headers(),
+      body: {
+        success: true,
+        data: {
+          proxy: proxyResp("prx_flex", {
+            gateway: gatewayFixture({ host: "proxy.voidmob.com", port: 10092, username_geo_hint: "Flex mode: append parameters to username. _c_US (country)" }),
+          }),
+        },
+      },
+    });
+    http.expect("GET", "/v1/proxies/prx_flex/usage", usageOk);
+    const res = await getProxyStatusHandler(http)({ proxy_id: "prx_flex" });
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("HTTP URL:  http://vm_abc123:p4ssw0rd@proxy.voidmob.com:10092");
+    expect(t.text).toContain("Flex mode: append parameters to username.");
+    expect(t.text).toContain("http://vm_abc123_c_US:p4ssw0rd@proxy.voidmob.com:10092");
+    expect(t.text).toContain("http://vm_abc123_c_US_s_worker1_ttl_10m:p4ssw0rd@proxy.voidmob.com:10092");
+    expect(t.text).not.toContain("socks5://");
+  });
+
   it("gateway already provisioned: no flex call, live core values win", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxies/proxy_xyz", {
@@ -362,7 +388,7 @@ describe("get_proxy_status", () => {
 // ── rotate_proxy_ip ─────────────────────────────────────────────────────────
 
 describe("rotate_proxy_ip", () => {
-  it("happy path with idempotency, surfaces proxy_id/rotated_at/current_ip", async () => {
+  it("happy path, surfaces proxy_id/rotated_at/current_ip; sends no Idempotency-Key (not honored - never auto-retried)", async () => {
     const http = createMockHttpClient();
     http.expect("POST", "/v1/proxies/PRX-abc/rotate_ip", {
       status: 200,
@@ -380,7 +406,7 @@ describe("rotate_proxy_ip", () => {
     expect(res.isError).toBeFalsy();
     expect(http.history).toHaveLength(1);
     expect(http.history[0].method).toBe("POST");
-    expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(http.history[0].headers["Idempotency-Key"]).toBeUndefined();
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
     expect(t.text).toContain("PRX-abc");
@@ -587,14 +613,17 @@ describe("list_proxy_lists", () => {
     expect(t.text).toContain("us,ca");
   });
 
-  it("empty lists → toolError", async () => {
+  it("empty lists → normal empty result pointing at create_proxy_list", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxies/prx_abc", {
       status: 200, headers: new Headers(),
       body: { success: true, data: { proxy: proxyResp("prx_abc", { lists: [] }) } },
     });
     const res = await listProxyListsHandler(http)({ proxy_id: "prx_abc" });
-    expect(res.isError).toBe(true);
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent?.lists).toEqual([]);
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("create_proxy_list");
   });
 
   it("propagates request_id on PROXY_NOT_FOUND", async () => {
@@ -643,6 +672,8 @@ describe("create_proxy_list", () => {
     expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
     const t = res.content[0]; if (t.type !== "text") throw new Error("text");
     expect(t.text).toContain("u:p@proxy.voidmob.com:10000");
+    expect(t.text).toContain("HTTP URL:   http://u:p@proxy.voidmob.com:10000");
+    expect(t.text).toContain("SOCKS5 URL: socks5://u:p@proxy.voidmob.com:10000");
   });
 
   it("neither country nor countries → toolError (no HTTP call)", async () => {
@@ -690,6 +721,17 @@ describe("create_proxy_list", () => {
 // ── delete_proxy_list ───────────────────────────────────────────────────────
 
 describe("delete_proxy_list", () => {
+  it("encodes both ids so a crafted list id cannot retarget the request", async () => {
+    const http = createMockHttpClient();
+    http.expect("DELETE", "/v1/proxies/prx_abc/lists/..%2F..%2F..%2Frentals%2Fren_x", {
+      status: 404, headers: new Headers(),
+      body: { success: false, error: { code: "PROXY_LIST_NOT_FOUND", message: "Proxy list not found.", request_id: "req_x" } },
+    });
+    const res = await deleteProxyListHandler(http)({ proxy_id: "prx_abc", list_id: "../../../rentals/ren_x" });
+    expect(res.isError).toBe(true);
+    expect(http.history[0].path).toBe("/v1/proxies/prx_abc/lists/..%2F..%2F..%2Frentals%2Fren_x");
+  });
+
   it("DELETE /v1/proxies/:id/lists/:lid with idempotency key", async () => {
     const http = createMockHttpClient();
     http.expect("DELETE", "/v1/proxies/prx_abc/lists/lst_xyz", {
@@ -820,6 +862,9 @@ describe("get_proxy_status - dedicated", () => {
     expect(t.text).toContain("US / Verizon");
     expect(t.text).toContain("unmetered");
     expect(t.text).toContain("SOCKS5:    9001");
+    expect(t.text).toContain("HTTP URL:  http://u1:p1@h1.example.net:8001");
+    expect(t.text).toContain("SOCKS5 URL: socks5://u1:p1@h1.example.net:9001");
+    expect(t.text).not.toContain("_c_US");
     expect(t.text).toContain("Auto-renew:    on");
     expect(t.text).toContain("$55.20");
   });

@@ -7,15 +7,33 @@
     "url": "https://github.com/voidmobcom/voidmob-mcp",
     "source": "github"
   },
-  "version": "1.1.7",
+  "version": "1.1.8",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@voidmob/mcp",
-      "version": "1.1.7",
+      "version": "1.1.8",
       "transport": {
         "type": "stdio"
-      }
+      },
+      "environmentVariables": [
+        {
+          "name": "VOIDMOB_API_KEY",
+          "description": "API key from https://dashboard.voidmob.com/developers/api-keys (vmk_live_...). Needed for real purchases; without it tools are listed but every call returns setup instructions.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string",
+          "placeholder": "vmk_live_..."
+        },
+        {
+          "name": "VOIDMOB_SANDBOX",
+          "description": "Set to 1 to use offline mock data with a $500 play balance instead of the live API (no key needed, nothing is charged).",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string",
+          "placeholder": "1"
+        }
+      ]
     }
   ]
 }

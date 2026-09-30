@@ -36,6 +36,17 @@ const smsCode = (): string => String(rnd(100000, 999999));
 const ip = (): string => `${rnd(11, 223)}.${rnd(1, 254)}.${rnd(1, 254)}.${rnd(1, 254)}`;
 const iso = (offsetMs = 0): string => new Date(Date.now() + offsetMs).toISOString();
 const DAY = 86_400_000;
+const MINUTE = 60_000;
+// Mirrors prod: a verification stays open 15 minutes; a long-term rental can be
+// cancelled (full refund) for 60 minutes after purchase.
+const VERIFICATION_WINDOW_MS = 15 * MINUTE;
+const RENTAL_CANCEL_WINDOW_MS = 60 * MINUTE;
+// Shared-proxy gateways: Flex (username parameters) on 10092, lists on 10000.
+const GATEWAY_HOST = "proxy.voidmob.com";
+const FLEX_PORT = 10092;
+const LIST_PORT = 10000;
+const FLEX_HINT =
+  "Flex mode: append parameters to username for per-request control. _c_US (country), _s_<id> (sticky session), _ttl_5m (TTL), _city_New-York, _rotm_0.";
 
 // Time (ms) before a verification's code "arrives" / a proxy goes active, so the
 // poll-until-ready flow the tools describe is demonstrable without a long wait.
@@ -85,13 +96,13 @@ const ESIM_PRODUCTS: EsimProduct[] = [
 ];
 
 const PROXY_PLANS: ProxyPlan[] = [
-  { id: "pplan_us_5gb_30d", name: "US Mobile 5GB", type: "shared", country: "US", country_name: "United States", data_gb: 5, duration_days: 30, period: "monthly", quoted_price_cents: 1800, available: true },
-  { id: "pplan_us_10gb_30d", name: "US Mobile 10GB", type: "shared", country: "US", country_name: "United States", data_gb: 10, duration_days: 30, period: "monthly", quoted_price_cents: 3000, available: true },
-  { id: "pplan_gb_5gb_30d", name: "UK Mobile 5GB", type: "shared", country: "GB", country_name: "United Kingdom", data_gb: 5, duration_days: 30, period: "monthly", quoted_price_cents: 2000, available: true },
-  { id: "pplan_de_5gb_30d", name: "Germany Mobile 5GB", type: "shared", country: "DE", country_name: "Germany", data_gb: 5, duration_days: 30, period: "monthly", quoted_price_cents: 2100, available: true },
-  { id: "pplan_ded_us_ny_30d", name: "United States Carrier A New York (monthly)", type: "dedicated_standard", country: "us", country_name: "United States", carrier: "Carrier A", region: "New York", data_gb: null, duration_days: 30, period: "monthly", quoted_price_cents: 6900, available: true },
-  { id: "pplan_ded_gb_lon_7d", name: "United Kingdom Carrier B London (weekly)", type: "dedicated_standard", country: "gb", country_name: "United Kingdom", carrier: "Carrier B", region: "London", data_gb: null, duration_days: 7, period: "weekly", quoted_price_cents: 2900, available: true },
-  { id: "pplan_ded_de_ber_30d", name: "Germany Carrier A Berlin (monthly)", type: "dedicated_standard", country: "de", country_name: "Germany", carrier: "Carrier A", region: "Berlin", data_gb: null, duration_days: 30, period: "monthly", quoted_price_cents: 7400, available: false },
+  { id: "plan_US5GB30D", name: "US Mobile 5GB", type: "shared", country: "US", country_name: "United States", data_gb: 5, duration_days: 30, period: "monthly", quoted_price_cents: 1800, available: true },
+  { id: "plan_US10GB30D", name: "US Mobile 10GB", type: "shared", country: "US", country_name: "United States", data_gb: 10, duration_days: 30, period: "monthly", quoted_price_cents: 3000, available: true },
+  { id: "plan_GB5GB30D", name: "UK Mobile 5GB", type: "shared", country: "GB", country_name: "United Kingdom", data_gb: 5, duration_days: 30, period: "monthly", quoted_price_cents: 2000, available: true },
+  { id: "plan_DE5GB30D", name: "Germany Mobile 5GB", type: "shared", country: "DE", country_name: "Germany", data_gb: 5, duration_days: 30, period: "monthly", quoted_price_cents: 2100, available: true },
+  { id: "plan_DEDUSNY30D", name: "United States Carrier A New York (monthly)", type: "dedicated_standard", country: "us", country_name: "United States", carrier: "Carrier A", region: "New York", data_gb: null, duration_days: 30, period: "monthly", quoted_price_cents: 6900, available: true },
+  { id: "plan_DEDGBLON7D", name: "United Kingdom Carrier B London (weekly)", type: "dedicated_standard", country: "gb", country_name: "United Kingdom", carrier: "Carrier B", region: "London", data_gb: null, duration_days: 7, period: "weekly", quoted_price_cents: 2900, available: true },
+  { id: "plan_DEDDEBER30D", name: "Germany Carrier A Berlin (monthly)", type: "dedicated_standard", country: "de", country_name: "Germany", carrier: "Carrier A", region: "Berlin", data_gb: null, duration_days: 30, period: "monthly", quoted_price_cents: 7400, available: false },
 ];
 
 const isDedicatedProxy = (p: Proxy): boolean => p.type === "dedicated_standard" || p.type === "dedicated_premium";
@@ -146,14 +157,14 @@ const PNG_1x1 = Buffer.from(
 
 // ── entity builders ────────────────────────────────────────────────────────────
 
-function makeGateway(geoHint = "us"): NonNullable<Proxy["gateway"]> {
+function makeFlexGateway(): NonNullable<Proxy["gateway"]> {
   return {
-    host: `${geoHint}.gw.voidmob.com`,
-    port: 10000 + rnd(0, 4999),
+    host: GATEWAY_HOST,
+    port: FLEX_PORT,
     protocol: "http",
-    username: `vm_${alnum(6)}`,
+    username: `vm_${alnum(8)}`,
     password: alnum(12),
-    username_geo_hint: geoHint,
+    username_geo_hint: FLEX_HINT,
   };
 }
 
@@ -205,8 +216,16 @@ export function createSandboxHttpClient(): HttpClient {
         id: "acct_sandbox",
         balance: { amount_cents: db.balanceCents, currency: "USD", formatted: formatUsd(db.balanceCents) },
         rate_limits: {
-          default: { limit: 120, window_seconds: 60 },
-          purchases: { limit: 30, window_seconds: 60 },
+          verifications: { limit: 60, window_seconds: 60 },
+          verifications_read: { limit: 600, window_seconds: 60 },
+          services: { limit: 60, window_seconds: 60 },
+          rentals: { limit: 60, window_seconds: 60 },
+          dedicated: { limit: 60, window_seconds: 60 },
+          account: { limit: 60, window_seconds: 60 },
+          esim: { limit: 60, window_seconds: 60 },
+          esim_read: { limit: 600, window_seconds: 60 },
+          proxies: { limit: 60, window_seconds: 60 },
+          reads: { limit: 60, window_seconds: 60 },
         },
         created_at: iso(-90 * DAY),
       };
@@ -215,7 +234,8 @@ export function createSandboxHttpClient(): HttpClient {
 
     // ── SMS services ──
     if (method === "GET" && rawPath === "/v1/services") {
-      return ok({ services: SERVICES });
+      const q = query.get("q")?.trim().toLowerCase();
+      return ok({ country: "us", services: q ? SERVICES.filter((s) => s.name.toLowerCase().includes(q)) : SERVICES });
     }
 
     // ── verifications ──
@@ -233,7 +253,7 @@ export function createSandboxHttpClient(): HttpClient {
         service_id: svc.id,
         service_name: svc.name,
         charged_price_cents: svc.quoted_price_cents,
-        expires_at: iso(20 * 60_000),
+        expires_at: iso(VERIFICATION_WINDOW_MS),
         can_cancel: true,
         created_at: iso(),
         reuse_counter: 0,
@@ -244,6 +264,10 @@ export function createSandboxHttpClient(): HttpClient {
       db.verifications.set(id, v);
       db.createdAtMs.set(id, Date.now());
       return ok({ verification: v }, 201);
+    }
+    if (method === "GET" && rawPath === "/v1/verifications") {
+      // Newest first, like prod (pagination fields omitted - one page).
+      return ok([...db.verifications.values()].map(settleVerification).reverse());
     }
     if (seg[1] === "verifications" && seg[2]) {
       const v = db.verifications.get(seg[2]);
@@ -259,6 +283,9 @@ export function createSandboxHttpClient(): HttpClient {
       }
       // paid reuse (/reuse/paid) is more specific than free reuse (/reuse) - match it first
       if (method === "POST" && seg[3] === "reuse" && seg[4] === "paid") {
+        if (body.accept_charge_cents !== v.paid_reuse_price_cents) {
+          return fail(400, "VALIDATION_ERROR", `accept_charge_cents must equal the current paid-reuse price (${v.paid_reuse_price_cents}).`);
+        }
         const paid = charge(v.paid_reuse_price_cents);
         if (paid) return paid;
         v.reuse_counter += 1;
@@ -312,7 +339,7 @@ export function createSandboxHttpClient(): HttpClient {
         paid_until: iso(days * DAY),
         expires_at: iso(days * DAY),
         can_cancel: true,
-        cancel_window_expires_at: iso(30_000),
+        cancel_window_expires_at: iso(RENTAL_CANCEL_WINDOW_MS),
         messages: [],
       };
       db.rentals.set(id, r);
@@ -324,7 +351,13 @@ export function createSandboxHttpClient(): HttpClient {
       if (!r) return fail(404, "NOT_FOUND", "Rental not found.");
       if (method === "GET" && !seg[3]) return ok(r);
       if (method === "DELETE") {
+        const inWindow = Date.now() - (db.createdAtMs.get(r.id) ?? 0) < RENTAL_CANCEL_WINDOW_MS;
+        if (r.status !== "active" || !inWindow) {
+          return fail(409, "CANCEL_NOT_ALLOWED", "This verification can no longer be cancelled.");
+        }
+        db.balanceCents += r.charged_price_cents;
         r.status = "cancelled";
+        r.can_cancel = false;
         return ok(r);
       }
       if (method === "POST" && seg[3] === "re_rent") {
@@ -337,7 +370,8 @@ export function createSandboxHttpClient(): HttpClient {
         return ok(r);
       }
       if (method === "POST" && seg[3] === "auto_renew") {
-        r.auto_renew = Boolean(body.auto_renew);
+        if (typeof body.enabled !== "boolean") return fail(400, "VALIDATION_ERROR", "enabled must be a boolean.");
+        r.auto_renew = body.enabled;
         return ok(r);
       }
     }
@@ -430,7 +464,8 @@ export function createSandboxHttpClient(): HttpClient {
         is_topup: false,
         parent_order_id: null,
         iccid: `8910${rnd(10, 99)}${hex(14)}`,
-        activation_code: `LPA:1$smdp.voidmob.com$${hex(32).toUpperCase()}`,
+        // The SM-DP+ matching ID; the LPA string is LPA:1$<smdp_address>$<activation_code>.
+        activation_code: `K2-${alnum(6).toUpperCase()}-${alnum(6).toUpperCase()}`,
         qr_code_url: `/v1/esims/${id}/qr.png`,
         smdp_address: "smdp.voidmob.com",
         data_limit_gb: product.data_limit_gb,
@@ -456,15 +491,20 @@ export function createSandboxHttpClient(): HttpClient {
       if (!esim) return fail(404, "NOT_FOUND", "eSIM not found.");
       if (method === "GET" && !seg[3]) return ok({ esim });
       if (seg[3] === "usage" && method === "GET") {
-        const totalGb = esim.data_unlimited ? 50 : esim.data_limit_gb ?? 0;
-        const totalMb = totalGb * 1024;
-        const usedMb = Math.min(totalMb, rnd(0, Math.floor(totalMb * 0.6)));
+        // Usage is eSIM-scoped: one package per order on the eSIM (base plan +
+        // top-ups), whichever order id is asked about.
+        const baseId = esim.parent_order_id ?? esim.id;
+        const chain = [...db.esims.values()].filter((e) => e.id === baseId || e.parent_order_id === baseId);
         const usage: EsimUsage = {
-          esim_id: esim.id,
-          esim_status: esim.status,
-          packages: [
-            {
-              name: "Primary",
+          esim_id: baseId,
+          esim_status: "in_use",
+          packages: chain.map((order, i) => {
+            const totalGb = order.data_unlimited ? 50 : order.data_limit_gb ?? 0;
+            const totalMb = totalGb * 1024;
+            // Only the first package has been used so far; top-ups are queued.
+            const usedMb = i === 0 ? Math.min(totalMb, rnd(0, Math.floor(totalMb * 0.6))) : 0;
+            return {
+              name: order.is_topup ? `Top-up ${i}` : "Base plan",
               total_mb: totalMb,
               total_gb: totalGb,
               used_mb: usedMb,
@@ -472,10 +512,10 @@ export function createSandboxHttpClient(): HttpClient {
               remaining_mb: totalMb - usedMb,
               remaining_gb: Number(((totalMb - usedMb) / 1024).toFixed(2)),
               percent_used: totalMb ? Math.round((usedMb / totalMb) * 100) : 0,
-              activation_date: esim.completed_at,
-              expiration_date: esim.expires_at,
-            },
-          ],
+              activation_date: i === 0 ? order.completed_at : null,
+              expiration_date: order.expires_at,
+            };
+          }),
         };
         return ok({ usage });
       }
@@ -495,10 +535,11 @@ export function createSandboxHttpClient(): HttpClient {
           product_id: product.id,
           is_topup: true,
           parent_order_id: esim.id,
+          // Top-ups ride the installed profile: no install details of their own.
           iccid: esim.iccid,
-          activation_code: esim.activation_code,
-          qr_code_url: esim.qr_code_url,
-          smdp_address: esim.smdp_address,
+          activation_code: null,
+          qr_code_url: null,
+          smdp_address: null,
           data_limit_gb: product.data_limit_gb,
           data_unlimited: product.data_unlimited,
           validity_days: product.validity_days,
@@ -567,7 +608,8 @@ export function createSandboxHttpClient(): HttpClient {
         auto_renew: false,
         next_renewal_price_cents: plan.quoted_price_cents,
         gateway: dedicated
-          ? { host: `${plan.country}-ded.gw.voidmob.com`, port: 8000 + rnd(0, 999), protocol: "http", username: `vm_${alnum(6)}`, password: alnum(12), socks_port: 9000 + rnd(0, 999) }
+          // A modem's own endpoint (documentation-range IP), HTTP + SOCKS5 ports.
+          ? { host: `203.0.113.${rnd(1, 254)}`, port: 8000 + rnd(0, 999), protocol: "http", username: `vm_${alnum(6)}`, password: alnum(12), socks_port: 9000 + rnd(0, 999) }
           : null,
         lists: [],
         rotation_url: dedicated ? `https://dashboard.voidmob.com/api/proxy/rotate/${alnum(24)}` : null,
@@ -580,7 +622,6 @@ export function createSandboxHttpClient(): HttpClient {
     if (seg[1] === "proxies" && seg[2]) {
       const proxy = db.proxies.get(seg[2]);
       if (!proxy) return fail(404, "NOT_FOUND", "Proxy not found.");
-      const geoHint = (PROXY_PLANS.find((p) => p.id === proxy.plan_id)?.country ?? "us").toLowerCase();
 
       if (method === "GET" && !seg[3]) return ok({ proxy: settleProxy(proxy) });
       if (seg[3] === "usage" && method === "GET") {
@@ -589,10 +630,13 @@ export function createSandboxHttpClient(): HttpClient {
       }
       if (seg[3] === "flex_credentials" && method === "POST") {
         settleProxy(proxy);
-        if (proxy.status === "active" && !proxy.gateway) proxy.gateway = makeGateway(geoHint);
+        if (isDedicatedProxy(proxy)) return fail(409, "PROXY_NOT_READY", "Proxy is still provisioning. Retry shortly.");
+        if (proxy.status === "active" && !proxy.gateway) proxy.gateway = makeFlexGateway();
         return ok({ proxy });
       }
       if (seg[3] === "rotate_ip" && method === "POST") {
+        // Shared proxies rotate per request; only a dedicated modem rotates on demand.
+        if (!isDedicatedProxy(proxy)) return fail(422, "NOT_SUPPORTED", "This action is not supported.");
         return ok({ proxy_id: proxy.id, rotated_at: iso(), current_ip: ip() });
       }
       if (seg[3] === "renew" && method === "POST") {
@@ -622,19 +666,22 @@ export function createSandboxHttpClient(): HttpClient {
         return ok({ proxy });
       }
       if (seg[3] === "regenerate_password" && method === "POST") {
-        proxy.gateway = makeGateway(geoHint);
+        // Rotates the Flex gateway password; the gateway must exist first.
+        if (isDedicatedProxy(proxy) || !proxy.gateway) return fail(409, "PROXY_NOT_READY", "Proxy is still provisioning. Retry shortly.");
+        proxy.gateway = { ...proxy.gateway, password: alnum(12) };
         return ok({ proxy });
       }
       if (seg[3] === "lists" && !seg[4] && method === "POST") {
-        const id = uid("plist_");
-        const single = typeof body.country === "string" ? body.country : null;
-        const gw = makeGateway(geoHint);
+        if (settleProxy(proxy).status !== "active") return fail(409, "PROXY_NOT_READY", "Proxy is still provisioning. Retry shortly.");
+        const id = uid("list_");
+        const single = typeof body.country === "string" ? body.country.toUpperCase() : null;
+        const login = { username: `vm_${alnum(8)}`, password: alnum(12) };
         const list: ProxyList = {
           id,
           proxy_id: proxy.id,
           name: String(body.name ?? "list"),
           country: single,
-          countries: Array.isArray(body.countries) ? (body.countries as string[]) : null,
+          countries: Array.isArray(body.countries) ? (body.countries as string[]).map((c) => c.toUpperCase()) : null,
           region: (body.region as string) ?? null,
           city: (body.city as string) ?? null,
           isp: (body.isp as string) ?? null,
@@ -642,9 +689,10 @@ export function createSandboxHttpClient(): HttpClient {
           rotation_period_seconds: Number(body.rotation_period_seconds ?? 0),
           rotation_mode: String(body.rotation_mode ?? "instant"),
           format: String(body.format ?? "login_pass_host_port"),
-          credentials: { host: gw.host, port: gw.port, protocol: gw.protocol, username: gw.username, password: gw.password },
-          entries: [`${gw.host}:${gw.port}:${gw.username}:${gw.password}`],
-          activation_note: "Active within 1-2 minutes.",
+          credentials: { host: GATEWAY_HOST, port: LIST_PORT, protocol: "http", ...login },
+          // entries[] is always login:pass@host:port, whatever `format` says.
+          entries: [`${login.username}:${login.password}@${GATEWAY_HOST}:${LIST_PORT}`],
+          activation_note: "List active within a few minutes of creation.",
           created_at: iso(),
         };
         proxy.lists.push(list);

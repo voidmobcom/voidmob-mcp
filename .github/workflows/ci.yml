@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]   # tags are covered by publish.yml
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run version-sync
+      - name: Typecheck src
+        run: npx tsc --noEmit
+      - name: Typecheck src + tests
+        run: npx tsc -p tsconfig.test.json
+      - run: npm test
