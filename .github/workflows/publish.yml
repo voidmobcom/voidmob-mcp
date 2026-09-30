@@ -64,16 +64,17 @@ jobs:
           fi
 
       # The registry validates the npm version exists, and npm takes a moment
-      # to serve a fresh publish (v1.1.6 was rejected seconds after npm publish).
+      # to serve a fresh publish (v1.1.6 was rejected seconds after npm publish;
+      # since 2026-09 npm processes publishes asynchronously, 20+ minutes for v1.1.8).
       - name: Wait for npm to serve this version
         if: steps.registry_check.outputs.listed == 'false'
         run: |
           V=$(node -p "require('./package.json').version")
-          for i in $(seq 1 30); do
+          for i in $(seq 1 120); do
             npm view "@voidmob/mcp@$V" version >/dev/null 2>&1 && exit 0
             sleep 10
           done
-          echo "npm still does not serve @voidmob/mcp@$V after 5 minutes" >&2
+          echo "npm still does not serve @voidmob/mcp@$V after 20 minutes" >&2
           exit 1
 
       # Refresh the MCP registry listing in lockstep with npm. OIDC auth (no
