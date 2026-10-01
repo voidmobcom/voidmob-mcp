@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "voidmob-mcp",
   "display_name": "VoidMob",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Non-VoIP SMS verification numbers, dedicated numbers, travel eSIMs and 4G/5G mobile proxies, paid from a prepaid VoidMob balance.",
   "long_description": "Lets Claude search, price and buy VoidMob services from your prepaid USD balance: US non-VoIP numbers for SMS verification codes (refunded automatically when no SMS arrives), long-term rentals and private dedicated numbers, eSIM data plans for travel, and shared or dedicated 4G/5G mobile proxies with HTTP and SOCKS5 access.\n\nEvery purchase needs the price Claude showed you (max_price_cents), so nothing is bought at a price you did not see. Optional safety settings: read-only mode, a per-order limit and a spending budget for each session. Turn on sandbox mode to try every flow with mock data and no key.\n\nCreate an API key at https://dashboard.voidmob.com/developers/api-keys and fund the balance with crypto in the dashboard.",
   "author": {
