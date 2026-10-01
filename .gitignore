@@ -4,3 +4,5 @@ dist/
 .mcpregistry_*
 .smithery/
 docs/
+.mcpb-stage/
+*.mcpb

@@ -1,6 +1,6 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { HttpClient, HttpError, NetworkError } from "../client/http.js";
+import { HttpError, NetworkError } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
 import { path } from "../client/path.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
@@ -8,11 +8,16 @@ import { EsimProduct, Esim, EsimUsage, type Esim as EsimT, type EsimUsage as Esi
 import { structuredOk, structuredWithImage, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { formatUsd, formatData } from "../utils/format.js";
 import { READ_ONLY, SPENDS } from "../utils/annotations.js";
+import { outputObject } from "../utils/output.js";
 import { EsimId, EsimProductId } from "../constants/ids.js";
+import { MaxPriceCents } from "../constants/price.js";
+import { defineTool, type ToolContext } from "./context.js";
 
 // ── search_esim_plans ───────────────────────────────────────────────────────
 
-export const searchEsimPlansHandler = (http: HttpClient) =>
+export const SearchEsimPlansOutput = outputObject({ esim_plans: z.array(EsimProduct), next_cursor: z.string().nullable() });
+
+export const searchEsimPlansHandler = (ctx: ToolContext) =>
   wrapToolErrors(async (args: {
     country?: string;
     min_data_gb?: number;
@@ -24,7 +29,8 @@ export const searchEsimPlansHandler = (http: HttpClient) =>
     cursor?: string;
   }): Promise<ToolResult> => {
     const q = new URLSearchParams();
-    if (args.country) q.set("country", args.country);
+    // The API filter is `countries` (plans covering any listed code).
+    if (args.country) q.set("countries", args.country.trim().toUpperCase());
     if (args.min_data_gb !== undefined) q.set("min_data_gb", String(args.min_data_gb));
     // API param is min_validity_days (not min_days); has_5g is server-side.
     if (args.min_days !== undefined) q.set("min_validity_days", String(args.min_days));
@@ -34,7 +40,7 @@ export const searchEsimPlansHandler = (http: HttpClient) =>
     if (args.cursor) q.set("cursor", args.cursor);
 
     const data = await callApi<{ products: unknown[]; next_cursor: string | null }>(
-      http,
+      ctx.http,
       "GET",
       `/v1/esim_products?${q.toString()}`,
     );
@@ -89,19 +95,24 @@ function installLines(esim: EsimT): string[] {
 
 // ── purchase_esim ───────────────────────────────────────────────────────────
 
-export const purchaseEsimHandler = (http: HttpClient) =>
-  wrapToolErrors(async (args: { plan_id: string }): Promise<ToolResult> => {
-    const productResp = await callApi<{ product: unknown }>(http, "GET", path`/v1/esim_products/${args.plan_id}`);
-    const product = EsimProduct.parse(productResp.product);
-    const out = await callApi<{ esim: unknown }>(http, "POST", "/v1/esims", {
-      body: { product_id: args.plan_id, max_price_cents: product.price_cents },
-      idempotencyKey: newIdempotencyKey(),
+export const EsimOrderOutput = outputObject({ esim: Esim });
+
+export const purchaseEsimHandler = (ctx: ToolContext) =>
+  wrapToolErrors(async (args: { plan_id: string; max_price_cents: number }): Promise<ToolResult> => {
+    const max = args.max_price_cents;
+    // The API enforces max_price_cents: above it, PRICE_OVER_CAP and no charge.
+    const esim = await ctx.guard.run(max, async () => {
+      const out = await callApi<{ esim: unknown }>(ctx.http, "POST", "/v1/esims", {
+        body: { product_id: args.plan_id, max_price_cents: max },
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const value = Esim.parse(out.esim);
+      return { value, chargedCents: value.charged_price_cents };
     });
-    const esim = Esim.parse(out.esim);
     const text = [
       `eSIM purchased: ${esim.id}`,
       ``,
-      `  Title:          ${product.title}`,
+      `  Plan:           ${args.plan_id}`,
       `  Status:         ${esim.status}`,
       `  Countries:      ${esim.countries.join(", ")}`,
       `  Data:           ${formatData(esim.data_limit_gb, esim.data_unlimited)}`,
@@ -138,14 +149,16 @@ function usageLines(usage: EsimUsageT | null): string[] {
   return lines;
 }
 
-export const getEsimStatusHandler = (http: HttpClient) =>
+export const EsimStatusOutput = outputObject({ esim: Esim, usage: EsimUsage.nullable() });
+
+export const getEsimStatusHandler = (ctx: ToolContext) =>
   wrapToolErrors(async (args: { esim_id: string }): Promise<ToolResult> => {
     // Usage is best-effort enrichment on a read path: degrade to null on ANY
     // API/network error so a transient usage-subservice failure never sinks the
     // core eSIM status read. Non-API throws (bugs) still propagate.
     const [esimRaw, usageRaw] = await Promise.all([
-      callApi<{ esim: unknown }>(http, "GET", path`/v1/esims/${args.esim_id}`),
-      callApi<{ usage: unknown }>(http, "GET", path`/v1/esims/${args.esim_id}/usage`).catch((e) => {
+      callApi<{ esim: unknown }>(ctx.http, "GET", path`/v1/esims/${args.esim_id}`),
+      callApi<{ usage: unknown }>(ctx.http, "GET", path`/v1/esims/${args.esim_id}/usage`).catch((e) => {
         if (e instanceof HttpError || e instanceof NetworkError) return null;
         throw e;
       }),
@@ -168,12 +181,14 @@ export const getEsimStatusHandler = (http: HttpClient) =>
 
 // ── topup_esim ──────────────────────────────────────────────────────────────
 
-export const topupEsimHandler = (http: HttpClient) =>
-  wrapToolErrors(async (args: { esim_id: string; topup_product_id?: string }): Promise<ToolResult> => {
+export const TopupEsimOutput = outputObject({ topups: z.array(EsimProduct).optional(), esim: Esim.optional() });
+
+export const topupEsimHandler = (ctx: ToolContext) =>
+  wrapToolErrors(async (args: { esim_id: string; topup_product_id?: string; max_price_cents?: number }): Promise<ToolResult> => {
     if (!args.topup_product_id) {
       // Browse path
       const out = await callApi<{ supports_topup: boolean; topups: unknown[] }>(
-        http,
+        ctx.http,
         "GET",
         path`/v1/esims/${args.esim_id}/topups`,
       );
@@ -189,33 +204,36 @@ export const topupEsimHandler = (http: HttpClient) =>
             `  ${t.title} (${t.id}) - ${formatData(t.data_limit_gb, t.data_unlimited)}, ${t.validity_days} days, ${formatUsd(t.price_cents)}`,
         ),
         ``,
-        `To buy one, confirm the price with the user, then re-run topup_esim with topup_product_id.`,
+        `To buy one, show the user its price, then call topup_esim again with topup_product_id and that price as max_price_cents.`,
       ].join("\n");
       return structuredOk(text, { topups });
     }
-    // Purchase path: quote-then-commit
-    const productResp = await callApi<{ product: unknown }>(
-      http,
-      "GET",
-      path`/v1/esim_products/${args.topup_product_id}`,
-    );
-    const product = EsimProduct.parse(productResp.product);
-    const created = await callApi<{ esim: unknown }>(
-      http,
-      "POST",
-      path`/v1/esims/${args.esim_id}/topups`,
-      {
-        body: { product_id: args.topup_product_id, max_price_cents: product.price_cents },
-        idempotencyKey: newIdempotencyKey(),
-      },
-    );
-    const esim = Esim.parse(created.esim);
+    const max = args.max_price_cents;
+    if (max === undefined) {
+      return toolError(
+        "Buying a top-up charges your balance, so it needs max_price_cents: the top-up price (from topup_esim without topup_product_id) that you showed the user and they approved. Nothing was charged.",
+      );
+    }
+    // The API enforces max_price_cents: above it, PRICE_OVER_CAP and no charge.
+    const esim = await ctx.guard.run(max, async () => {
+      const created = await callApi<{ esim: unknown }>(
+        ctx.http,
+        "POST",
+        path`/v1/esims/${args.esim_id}/topups`,
+        {
+          body: { product_id: args.topup_product_id, max_price_cents: max },
+          idempotencyKey: newIdempotencyKey(),
+        },
+      );
+      const value = Esim.parse(created.esim);
+      return { value, chargedCents: value.charged_price_cents };
+    });
     const text = [
       `Top-up ${esim.id} purchased on ${args.esim_id}.`,
       ``,
-      `  Title:     ${product.title}`,
-      `  Data:      ${formatData(product.data_limit_gb, product.data_unlimited)}`,
-      `  Validity:  ${product.validity_days} days`,
+      `  Product:   ${args.topup_product_id}`,
+      `  Data:      ${formatData(esim.data_limit_gb, esim.data_unlimited)}`,
+      `  Validity:  ${esim.validity_days} days`,
       `  Charged:   ${formatUsd(esim.charged_price_cents)}`,
       ``,
       `The data is added to the same installed eSIM - nothing to reinstall. get_esim_status(esim_id="${args.esim_id}") shows every package.`,
@@ -225,9 +243,11 @@ export const topupEsimHandler = (http: HttpClient) =>
 
 // ── get_esim_qr ─────────────────────────────────────────────────────────────
 
-export const getEsimQrHandler = (http: HttpClient) =>
+export const EsimQrOutput = outputObject({ esim_id: z.string() });
+
+export const getEsimQrHandler = (ctx: ToolContext) =>
   wrapToolErrors(async (args: { esim_id: string }): Promise<ToolResult> => {
-    const res = await http.request("GET", path`/v1/esims/${args.esim_id}/qr.png`, {
+    const res = await ctx.http.request("GET", path`/v1/esims/${args.esim_id}/qr.png`, {
       expectBinary: true,
     });
     if (!res.binary) return toolError("QR fetch returned no binary payload.");
@@ -241,80 +261,82 @@ export const getEsimQrHandler = (http: HttpClient) =>
 
 // ── registration ────────────────────────────────────────────────────────────
 
-export function registerEsimTools(server: McpServer, http: HttpClient) {
-  server.registerTool(
-    "search_esim_plans",
-    {
-      title: "Search eSIM plans",
-      description:
-        "Search prepaid eSIM data plans for travel by country or region: data allowance, validity, price, 5G, hotspot, calls/SMS and top-up support. " +
-        "Results are paged - pass cursor for more. Next: purchase_esim with the prod_ id.",
-      inputSchema: {
-        country: z.string().optional().describe("ISO-3166 country code (e.g. 'JP')"),
-        min_data_gb: z.number().min(0).optional(),
-        min_days: z.number().int().min(0).optional(),
-        has_5g: z.boolean().optional(),
-        has_hotspot: z.boolean().optional(),
-        query: z.string().optional().describe("Substring search on plan title (e.g. 'Europe')"),
-        limit: z.number().int().min(1).max(50).default(20),
-        cursor: z.string().optional(),
-      },
-      annotations: READ_ONLY,
+export function registerEsimTools(server: McpServer, ctx: ToolContext) {
+  defineTool(server, ctx, "search_esim_plans", {
+    group: "esim",
+    writes: false,
+    title: "Search eSIM plans",
+    description:
+      "Search prepaid eSIM data plans for travel by country or region: data allowance, validity, price, 5G, hotspot, calls/SMS and top-up support. " +
+      "Results are paged - pass cursor for more. Next: show the user the plan and price, then purchase_esim with the prod_ id and that price as max_price_cents.",
+    inputSchema: {
+      country: z.string().regex(/^[A-Za-z]{2}$/, "Expected a 2-letter ISO country code").optional()
+        .describe("ISO-3166 country code, any case (e.g. 'JP'): plans that cover this country"),
+      min_data_gb: z.number().min(0).optional(),
+      min_days: z.number().int().min(0).optional(),
+      has_5g: z.boolean().optional(),
+      has_hotspot: z.boolean().optional(),
+      query: z.string().optional().describe("Substring search on plan title (e.g. 'Europe')"),
+      limit: z.number().int().min(1).max(50).default(20),
+      cursor: z.string().optional(),
     },
-    searchEsimPlansHandler(http),
-  );
+    outputSchema: SearchEsimPlansOutput,
+    annotations: READ_ONLY,
+  }, searchEsimPlansHandler(ctx));
 
-  server.registerTool(
-    "purchase_esim",
-    {
-      title: "Buy an eSIM",
-      description:
-        "Buy an eSIM data plan, charged to your balance immediately. It charges the live price at that moment (re-read just before buying, so it can differ from an earlier search); " +
-        "show the user the price from search_esim_plans first. It cannot be cancelled through this server once issued. " +
-        "Returns the esim_ id with install details (LPA string, SM-DP+ address, activation code); if it is still processing, poll get_esim_status. Use get_esim_qr for the QR image.",
-      inputSchema: { plan_id: EsimProductId.describe("prod_... id from search_esim_plans") },
-      annotations: SPENDS,
+  defineTool(server, ctx, "purchase_esim", {
+    group: "esim",
+    writes: true,
+    title: "Buy an eSIM",
+    description:
+      "Buy an eSIM data plan, charged to your balance immediately. It cannot be cancelled through this server once issued. " +
+      "Requires max_price_cents: the price from search_esim_plans that you showed the user and they approved; if the price is now higher, nothing is charged and the new price comes back to re-confirm. " +
+      "Returns the esim_ id with install details (LPA string, SM-DP+ address, activation code); if it is still processing, poll get_esim_status. Use get_esim_qr for the QR image.",
+    inputSchema: {
+      plan_id: EsimProductId.describe("prod_... id from search_esim_plans"),
+      max_price_cents: MaxPriceCents,
     },
-    purchaseEsimHandler(http),
-  );
+    outputSchema: EsimOrderOutput,
+    annotations: SPENDS,
+  }, purchaseEsimHandler(ctx));
 
-  server.registerTool(
-    "get_esim_status",
-    {
-      title: "eSIM status and usage",
-      description:
-        "Read an eSIM's status, expiry, install details (LPA string) and data usage for every package on it (the base plan plus any top-ups), with an eSIM-level total.",
-      inputSchema: { esim_id: EsimId.describe("esim_... id from purchase_esim or list_orders") },
-      annotations: READ_ONLY,
-    },
-    getEsimStatusHandler(http),
-  );
+  defineTool(server, ctx, "get_esim_status", {
+    group: "esim",
+    writes: false,
+    title: "eSIM status and usage",
+    description:
+      "Read an eSIM's status, expiry, install details (LPA string) and data usage for every package on it (the base plan plus any top-ups), with an eSIM-level total.",
+    inputSchema: { esim_id: EsimId.describe("esim_... id from purchase_esim or list_orders") },
+    outputSchema: EsimStatusOutput,
+    annotations: READ_ONLY,
+  }, getEsimStatusHandler(ctx));
 
-  server.registerTool(
-    "topup_esim",
-    {
-      title: "Browse or buy eSIM top-ups",
-      description:
-        "Add data to an existing eSIM. Without topup_product_id: lists compatible top-ups with prices (no charge). " +
-        "With topup_product_id: buys that top-up, charged to your balance immediately - confirm the price with the user first.",
-      inputSchema: {
-        esim_id: EsimId.describe("esim_... id of the eSIM to top up"),
-        topup_product_id: EsimProductId.optional().describe("prod_... id from the top-up list; omit to browse"),
-      },
-      annotations: SPENDS,
+  defineTool(server, ctx, "topup_esim", {
+    group: "esim",
+    writes: true,
+    title: "Browse or buy eSIM top-ups",
+    description:
+      "Add data to an existing eSIM. Without topup_product_id: lists compatible top-ups with prices (no charge). " +
+      "With topup_product_id: buys that top-up, charged to your balance immediately; requires max_price_cents (the top-up price you showed the user and they approved).",
+    inputSchema: {
+      esim_id: EsimId.describe("esim_... id of the eSIM to top up"),
+      topup_product_id: EsimProductId.optional().describe("prod_... id from the top-up list; omit to browse"),
+      max_price_cents: MaxPriceCents.optional().describe(
+        "Required with topup_product_id: the top-up price you showed the user and they approved, in US cents. Refused uncharged if the price is higher.",
+      ),
     },
-    topupEsimHandler(http),
-  );
+    outputSchema: TopupEsimOutput,
+    annotations: SPENDS,
+  }, topupEsimHandler(ctx));
 
-  server.registerTool(
-    "get_esim_qr",
-    {
-      title: "eSIM QR code",
-      description:
-        "Fetch the activation QR code for an eSIM as an image. Most MCP clients render the image inline so the user can scan it directly.",
-      inputSchema: { esim_id: EsimId.describe("esim_... id") },
-      annotations: READ_ONLY,
-    },
-    getEsimQrHandler(http),
-  );
+  defineTool(server, ctx, "get_esim_qr", {
+    group: "esim",
+    writes: false,
+    title: "eSIM QR code",
+    description:
+      "Fetch the activation QR code for an eSIM as an image. Most MCP clients render the image inline so the user can scan it directly.",
+    inputSchema: { esim_id: EsimId.describe("esim_... id") },
+    outputSchema: EsimQrOutput,
+    annotations: READ_ONLY,
+  }, getEsimQrHandler(ctx));
 }

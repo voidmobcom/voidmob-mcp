@@ -13,6 +13,18 @@ const UNCERTAIN_WRITE =
 const CHECK_BEFORE_REBUY =
   "check list_orders, the matching get tool or get_account (balance) before buying again";
 
+/**
+ * Copy for a purchase refused because the price rose above the caller's cap:
+ * the new price in dollars and cents, and a re-confirm instruction.
+ */
+export function priceChangedText(currentCents: number, maxCents?: number): string {
+  const was = maxCents !== undefined ? ` (your max_price_cents was ${maxCents}, ${formatUsd(maxCents)})` : "";
+  return (
+    `The price is now ${formatUsd(currentCents)}${was}, so nothing was charged. ` +
+    `Show the user the new price; only if they approve, call this tool again with max_price_cents=${currentCents}`
+  );
+}
+
 function retryAfterSeconds(err: HttpError): number | undefined {
   for (const v of [err.details?.retry_after_seconds, err.details?.paused_for_seconds, err.meta.retryAfterSeconds]) {
     if (typeof v === "number" && Number.isFinite(v) && v > 0) return Math.ceil(v);
@@ -47,21 +59,15 @@ export function mapApiError(err: unknown): string {
     case "INSUFFICIENT_BALANCE":
       return `Your VoidMob balance is too low for this purchase. Nothing was charged. Ask the account owner to top up at ${WALLET_URL}, then retry${reqLine}`;
     case "PRICE_OVER_CAP": {
-      const max = err.details?.max_price_cents as number | undefined;
-      const avail = err.details?.available_price_cents as number | undefined;
-      const next = "Nothing was charged. Confirm the new price with the user, then re-run the tool to buy at the current price";
-      if (max !== undefined && avail !== undefined) {
-        return `Price moved from ${formatUsd(max)} to ${formatUsd(avail)} between quote and purchase. ${next}${reqLine}`;
+      const max = err.details?.max_price_cents;
+      const avail = err.details?.available_price_cents;
+      if (typeof avail === "number") {
+        return `${priceChangedText(avail, typeof max === "number" ? max : undefined)}${reqLine}`;
       }
-      // eSIM emits only available_price_cents (no max). Still surface the
-      // concrete current price rather than a vague "above your cap".
-      if (avail !== undefined) {
-        return `Price moved above your quote (now ${formatUsd(avail)}). ${next}${reqLine}`;
-      }
-      return `Price moved above your quote. ${next}${reqLine}`;
+      return `The current price is above your max_price_cents, so nothing was charged. Re-check the price with the matching search tool, show it to the user, and only if they approve call this tool again with that price as max_price_cents${reqLine}`;
     }
     case "PRICE_MISMATCH":
-      return `The current price is above the quoted maximum, so nothing was charged. Check the current price again (search_proxies, or get_proxy_status for a renewal) and confirm it with the user before retrying${reqLine}`;
+      return `The current price is above your max_price_cents, so nothing was charged. Re-check the price (search_proxies for a new proxy, get_proxy_status for a renewal or top-up), show it to the user, and only if they approve call this tool again with that price as max_price_cents${reqLine}`;
     case "SERVICE_OUT_OF_STOCK":
     case "OUT_OF_STOCK_AT_PRICE":
       if (err.details?.reason === "throttled") {

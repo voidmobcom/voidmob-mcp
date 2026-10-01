@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { getAccountHandler } from "../../src/tools/account.js";
 import { createMockHttpClient } from "../mock-http.js";
+import { toolContext } from "../../src/tools/context.js";
 
 describe("get_account", () => {
   it("calls GET /v1/me and renders balance + rate limits", async () => {
@@ -22,7 +23,7 @@ describe("get_account", () => {
       headers: new Headers(),
     });
 
-    const handler = getAccountHandler(http);
+    const handler = getAccountHandler(toolContext(http));
     const res = await handler({});
     expect(res.isError).toBeFalsy();
     const textBlock = res.content[0];
@@ -46,7 +47,7 @@ describe("get_account", () => {
       },
       headers: new Headers(),
     });
-    const handler = getAccountHandler(http);
+    const handler = getAccountHandler(toolContext(http));
     const res = await handler({});
     expect(res.isError).toBe(true);
     const textBlock = res.content[0];

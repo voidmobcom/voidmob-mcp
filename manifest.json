@@ -1,0 +1,225 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.3.schema.json",
+  "manifest_version": "0.3",
+  "name": "voidmob-mcp",
+  "display_name": "VoidMob",
+  "version": "1.1.8",
+  "description": "Non-VoIP SMS verification numbers, dedicated numbers, travel eSIMs and 4G/5G mobile proxies, paid from a prepaid VoidMob balance.",
+  "long_description": "Lets Claude search, price and buy VoidMob services from your prepaid USD balance: US non-VoIP numbers for SMS verification codes (refunded automatically when no SMS arrives), long-term rentals and private dedicated numbers, eSIM data plans for travel, and shared or dedicated 4G/5G mobile proxies with HTTP and SOCKS5 access.\n\nEvery purchase needs the price Claude showed you (max_price_cents), so nothing is bought at a price you did not see. Optional safety settings: read-only mode, a per-order limit and a spending budget for each session. Turn on sandbox mode to try every flow with mock data and no key.\n\nCreate an API key at https://dashboard.voidmob.com/developers/api-keys and fund the balance with crypto in the dashboard.",
+  "author": {
+    "name": "VoidMob",
+    "url": "https://voidmob.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/voidmobcom/voidmob-mcp"
+  },
+  "homepage": "https://voidmob.com/mcp",
+  "documentation": "https://github.com/voidmobcom/voidmob-mcp#readme",
+  "support": "https://github.com/voidmobcom/voidmob-mcp/issues",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/index.js"
+      ],
+      "env": {
+        "VOIDMOB_API_KEY": "${user_config.api_key}",
+        "VOIDMOB_SANDBOX": "${user_config.sandbox}",
+        "VOIDMOB_READ_ONLY": "${user_config.read_only}",
+        "VOIDMOB_MAX_ORDER_CENTS": "${user_config.max_order_cents}",
+        "VOIDMOB_BUDGET_CENTS": "${user_config.budget_cents}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "get_account",
+      "description": "Account balance"
+    },
+    {
+      "name": "search_sms_services",
+      "description": "Search SMS services"
+    },
+    {
+      "name": "get_rental",
+      "description": "Check or wait for SMS verification or rental"
+    },
+    {
+      "name": "rent_number",
+      "description": "Rent an SMS number"
+    },
+    {
+      "name": "cancel_rental",
+      "description": "Cancel SMS verification or rental"
+    },
+    {
+      "name": "reuse_number",
+      "description": "Reuse a verification number"
+    },
+    {
+      "name": "re_rent_rental",
+      "description": "Re-rent an expired rental"
+    },
+    {
+      "name": "toggle_auto_renew",
+      "description": "Set rental or dedicated number auto-renew"
+    },
+    {
+      "name": "search_dedicated_countries",
+      "description": "Dedicated number countries"
+    },
+    {
+      "name": "purchase_dedicated_number",
+      "description": "Buy a dedicated number"
+    },
+    {
+      "name": "get_dedicated_number",
+      "description": "Get dedicated number"
+    },
+    {
+      "name": "search_esim_plans",
+      "description": "Search eSIM plans"
+    },
+    {
+      "name": "purchase_esim",
+      "description": "Buy an eSIM"
+    },
+    {
+      "name": "get_esim_status",
+      "description": "eSIM status and usage"
+    },
+    {
+      "name": "topup_esim",
+      "description": "Browse or buy eSIM top-ups"
+    },
+    {
+      "name": "get_esim_qr",
+      "description": "eSIM QR code"
+    },
+    {
+      "name": "search_proxies",
+      "description": "Search proxy plans"
+    },
+    {
+      "name": "purchase_proxy",
+      "description": "Buy a proxy"
+    },
+    {
+      "name": "get_proxy_status",
+      "description": "Proxy status and connection details"
+    },
+    {
+      "name": "rotate_proxy_ip",
+      "description": "Rotate dedicated proxy IP"
+    },
+    {
+      "name": "renew_proxy",
+      "description": "Renew a proxy"
+    },
+    {
+      "name": "set_proxy_auto_renew",
+      "description": "Set proxy auto-renew"
+    },
+    {
+      "name": "topup_proxy",
+      "description": "Add data to a shared proxy"
+    },
+    {
+      "name": "regenerate_proxy_password",
+      "description": "Reset proxy gateway or list password"
+    },
+    {
+      "name": "list_proxy_lists",
+      "description": "List proxy lists"
+    },
+    {
+      "name": "create_proxy_list",
+      "description": "Create proxy list"
+    },
+    {
+      "name": "update_proxy_list",
+      "description": "Update proxy list"
+    },
+    {
+      "name": "delete_proxy_list",
+      "description": "Delete proxy list"
+    },
+    {
+      "name": "get_geo",
+      "description": "Proxy geo targets"
+    },
+    {
+      "name": "list_orders",
+      "description": "List orders"
+    }
+  ],
+  "tools_generated": false,
+  "prompts_generated": true,
+  "keywords": [
+    "sms",
+    "otp",
+    "phone-verification",
+    "non-voip",
+    "esim",
+    "travel-esim",
+    "mobile-proxy",
+    "4g-proxy",
+    "socks5",
+    "crypto"
+  ],
+  "license": "MIT",
+  "privacy_policies": [
+    "https://voidmob.com/privacy"
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=22.0.0"
+    }
+  },
+  "user_config": {
+    "api_key": {
+      "type": "string",
+      "title": "API key",
+      "description": "Your vmk_live_... key from dashboard.voidmob.com/developers/api-keys. It can spend your balance. Leave empty with sandbox mode on.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    },
+    "sandbox": {
+      "type": "boolean",
+      "title": "Sandbox mode",
+      "description": "Use offline mock data with a $500 play balance. No key needed and nothing is charged.",
+      "required": false,
+      "default": false
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Read-only",
+      "description": "Hide every tool that spends money or changes anything. Claude can still search prices and read your orders.",
+      "required": false,
+      "default": false
+    },
+    "max_order_cents": {
+      "type": "number",
+      "title": "Max per order (US cents)",
+      "description": "Refuse any single purchase above this, in whole US cents (2500 = $25.00). Leave empty for no limit.",
+      "required": false,
+      "min": 0
+    },
+    "budget_cents": {
+      "type": "number",
+      "title": "Session budget (US cents)",
+      "description": "Stop buying once this much was spent since Claude started the server, in whole US cents (5000 = $50.00). Also keeps auto-renew off. A safety net, not an account limit. Leave empty for no budget.",
+      "required": false,
+      "min": 0
+    }
+  }
+}

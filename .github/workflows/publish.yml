@@ -101,3 +101,13 @@ jobs:
           TAG="v$(node -p "require('./package.json').version")"
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag
+
+      # Claude Desktop bundle (voidmob-mcp.mcpb) on the release. --clobber
+      # replaces an asset left by an earlier run, so a rerun stays green.
+      - name: Attach Claude Desktop bundle to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v$(node -p "require('./package.json').version")"
+          npm run pack:mcpb
+          gh release upload "$TAG" voidmob-mcp.mcpb --clobber

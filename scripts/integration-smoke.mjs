@@ -18,6 +18,7 @@
  * HttpError/NetworkError) - the harness reports those as SCHEMA MISMATCH.
  */
 import { createHttpClient } from "../dist/client/http.js";
+import { toolContext } from "../dist/tools/context.js";
 import { getAccountHandler } from "../dist/tools/account.js";
 import {
   searchSmsServicesHandler,
@@ -51,6 +52,7 @@ const http = createHttpClient({
   debug: process.env.VOIDMOB_DEBUG === "1",
   userAgent: "voidmob-mcp-integration/smoke",
 });
+const ctx = toolContext(http);
 
 let pass = 0;
 let fail = 0;
@@ -90,13 +92,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function readOnly() {
   console.log("\n== Read-only (zero spend) ==");
-  await check("get_account", () => getAccountHandler(http)({}));
-  await check("search_sms_services", () => searchSmsServicesHandler(http)({}));
-  await check("search_esim_plans", () => searchEsimPlansHandler(http)({ limit: 5 }));
-  await check("search_proxies", () => searchProxiesHandler(http)({}));
-  await check("get_geo (countries)", () => getGeoHandler(http)({}));
-  await check("get_geo (regions)", () => getGeoHandler(http)({ country: "US" }));
-  await check("list_orders", () => listOrdersHandler(http)({ limit: 10 }));
+  await check("get_account", () => getAccountHandler(ctx)({}));
+  await check("search_sms_services", () => searchSmsServicesHandler(ctx)({}));
+  await check("search_esim_plans", () => searchEsimPlansHandler(ctx)({ limit: 5 }));
+  await check("search_proxies", () => searchProxiesHandler(ctx)({}));
+  await check("get_geo (countries)", () => getGeoHandler(ctx)({}));
+  await check("get_geo (regions)", () => getGeoHandler(ctx)({ country: "US" }));
+  await check("list_orders", () => listOrdersHandler(ctx)({ limit: 10 }));
 }
 
 async function purchases() {
@@ -104,7 +106,7 @@ async function purchases() {
 
   // --- SMS verification (cheapest service), then cancel for refund ---
   const svcRes = await check("search_sms_services (pick cheapest)", () =>
-    searchSmsServicesHandler(http)({}),
+    searchSmsServicesHandler(ctx)({}),
   );
   if (svcRes?.structuredContent?.services?.length) {
     const services = svcRes.structuredContent.services;
@@ -114,20 +116,20 @@ async function purchases() {
     console.log(`  -> cheapest service: ${cheapest.name} (${cheapest.id}) @ ${cheapest.quoted_price_cents}c`);
 
     const rented = await check(`rent_number(${cheapest.id}, verification)`, () =>
-      rentNumberHandler(http)({ service_id: cheapest.id, kind: "verification" }),
+      rentNumberHandler(ctx)({ service_id: cheapest.id, kind: "verification", max_price_cents: cheapest.quoted_price_cents }),
     );
     const verId = rented?.structuredContent?.verification?.id;
     if (verId) {
       console.log(`  -> rented ${verId}`);
-      await check(`get_rental(${verId})`, () => getRentalHandler(http)({ rental_id: verId }));
+      await check(`get_rental(${verId})`, () => getRentalHandler(ctx)({ rental_id: verId }));
       // Cancel for refund. May hit CANCEL_WINDOW_NOT_OPEN cooldown; report either way.
-      await check(`cancel_rental(${verId})`, () => cancelRentalHandler(http)({ rental_id: verId }));
+      await check(`cancel_rental(${verId})`, () => cancelRentalHandler(ctx)({ rental_id: verId }));
     }
   }
 
   // --- Shared proxy, smallest GB, then list create/list/delete ---
   const proxRes = await check("search_proxies (shared)", () =>
-    searchProxiesHandler(http)({ type: "shared" }),
+    searchProxiesHandler(ctx)({ type: "shared" }),
   );
   if (proxRes?.structuredContent?.proxy_plans?.length) {
     const plans = proxRes.structuredContent.proxy_plans;
@@ -139,7 +141,7 @@ async function purchases() {
     console.log(`  -> target plan: ${target.name} (${target.id}) ${target.data_gb}GB @ ${target.quoted_price_cents}c`);
 
     const bought = await check(`purchase_proxy(${target.id})`, () =>
-      purchaseProxyHandler(http)({ plan_id: target.id }),
+      purchaseProxyHandler(ctx)({ plan_id: target.id, max_price_cents: target.quoted_price_cents }),
     );
     const proxyId = bought?.structuredContent?.proxy?.id;
     if (proxyId) {
@@ -147,27 +149,27 @@ async function purchases() {
       let active = false;
       for (let i = 0; i < 12; i++) {
         await sleep(10_000);
-        const st = await getProxyStatusHandler(http)({ proxy_id: proxyId });
+        const st = await getProxyStatusHandler(ctx)({ proxy_id: proxyId });
         const status = st?.structuredContent?.proxy?.status;
         console.log(`     poll ${i + 1}: status=${status}`);
         if (status === "active") { active = true; break; }
         if (status === "refunded" || status === "expired") break;
       }
-      await check(`get_proxy_status(${proxyId})`, () => getProxyStatusHandler(http)({ proxy_id: proxyId }));
+      await check(`get_proxy_status(${proxyId})`, () => getProxyStatusHandler(ctx)({ proxy_id: proxyId }));
       if (active) {
         const created = await check(`create_proxy_list(${proxyId})`, () =>
-          createProxyListHandler(http)({
+          createProxyListHandler(ctx)({
             proxy_id: proxyId,
             name: "smoke-test",
-            location_preset: "world_mix",
-            rotation_period: 0,
+            country: "US",
+            rotation_period_seconds: 0,
           }),
         );
-        await check(`list_proxy_lists(${proxyId})`, () => listProxyListsHandler(http)({ proxy_id: proxyId }));
+        await check(`list_proxy_lists(${proxyId})`, () => listProxyListsHandler(ctx)({ proxy_id: proxyId }));
         const listId = created?.structuredContent?.list?.id;
         if (listId) {
           await check(`delete_proxy_list(${proxyId}, ${listId})`, () =>
-            deleteProxyListHandler(http)({ proxy_id: proxyId, list_id: listId }),
+            deleteProxyListHandler(ctx)({ proxy_id: proxyId, list_id: listId }),
           );
         }
       } else {

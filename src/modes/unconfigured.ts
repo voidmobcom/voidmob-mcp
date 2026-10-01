@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { HttpError, type HttpClient } from "../client/http.js";
+import { DEFAULT_CONTROLS, type OwnerControls } from "../config.js";
 import { createVoidmobServer } from "../server.js";
 
 const SETUP_MESSAGE =
@@ -18,6 +19,6 @@ export function createUnconfiguredClient(): HttpClient {
 // registry crawlers can enumerate tools), but every call fails with setup
 // instructions instead of touching the network. Registers the SAME live tools
 // with the rejecting client injected, so the surface cannot drift from live.
-export function buildUnconfiguredServer(): McpServer {
-  return createVoidmobServer(createUnconfiguredClient());
+export function buildUnconfiguredServer(controls: OwnerControls = DEFAULT_CONTROLS): McpServer {
+  return createVoidmobServer(createUnconfiguredClient(), controls);
 }

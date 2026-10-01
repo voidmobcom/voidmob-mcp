@@ -1,10 +1,11 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { HttpClient } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
 import { GeoCountry, GeoRegion, GeoCity, GeoIsp } from "../client/types.js";
 import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { READ_ONLY } from "../utils/annotations.js";
+import { outputObject } from "../utils/output.js";
+import { defineTool, type ToolContext } from "./context.js";
 
 interface GeoKind {
   key: "isps" | "cities" | "regions" | "countries";
@@ -40,14 +41,21 @@ const KINDS: ReadonlyArray<GeoKind> = [
   },
 ];
 
-export const getGeoHandler = (http: HttpClient) =>
+export const GetGeoOutput = outputObject({
+  countries: z.array(GeoCountry).optional(),
+  regions: z.array(GeoRegion).optional(),
+  cities: z.array(GeoCity).optional(),
+  isps: z.array(GeoIsp).optional(),
+});
+
+export const getGeoHandler = (ctx: ToolContext) =>
   wrapToolErrors(async (args: { country?: string; region?: string; city?: string }): Promise<ToolResult> => {
     const q = new URLSearchParams();
     if (args.country) q.set("country", args.country);
     if (args.region) q.set("region", args.region);
     if (args.city) q.set("city", args.city);
     const path = `/v1/geo${q.toString() ? `?${q}` : ""}`;
-    const data = await callApi<Record<string, unknown[]>>(http, "GET", path);
+    const data = await callApi<Record<string, unknown[]>>(ctx.http, "GET", path);
 
     for (const kind of KINDS) {
       if (data[kind.key]) {
@@ -61,21 +69,20 @@ export const getGeoHandler = (http: HttpClient) =>
     return toolError("Unexpected geo response shape.");
   });
 
-export function registerGeoTools(server: McpServer, http: HttpClient) {
-  server.registerTool(
-    "get_geo",
-    {
-      title: "Proxy geo targets",
-      description:
-        "Cascading geo discovery for shared-proxy list targeting (create_proxy_list). No params -> countries; country=US -> regions; " +
-        "country=US + region=California -> cities; + city='Los Angeles' -> ISPs. Each row shows available nodes.",
-      inputSchema: {
-        country: z.string().optional().describe("ISO 3166-1 alpha-2 (e.g., US)"),
-        region: z.string().optional(),
-        city: z.string().optional(),
-      },
-      annotations: READ_ONLY,
+export function registerGeoTools(server: McpServer, ctx: ToolContext) {
+  defineTool(server, ctx, "get_geo", {
+    group: "core",
+    writes: false,
+    title: "Proxy geo targets",
+    description:
+      "Cascading geo discovery for shared-proxy list targeting (create_proxy_list, update_proxy_list). No params -> countries; country=US -> regions; " +
+      "country=US + region=California -> cities; + city='Los Angeles' -> ISPs. Each row shows available nodes.",
+    inputSchema: {
+      country: z.string().optional().describe("ISO 3166-1 alpha-2 (e.g., US)"),
+      region: z.string().optional(),
+      city: z.string().optional(),
     },
-    getGeoHandler(http),
-  );
+    outputSchema: GetGeoOutput,
+    annotations: READ_ONLY,
+  }, getGeoHandler(ctx));
 }

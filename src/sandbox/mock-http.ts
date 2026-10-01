@@ -3,6 +3,7 @@ import type {
   MePayload,
   SmsService,
   Verification,
+  VerificationMessage,
   Rental,
   EsimProduct,
   Esim,
@@ -70,12 +71,13 @@ const SERVICES: SmsService[] = [
 const DEDICATED_COUNTRIES: DedicatedCountry[] = [
   { country: "us", name: "United States", quoted_price_cents: 1999, base_price_cents: 1999, in_stock: true },
   { country: "uk", name: "United Kingdom", quoted_price_cents: 1699, base_price_cents: 1699, in_stock: true },
-  { country: "de", name: "Germany", quoted_price_cents: 4899, base_price_cents: 4899, in_stock: true },
+  { country: "de", name: "Germany", quoted_price_cents: 4499, base_price_cents: 4499, in_stock: true },
   { country: "au", name: "Australia", quoted_price_cents: 3299, base_price_cents: 3299, in_stock: true },
+  { country: "it", name: "Italy", quoted_price_cents: 2999, base_price_cents: 2999, in_stock: true },
   { country: "hk", name: "Hong Kong", quoted_price_cents: 2699, base_price_cents: 2699, in_stock: false },
 ];
 
-const DED_DIAL: Record<string, string> = { us: "+1", uk: "+44", de: "+49", au: "+61", hk: "+852" };
+const DED_DIAL: Record<string, string> = { us: "+1", uk: "+44", de: "+49", au: "+61", it: "+39", hk: "+852" };
 const dedPhone = (country: string): string => phone(DED_DIAL[country] ?? "+1");
 
 const esimFeatures = (over: Partial<EsimProduct["features"]> = {}): EsimProduct["features"] => ({
@@ -133,6 +135,7 @@ const GEO: Record<string, { name: string; available_nodes: number; code?: string
 class Store {
   balanceCents = 50000; // $500 play-money balance (sandbox has no deposit tool, so spend-only)
   verifications = new Map<string, Verification>();
+  messages = new Map<string, VerificationMessage[]>(); // verification id -> SMS, newest first
   rentals = new Map<string, Rental>();
   esims = new Map<string, Esim>();
   proxies = new Map<string, Proxy>();
@@ -143,12 +146,33 @@ class Store {
 // ── response envelope helpers ─────────────────────────────────────────────────
 
 const ok = <T>(data: T, status = 200): HttpResponse => ({ status, body: { success: true, data }, headers: new Headers() });
+// Verifications, rentals and dedicated numbers carry pagination next to `data`.
+const okPage = <T>(data: T[], nextCursor: string | null): HttpResponse => ({
+  status: 200,
+  body: { success: true, data, has_more: nextCursor !== null, next_cursor: nextCursor },
+  headers: new Headers(),
+});
 const noContent = (): HttpResponse => ({ status: 204, headers: new Headers() });
 const fail = (status: number, code: string, message: string, details?: Record<string, unknown>): HttpResponse => ({
   status,
   body: { success: false, error: { code, message, request_id: uid("req_"), details } },
   headers: new Headers(),
 });
+
+// Offset cursors: opaque to the client, like prod's.
+function paginate<T>(items: T[], query: URLSearchParams, defaultLimit: number): { page: T[]; nextCursor: string | null } {
+  const limit = Math.min(100, Math.max(1, Number(query.get("limit") ?? defaultLimit) || defaultLimit));
+  const cursor = query.get("cursor");
+  const offset = cursor ? Number(Buffer.from(cursor, "base64url").toString("utf8")) || 0 : 0;
+  const page = items.slice(offset, offset + limit);
+  const next = offset + limit < items.length ? Buffer.from(String(offset + limit)).toString("base64url") : null;
+  return { page, nextCursor: next };
+}
+
+const byStatus = <T extends { status: string }>(items: T[], query: URLSearchParams): T[] => {
+  const wanted = query.getAll("status");
+  return wanted.length ? items.filter((i) => wanted.includes(i.status)) : items;
+};
 
 const PNG_1x1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
@@ -171,6 +195,36 @@ function makeFlexGateway(): NonNullable<Proxy["gateway"]> {
 export function createSandboxHttpClient(): HttpClient {
   const db = new Store();
 
+  // One expired long-term rental whose number is still held, so re-renting
+  // (re_rent_rental) can be tried in the sandbox.
+  {
+    const id = "ren_sandboxexpired1";
+    db.rentals.set(id, {
+      id,
+      display_id: "LTRSANDBOX1",
+      status: "expired",
+      phone_number: "+12025550143",
+      service_id: "svc_telegram",
+      service_name: "Telegram",
+      country: "US",
+      duration: "7D",
+      rental_type: "rental",
+      charged_price_cents: 600,
+      auto_renew: false,
+      next_renewal_price_cents: 600,
+      re_rent_available: true,
+      re_rent_price_cents: 600,
+      re_rent_blocked_at: null,
+      created_at: iso(-10 * DAY),
+      paid_until: iso(-3 * DAY),
+      expires_at: iso(-3 * DAY),
+      can_cancel: false,
+      cancel_window_expires_at: null,
+      messages: [],
+    });
+    db.createdAtMs.set(id, Date.now() - 10 * DAY);
+  }
+
   // True once READY_AFTER_MS has elapsed since the entity was (re)armed.
   const isReady = (id: string): boolean => Date.now() - (db.createdAtMs.get(id) ?? 0) >= READY_AFTER_MS;
 
@@ -187,6 +241,8 @@ export function createSandboxHttpClient(): HttpClient {
     v.code_received_at = iso();
     v.can_cancel = false;
     v.allow_reuse = true;
+    const sms: VerificationMessage = { code: v.code, text: `Your ${v.service_name} verification code is ${v.code}. Do not share it.`, received_at: v.code_received_at };
+    db.messages.set(v.id, [sms, ...(db.messages.get(v.id) ?? [])]);
     return v;
   };
 
@@ -241,7 +297,13 @@ export function createSandboxHttpClient(): HttpClient {
     // ── verifications ──
     if (method === "POST" && rawPath === "/v1/verifications") {
       const svc = SERVICES.find((s) => s.id === body.service_id);
-      if (!svc) return fail(404, "NOT_FOUND", "Service not found.");
+      if (!svc) return fail(404, "SERVICE_NOT_FOUND", "Service not found.");
+      if (body.max_price_cents != null && svc.quoted_price_cents > Number(body.max_price_cents)) {
+        return fail(409, "PRICE_OVER_CAP", "Current price exceeds the supplied max_price_cents.", {
+          max_price_cents: Number(body.max_price_cents),
+          available_price_cents: svc.quoted_price_cents,
+        });
+      }
       const paid = charge(svc.quoted_price_cents);
       if (paid) return paid;
       const id = uid("ver_");
@@ -266,13 +328,19 @@ export function createSandboxHttpClient(): HttpClient {
       return ok({ verification: v }, 201);
     }
     if (method === "GET" && rawPath === "/v1/verifications") {
-      // Newest first, like prod (pagination fields omitted - one page).
-      return ok([...db.verifications.values()].map(settleVerification).reverse());
+      // Newest first, like prod.
+      const all = byStatus([...db.verifications.values()].map(settleVerification).reverse(), query);
+      const { page, nextCursor } = paginate(all, query, 20);
+      return okPage(page, nextCursor);
     }
     if (seg[1] === "verifications" && seg[2]) {
       const v = db.verifications.get(seg[2]);
       if (!v) return fail(404, "NOT_FOUND", "Verification not found.");
       if (method === "GET" && !seg[3]) return ok({ verification: settleVerification(v) });
+      if (method === "GET" && seg[3] === "messages") {
+        settleVerification(v);
+        return ok({ messages: db.messages.get(v.id) ?? [] });
+      }
       if (method === "POST" && seg[3] === "cancel") {
         // Refund only if the code hasn't landed yet. settleVerification reflects
         // elapsed time, so eligibility doesn't depend on whether the client polled.
@@ -308,16 +376,30 @@ export function createSandboxHttpClient(): HttpClient {
 
     // ── rentals (long-term + dedicated) ──
     if (rawPath === "/v1/rentals" && method === "GET") {
-      return ok([...db.rentals.values()]);
+      const { page, nextCursor } = paginate(byStatus([...db.rentals.values()].reverse(), query), query, 20);
+      return okPage(page, nextCursor);
     }
     if (rawPath === "/v1/rentals" && method === "POST") {
       const svc = SERVICES.find((s) => s.id === body.service_id);
-      if (!svc) return fail(404, "NOT_FOUND", "Service not found.");
-      const price = Number(body.max_price_cents ?? svc.quoted_price_cents);
+      if (!svc) return fail(404, "SERVICE_NOT_FOUND", "Service not found.");
+      const duration = String(body.duration ?? "");
+      const tierPrice: Record<string, number | undefined> = {
+        "3D": svc.ltr_3d_price_cents,
+        "7D": svc.ltr_7d_price_cents,
+        "14D": svc.ltr_14d_price_cents,
+        "30D": svc.ltr_30d_price_cents,
+      };
+      const price = tierPrice[duration];
+      if (!price) return fail(404, "LTR_NOT_AVAILABLE", "This rental duration is not offered for the service.");
+      if (body.max_price_cents != null && price > Number(body.max_price_cents)) {
+        return fail(409, "PRICE_OVER_CAP", "Current price exceeds the supplied max_price_cents.", {
+          max_price_cents: Number(body.max_price_cents),
+          available_price_cents: price,
+        });
+      }
       const paid = charge(price);
       if (paid) return paid;
       const id = uid("ren_");
-      const duration = String(body.duration ?? "7D");
       const days = parseInt(duration, 10) || 7;
       const r: Rental = {
         id,
@@ -361,10 +443,15 @@ export function createSandboxHttpClient(): HttpClient {
         return ok(r);
       }
       if (method === "POST" && seg[3] === "re_rent") {
-        const paid = charge(r.charged_price_cents);
+        if (r.status !== "expired" || !r.re_rent_available || r.re_rent_price_cents == null) {
+          return fail(410, "RE_RENT_NOT_AVAILABLE", "This number can no longer be re-rented.");
+        }
+        const paid = charge(r.re_rent_price_cents);
         if (paid) return paid;
         const days = parseInt(r.duration, 10) || 7;
         r.status = "active";
+        r.re_rent_available = false;
+        r.re_rent_price_cents = null;
         r.paid_until = iso(days * DAY);
         r.expires_at = iso(days * DAY);
         return ok(r);
@@ -382,14 +469,19 @@ export function createSandboxHttpClient(): HttpClient {
     }
     if (rawPath === "/v1/dedicated/numbers" && method === "GET") {
       // messages are always empty on the list endpoint
-      return ok([...db.dedicateds.values()].map((d) => ({ ...d, messages: [] })));
+      const all = byStatus([...db.dedicateds.values()].reverse(), query).map((d) => ({ ...d, messages: [] }));
+      const { page, nextCursor } = paginate(all, query, 20);
+      return okPage(page, nextCursor);
     }
     if (rawPath === "/v1/dedicated/numbers" && method === "POST") {
       const c = DEDICATED_COUNTRIES.find((x) => x.country === String(body.country ?? "").toLowerCase());
       if (!c) return fail(404, "DEDICATED_NOT_AVAILABLE", "No dedicated numbers for this country.");
       if (!c.in_stock) return fail(503, "SERVICE_OUT_OF_STOCK", "This country is out of stock.");
       if (body.max_price_cents != null && c.quoted_price_cents > Number(body.max_price_cents)) {
-        return fail(409, "PRICE_OVER_CAP", "Current price exceeds max_price_cents.");
+        return fail(409, "PRICE_OVER_CAP", "Current price exceeds max_price_cents.", {
+          max_price_cents: Number(body.max_price_cents),
+          available_price_cents: c.quoted_price_cents,
+        });
       }
       const paid = charge(c.quoted_price_cents);
       if (paid) return paid;
@@ -429,12 +521,12 @@ export function createSandboxHttpClient(): HttpClient {
     // ── eSIM products ──
     if (rawPath === "/v1/esim_products" && method === "GET") {
       let products = ESIM_PRODUCTS.filter((p) => !p.id.startsWith("prod_topup"));
-      const country = query.get("country");
+      const countries = query.get("countries")?.toUpperCase().split(",").filter(Boolean);
       const minGb = query.get("min_data_gb");
       const minDays = query.get("min_validity_days");
       const has5g = query.get("has_5g");
       const search = query.get("search");
-      if (country) products = products.filter((p) => p.countries.includes(country.toUpperCase()));
+      if (countries?.length) products = products.filter((p) => p.countries.some((c) => countries.includes(c)));
       if (minGb) products = products.filter((p) => p.data_unlimited || (p.data_limit_gb ?? 0) >= Number(minGb));
       if (minDays) products = products.filter((p) => p.validity_days >= Number(minDays));
       if (has5g) products = products.filter((p) => p.features.has_5g === (has5g === "true"));
@@ -449,11 +541,15 @@ export function createSandboxHttpClient(): HttpClient {
 
     // ── eSIMs ──
     if (rawPath === "/v1/esims" && method === "GET") {
-      return ok({ esims: [...db.esims.values()] });
+      const { page, nextCursor } = paginate(byStatus([...db.esims.values()], query), query, 50);
+      return ok({ esims: page, next_cursor: nextCursor });
     }
     if (rawPath === "/v1/esims" && method === "POST") {
       const product = ESIM_PRODUCTS.find((p) => p.id === body.product_id);
-      if (!product) return fail(404, "NOT_FOUND", "Product not found.");
+      if (!product) return fail(404, "PRODUCT_NOT_FOUND", "Product not found.");
+      if (body.max_price_cents != null && product.price_cents > Number(body.max_price_cents)) {
+        return fail(409, "PRICE_OVER_CAP", "Current price exceeds the supplied max_price_cents.", { available_price_cents: product.price_cents });
+      }
       const paid = charge(product.price_cents);
       if (paid) return paid;
       const id = uid("esim_");
@@ -525,7 +621,10 @@ export function createSandboxHttpClient(): HttpClient {
       }
       if (seg[3] === "topups" && method === "POST") {
         const product = ESIM_PRODUCTS.find((p) => p.id === body.product_id);
-        if (!product) return fail(404, "NOT_FOUND", "Top-up product not found.");
+        if (!product) return fail(404, "PRODUCT_NOT_FOUND", "Top-up product not found.");
+        if (body.max_price_cents != null && product.price_cents > Number(body.max_price_cents)) {
+          return fail(409, "PRICE_OVER_CAP", "Current price exceeds the supplied max_price_cents.", { available_price_cents: product.price_cents });
+        }
         const paid = charge(product.price_cents);
         if (paid) return paid;
         const id = uid("esim_");
@@ -578,7 +677,8 @@ export function createSandboxHttpClient(): HttpClient {
 
     // ── proxies ──
     if (rawPath === "/v1/proxies" && method === "GET") {
-      return ok({ proxies: [...db.proxies.values()].map(settleProxy) });
+      const { page, nextCursor } = paginate(byStatus([...db.proxies.values()].map(settleProxy), query), query, 50);
+      return ok({ proxies: page, next_cursor: nextCursor });
     }
     if (rawPath === "/v1/proxies" && method === "POST") {
       const plan = PROXY_PLANS.find((p) => p.id === body.plan_id);
@@ -660,9 +760,15 @@ export function createSandboxHttpClient(): HttpClient {
       }
       if (seg[3] === "topup" && method === "POST") {
         if (isDedicatedProxy(proxy)) return fail(422, "NOT_SUPPORTED", "Not supported for this proxy.");
-        const paid = charge(Number(body.max_price_cents ?? 0));
+        // Priced from the plan's price per GB, like prod.
+        const plan = PROXY_PLANS.find((p) => p.id === proxy.plan_id);
+        const gb = Number(body.additional_gb ?? 0);
+        const price = plan?.data_gb ? Math.round((plan.quoted_price_cents / plan.data_gb) * gb) : 0;
+        if (body.max_price_cents === undefined) return fail(400, "VALIDATION_ERROR", "max_price_cents is required.");
+        if (price > Number(body.max_price_cents)) return fail(409, "PRICE_MISMATCH", "Price exceeds the supplied max_price_cents.");
+        const paid = charge(price);
         if (paid) return paid;
-        proxy.data_gb_total += Number(body.additional_gb ?? 0);
+        proxy.data_gb_total += gb;
         return ok({ proxy });
       }
       if (seg[3] === "regenerate_password" && method === "POST") {
@@ -676,6 +782,8 @@ export function createSandboxHttpClient(): HttpClient {
         const id = uid("list_");
         const single = typeof body.country === "string" ? body.country.toUpperCase() : null;
         const login = { username: `vm_${alnum(8)}`, password: alnum(12) };
+        // IP-whitelist lists authenticate by source IP: no credentials.
+        const network = typeof body.network === "string" && body.network ? body.network : null;
         const list: ProxyList = {
           id,
           proxy_id: proxy.id,
@@ -689,9 +797,11 @@ export function createSandboxHttpClient(): HttpClient {
           rotation_period_seconds: Number(body.rotation_period_seconds ?? 0),
           rotation_mode: String(body.rotation_mode ?? "instant"),
           format: String(body.format ?? "login_pass_host_port"),
-          credentials: { host: GATEWAY_HOST, port: LIST_PORT, protocol: "http", ...login },
-          // entries[] is always login:pass@host:port, whatever `format` says.
-          entries: [`${login.username}:${login.password}@${GATEWAY_HOST}:${LIST_PORT}`],
+          credentials: network ? null : { host: GATEWAY_HOST, port: LIST_PORT, protocol: "http", ...login },
+          // entries[] is login:pass@host:port whatever `format` says (bare
+          // host:port for an IP-whitelist list).
+          entries: [network ? `${GATEWAY_HOST}:${LIST_PORT}` : `${login.username}:${login.password}@${GATEWAY_HOST}:${LIST_PORT}`],
+          network,
           activation_note: "List active within a few minutes of creation.",
           created_at: iso(),
         };
@@ -701,6 +811,35 @@ export function createSandboxHttpClient(): HttpClient {
       if (seg[3] === "lists" && seg[4] && method === "DELETE") {
         proxy.lists = proxy.lists.filter((l) => l.id !== seg[4]);
         return noContent();
+      }
+      if (seg[3] === "lists" && seg[4]) {
+        const list = proxy.lists.find((l) => l.id === seg[4]);
+        if (!list) return fail(404, "PROXY_LIST_NOT_FOUND", "Proxy list not found.");
+        if (method === "PATCH" && !seg[5]) {
+          // The IP whitelist is create-time only; everything else can change.
+          if ("network" in body) return fail(400, "VALIDATION_ERROR", "network cannot be changed on an existing list.");
+          if (typeof body.country === "string") {
+            list.country = body.country.toUpperCase();
+            list.countries = null;
+          }
+          if (Array.isArray(body.countries)) {
+            list.countries = (body.countries as string[]).map((c) => c.toUpperCase());
+            list.country = null;
+            list.region = list.city = list.isp = list.zip = null;
+          }
+          for (const key of ["region", "city", "isp", "zip", "name", "rotation_mode", "format"] as const) {
+            if (typeof body[key] === "string") (list as Record<string, unknown>)[key] = body[key];
+          }
+          if (typeof body.rotation_period_seconds === "number") list.rotation_period_seconds = body.rotation_period_seconds;
+          return ok({ list });
+        }
+        if (method === "POST" && seg[5] === "regenerate_password") {
+          if (list.credentials) {
+            list.credentials = { ...list.credentials, password: alnum(12) };
+            list.entries = [`${list.credentials.username}:${list.credentials.password}@${GATEWAY_HOST}:${LIST_PORT}`];
+          }
+          return ok({ list });
+        }
       }
     }
 

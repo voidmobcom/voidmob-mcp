@@ -1,6 +1,6 @@
-import { HttpClient, HttpError, parseRetryAfter } from "./http.js";
+import { HttpClient, HttpError, HttpResponse, parseRetryAfter } from "./http.js";
 
-interface SuccessEnvelope<T> { success: true; data: T }
+interface SuccessEnvelope<T> { success: true; data: T; next_cursor?: unknown }
 interface ErrorEnvelope {
   success: false;
   error: {
@@ -12,17 +12,10 @@ interface ErrorEnvelope {
 }
 type ApiEnvelope<T> = SuccessEnvelope<T> | ErrorEnvelope;
 
-export async function callApi<T>(
-  http: HttpClient,
-  method: string,
-  path: string,
-  opts?: { body?: unknown; idempotencyKey?: string },
-): Promise<T> {
-  const res = await http.request(method, path, opts);
-  // 204 No Content (e.g. DELETE proxy list) is a success with no body.
-  if (res.status === 204) return undefined as T;
-  const env = res.body as ApiEnvelope<T>;
-  if (env && env.success === true) return env.data;
+/** The success envelope of a response, or the HttpError it carries. */
+function unwrap<T>(res: HttpResponse, method: string): SuccessEnvelope<T> {
+  const env = res.body as ApiEnvelope<T> | undefined;
+  if (env && env.success === true) return env;
   const meta = { method, retryAfterSeconds: parseRetryAfter(res.headers?.get("Retry-After")) };
   // Handles mock test clients and 2xx responses carrying success:false.
   if (env && env.success === false) {
@@ -36,4 +29,26 @@ export async function callApi<T>(
     );
   }
   throw new HttpError(res.status, "UNKNOWN_ERROR", "", undefined, "Unexpected response shape", meta);
+}
+
+export async function callApi<T>(
+  http: HttpClient,
+  method: string,
+  path: string,
+  opts?: { body?: unknown; idempotencyKey?: string },
+): Promise<T> {
+  const res = await http.request(method, path, opts);
+  // 204 No Content (e.g. DELETE proxy list) is a success with no body.
+  if (res.status === 204) return undefined as T;
+  return unwrap<T>(res, method).data;
+}
+
+/**
+ * GET a list endpoint whose pagination fields sit next to `data` in the
+ * envelope (`{ success, data: [...], has_more, next_cursor }`): verifications,
+ * rentals and dedicated numbers.
+ */
+export async function callApiPage<T>(http: HttpClient, path: string): Promise<{ data: T; nextCursor: string | null }> {
+  const env = unwrap<T>(await http.request("GET", path), "GET");
+  return { data: env.data, nextCursor: typeof env.next_cursor === "string" && env.next_cursor ? env.next_cursor : null };
 }
