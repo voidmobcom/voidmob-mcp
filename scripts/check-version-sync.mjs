@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 const srv = JSON.parse(readFileSync("server.json", "utf8"));
+const bundle = JSON.parse(readFileSync("manifest.json", "utf8"));
 if (pkg.version !== srv.version) {
   console.error(`Version mismatch: package.json=${pkg.version} server.json=${srv.version}`);
   process.exit(1);
@@ -9,6 +10,10 @@ if (pkg.version !== srv.version) {
 const nested = srv.packages?.[0]?.version;
 if (nested !== srv.version) {
   console.error(`Version mismatch: server.json=${srv.version} server.json packages[0]=${nested}`);
+  process.exit(1);
+}
+if (bundle.version !== pkg.version) {
+  console.error(`Version mismatch: package.json=${pkg.version} manifest.json=${bundle.version}`);
   process.exit(1);
 }
 // The MCP registry rejects descriptions over 100 chars (422 at publish time).

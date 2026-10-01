@@ -76,7 +76,8 @@ describe("mapApiError", () => {
   it("PRICE_MISMATCH and IDEMPOTENCY_REPLAY_IN_FLIGHT map to clear next steps", () => {
     const mismatch = mapApiError(new HttpError(409, "PRICE_MISMATCH", "r"));
     expect(mismatch).toContain("nothing was charged");
-    expect(mismatch).toContain("confirm");
+    expect(mismatch).toContain("only if they approve");
+    expect(mismatch).toContain("max_price_cents");
     const inFlight = mapApiError(new HttpError(409, "IDEMPOTENCY_REPLAY_IN_FLIGHT", "r", undefined, "x", { method: "POST", retryAfterSeconds: 5 }));
     expect(inFlight).toContain("still being processed");
     expect(inFlight).toContain("wait 5s");

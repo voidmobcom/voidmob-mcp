@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { listOrdersHandler } from "../../src/tools/orders.js";
 import { createMockHttpClient } from "../mock-http.js";
 import { dedNumberFixture } from "../fixtures/dedicated.js";
+import { toolContext } from "../../src/tools/context.js";
 
 // ── Fixture builders ────────────────────────────────────────────────────────
 
@@ -104,213 +105,137 @@ function verificationFixture(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-const noVerifications = { status: 200, headers: new Headers(), body: { success: true, data: [] as unknown[] } };
+const ok = (data: unknown, extra: Record<string, unknown> = {}) => ({ status: 200, headers: new Headers(), body: { success: true, data, ...extra } });
+const fail = (status: number, code: string) => ({ status, headers: new Headers(), body: { success: false, error: { code, message: code, request_id: "req_x" } } });
+const text = (r: { content: Array<{ type: string; text?: string }> }) => r.content[0].text ?? "";
 
 // ── list_orders ─────────────────────────────────────────────────────────────
 
-describe("list_orders", () => {
-  it("with no kind filter fans out to all 5 endpoints, merges, sorts desc by created_at", async () => {
+describe("list_orders overview (no kind)", () => {
+  it("reads up to 100 of every list, shows the newest per kind, and flags lists with more", async () => {
     const http = createMockHttpClient();
-    // FIFO: handler enqueues rentals → verifications → esim → proxy → dedicated in order
-    http.expect("GET", "/v1/rentals", {
-      status: 200,
-      headers: new Headers(),
-      body: { success: true, data: [rentalFixture()] },
-    });
-    http.expect("GET", "/v1/verifications", {
-      status: 200,
-      headers: new Headers(),
-      body: { success: true, data: [verificationFixture()] },
-    });
-    http.expect("GET", "/v1/esims", {
-      status: 200,
-      headers: new Headers(),
-      body: { success: true, data: { esims: [esimFixture()] } },
-    });
-    http.expect("GET", "/v1/proxies", {
-      status: 200,
-      headers: new Headers(),
-      body: { success: true, data: { proxies: [proxyFixture()] } },
-    });
-    http.expect("GET", "/v1/dedicated/numbers?limit=100", {
-      status: 200,
-      headers: new Headers(),
-      body: { success: true, data: [dedNumberFixture({ id: "ded_mid", created_at: "2026-05-15T00:00:00Z" })] },
-    });
-
-    const res = await listOrdersHandler(http)({});
+    // Requests go out in kind order: verification, rental, dedicated, esim, proxy.
+    http.expect("GET", "/v1/verifications?limit=100", ok([verificationFixture()], { has_more: true, next_cursor: "vcur" }));
+    // Lists other than verifications come back in id order, not by date.
+    http.expect("GET", "/v1/rentals?limit=100", ok(
+      [rentalFixture({ id: "ren_a", created_at: "2026-05-01T00:00:00Z" }), rentalFixture({ id: "ren_b", created_at: "2026-05-09T00:00:00Z" }), rentalFixture({ id: "ren_c", created_at: "2026-05-05T00:00:00Z" })],
+      { has_more: false, next_cursor: null },
+    ));
+    http.expect("GET", "/v1/dedicated/numbers?limit=100", ok([dedNumberFixture()], { has_more: false, next_cursor: null }));
+    http.expect("GET", "/v1/esims?limit=100", ok({ esims: [esimFixture()], next_cursor: "ecur" }));
+    http.expect("GET", "/v1/proxies?limit=100", ok({ proxies: [proxyFixture()], next_cursor: null }));
+    const res = await listOrdersHandler(toolContext(http))({ limit: 2 });
     expect(res.isError).toBeFalsy();
-
-    // All five GETs occurred
-    expect(http.history.map((h) => h.path)).toEqual([
-      "/v1/rentals",
-      "/v1/verifications",
-      "/v1/esims",
-      "/v1/proxies",
-      "/v1/dedicated/numbers?limit=100",
-    ]);
-
-    const orders = res.structuredContent?.orders as Array<Record<string, unknown>>;
-    expect(orders).toHaveLength(5);
-    // Sorted by created_at desc: proxy(05-20) > verification(05-18) > dedicated(05-15) > esim(05-10) > rental(05-01)
-    expect(orders[0]).toMatchObject({ kind: "proxy", id: "px_new" });
-    expect(orders[1]).toMatchObject({ kind: "sms", id: "ver_recent" });
-    expect(orders[2]).toMatchObject({ kind: "dedicated", id: "ded_mid" });
-    expect(orders[3]).toMatchObject({ kind: "esim", id: "esim_mid" });
-    expect(orders[4]).toMatchObject({ kind: "sms", id: "ren_old" });
-
-    const t = res.content[0];
-    if (t.type !== "text") throw new Error("text");
-    expect(t.text).toContain("5 order(s)");
-    expect(t.text).toContain("Google +12085976486 verification");
-    expect(t.text).toContain("SMS");
-    expect(t.text).toContain("ESIM");
-    expect(t.text).toContain("PROXY");
-    expect(t.text).toContain("DEDICATED");
+    const orders = res.structuredContent?.orders as Array<{ id: string; kind: string }>;
+    // The newest 2 rentals, whatever order the API returned them in.
+    expect(orders.filter((o) => o.kind === "rental").map((o) => o.id)).toEqual(["ren_b", "ren_c"]);
+    expect(orders.map((o) => o.kind)).toEqual(["verification", "rental", "rental", "dedicated", "esim", "proxy"]);
+    expect(res.structuredContent?.incomplete_kinds).toEqual(["verification", "esim"]);
+    expect(text(res)).toContain("there are more, so newer ones may be missing - page through with kind='esim'");
+    // No first-page count is presented as a total.
+    expect(text(res)).not.toMatch(/^\d+ order\(s\)/);
   });
 
-  it("with kind='sms' fetches rentals and verifications only", async () => {
+  it("kind='sms' reads verifications and rentals only", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/rentals", {
-      status: 200,
-      headers: new Headers(),
-      body: { success: true, data: [rentalFixture()] },
-    });
-    http.expect("GET", "/v1/verifications", {
-      status: 200,
-      headers: new Headers(),
-      body: { success: true, data: [verificationFixture()] },
-    });
-
-    const res = await listOrdersHandler(http)({ kind: "sms" });
-    expect(res.isError).toBeFalsy();
-    expect(http.history.map((h) => h.path)).toEqual(["/v1/rentals", "/v1/verifications"]);
-    const orders = res.structuredContent?.orders as Array<Record<string, unknown>>;
-    expect(orders).toHaveLength(2);
-    expect(orders[0]).toMatchObject({ kind: "sms", id: "ver_recent" });
-    expect(orders[1]).toMatchObject({ kind: "sms", id: "ren_old" });
+    http.expect("GET", "/v1/verifications?limit=100", ok([verificationFixture()], { next_cursor: null }));
+    http.expect("GET", "/v1/rentals?limit=100", ok([rentalFixture()], { next_cursor: null }));
+    const res = await listOrdersHandler(toolContext(http))({ kind: "sms" });
+    expect(http.history.map((h) => h.path)).toEqual(["/v1/verifications?limit=100", "/v1/rentals?limit=100"]);
+    expect((res.structuredContent?.orders as unknown[]).length).toBe(2);
   });
 
-  it("surfaces results from successful fan-out branches when one fails, with partial warning", async () => {
+  it("a failed list is reported as partial, the others still show", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/rentals", {
-      status: 200,
-      headers: new Headers(),
-      body: { success: true, data: [rentalFixture()] },
-    });
-    http.expect("GET", "/v1/verifications", noVerifications);
-    http.expect("GET", "/v1/esims", {
-      status: 200,
-      headers: new Headers(),
-      body: { success: true, data: { esims: [esimFixture()] } },
-    });
-    // Proxies endpoint fails — callApi will throw on success:false envelope
-    http.expect("GET", "/v1/proxies", {
-      status: 500,
-      headers: new Headers(),
-      body: {
-        success: false,
-        error: {
-          code: "INTERNAL_ERROR",
-          message: "Proxy service down.",
-          request_id: "req_px_500",
-        },
-      },
-    });
-
-    const res = await listOrdersHandler(http)({});
+    http.expect("GET", "/v1/verifications?limit=100", ok([verificationFixture()], { next_cursor: null }));
+    http.expect("GET", "/v1/rentals?limit=100", fail(500, "INTERNAL_ERROR"));
+    const res = await listOrdersHandler(toolContext(http))({ kind: "sms" });
     expect(res.isError).toBeFalsy();
-    const orders = res.structuredContent?.orders as Array<Record<string, unknown>>;
-    expect(orders).toHaveLength(2);
-    const t = res.content[0];
-    if (t.type !== "text") throw new Error("text");
-    expect(t.text).toContain("partial:");
+    expect(res.structuredContent?.partial).toEqual([expect.stringContaining("rental: could not be read")]);
+    expect(text(res)).toContain("(partial) rental");
   });
 
-  it("with limit=2 truncates output even when more rows exist", async () => {
+  it("every list failing is an error, not a misleading 'No orders found.'", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/rentals", {
-      status: 200,
-      headers: new Headers(),
-      body: {
-        success: true,
-        data: [
-          rentalFixture({ id: "ren_1", created_at: "2026-05-01T00:00:00Z" }),
-          rentalFixture({ id: "ren_2", created_at: "2026-05-02T00:00:00Z" }),
-          rentalFixture({ id: "ren_3", created_at: "2026-05-03T00:00:00Z" }),
-          rentalFixture({ id: "ren_4", created_at: "2026-05-04T00:00:00Z" }),
-        ],
-      },
-    });
-
-    http.expect("GET", "/v1/verifications", noVerifications);
-
-    const res = await listOrdersHandler(http)({ kind: "sms", limit: 2 });
-    expect(res.isError).toBeFalsy();
-    const orders = res.structuredContent?.orders as Array<Record<string, unknown>>;
-    expect(orders).toHaveLength(2);
-    // Newest first
-    expect(orders[0]).toMatchObject({ id: "ren_4" });
-    expect(orders[1]).toMatchObject({ id: "ren_3" });
-    const t = res.content[0];
-    if (t.type !== "text") throw new Error("text");
-    expect(t.text).toContain("4 order(s)");
-    expect(t.text).toContain("(showing 2)");
-  });
-
-  it("surfaces partial-failure warnings (not a misleading 'No orders found.') when all 3 branches fail", async () => {
-    const http = createMockHttpClient();
-    const fail = {
-      status: 500,
-      headers: new Headers(),
-      body: {
-        success: false,
-        error: { code: "INTERNAL_ERROR", message: "boom", request_id: "req_x" },
-      },
-    };
-    http.expect("GET", "/v1/rentals", fail);
-    http.expect("GET", "/v1/verifications", fail);
-    http.expect("GET", "/v1/esims", fail);
-    http.expect("GET", "/v1/proxies", fail);
-
-    const res = await listOrdersHandler(http)({});
+    http.expect("GET", "/v1/verifications?limit=100", fail(500, "INTERNAL_ERROR"));
+    http.expect("GET", "/v1/rentals?limit=100", fail(500, "INTERNAL_ERROR"));
+    const res = await listOrdersHandler(toolContext(http))({ kind: "sms" });
     expect(res.isError).toBe(true);
-    const t = res.content[0];
-    if (t.type !== "text") throw new Error("text");
-    // When every fan-out call fails, the empty result is a hidden error, not an
-    // empty account: surface the partial failures instead of "No orders found."
-    expect(t.text).toContain("Could not load orders");
-    expect(t.text).toContain("partial:");
-    expect(t.text).not.toContain("No orders found.");
+    expect(text(res)).toContain("Could not load orders");
   });
 
-  it("returns 'No orders found.' as a normal (non-error) result when the account is genuinely empty", async () => {
+  it("an empty account is a normal empty result", async () => {
     const http = createMockHttpClient();
-    const empty = { status: 200, headers: new Headers(), body: { success: true, data: [] as unknown[] } };
-    http.expect("GET", "/v1/rentals", empty);
-    http.expect("GET", "/v1/verifications", empty);
-    http.expect("GET", "/v1/esims", { status: 200, headers: new Headers(), body: { success: true, data: { esims: [] } } });
-    http.expect("GET", "/v1/proxies", { status: 200, headers: new Headers(), body: { success: true, data: { proxies: [] } } });
-    http.expect("GET", "/v1/dedicated/numbers?limit=100", empty);
-
-    const res = await listOrdersHandler(http)({});
+    http.expect("GET", "/v1/verifications?limit=100", ok([], { next_cursor: null }));
+    http.expect("GET", "/v1/rentals?limit=100", ok([], { next_cursor: null }));
+    http.expect("GET", "/v1/dedicated/numbers?limit=100", ok([], { next_cursor: null }));
+    http.expect("GET", "/v1/esims?limit=100", ok({ esims: [], next_cursor: null }));
+    http.expect("GET", "/v1/proxies?limit=100", ok({ proxies: [], next_cursor: null }));
+    const res = await listOrdersHandler(toolContext(http))({});
     expect(res.isError).toBeFalsy();
+    expect(text(res)).toBe("No orders found.");
     expect(res.structuredContent?.orders).toEqual([]);
-    const t = res.content[0];
-    if (t.type !== "text") throw new Error("text");
-    expect(t.text).toContain("No orders found.");
   });
 
-  it("kind=dedicated fetches /v1/dedicated/numbers and renders rows", async () => {
+  it("status or cursor without kind is refused before any request", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/dedicated/numbers?limit=100", {
-      status: 200, headers: new Headers(),
-      body: { success: true, data: [dedNumberFixture()] },
-    });
-    const res = await listOrdersHandler(http)({ kind: "dedicated" });
-    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
-    expect(t.text).toContain("ded_abc123");
-    expect(t.text).toContain("DEDICATED");
-    expect(res.structuredContent?.orders).toHaveLength(1);
+    expect((await listOrdersHandler(toolContext(http))({ status: "active" })).isError).toBe(true);
+    expect((await listOrdersHandler(toolContext(http))({ kind: "sms", cursor: "abc" })).isError).toBe(true);
+    expect(http.history).toHaveLength(0);
+  });
+});
+
+describe("list_orders with kind (one paginated list)", () => {
+  it("verification: passes limit, status and cursor through and returns next_cursor", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/verifications?limit=2&status=waiting_for_code&cursor=abc", ok(
+      [verificationFixture({ id: "ver_a", created_at: "2026-05-18T00:00:00Z" }), verificationFixture({ id: "ver_b", created_at: "2026-05-18T00:05:00Z" })],
+      { has_more: true, next_cursor: "def" },
+    ));
+    const res = await listOrdersHandler(toolContext(http))({ kind: "verification", status: "waiting_for_code", cursor: "abc", limit: 2 });
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent?.next_cursor).toBe("def");
+    // Sorted newest first within the page.
+    expect((res.structuredContent?.orders as Array<{ id: string }>).map((o) => o.id)).toEqual(["ver_b", "ver_a"]);
+    expect(text(res)).toContain("cursor='def'");
+    expect(text(res)).toContain("status='waiting_for_code'");
+  });
+
+  it("last page says so and returns next_cursor null", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/rentals?limit=20", ok([rentalFixture()], { has_more: false, next_cursor: null }));
+    const res = await listOrdersHandler(toolContext(http))({ kind: "rental" });
+    expect(res.structuredContent?.next_cursor).toBeNull();
+    expect(text(res)).toContain("This is the last page.");
+    expect(text(res)).toContain("not in date order");
+  });
+
+  it("dedicated, esim and proxy read their own list endpoints and cursor shapes", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/dedicated/numbers?limit=20&status=active", ok([dedNumberFixture()], { next_cursor: "d2" }));
+    http.expect("GET", "/v1/esims?limit=20&status=processing", ok({ esims: [esimFixture({ status: "processing" })], next_cursor: "e2" }));
+    http.expect("GET", "/v1/proxies?limit=20&status=provisioning", ok({ proxies: [proxyFixture({ status: "provisioning" })], next_cursor: null }));
+    const ctx = toolContext(http);
+    expect((await listOrdersHandler(ctx)({ kind: "dedicated", status: "active" })).structuredContent?.next_cursor).toBe("d2");
+    expect((await listOrdersHandler(ctx)({ kind: "esim", status: "processing" })).structuredContent?.next_cursor).toBe("e2");
+    const proxies = await listOrdersHandler(ctx)({ kind: "proxy", status: "provisioning" });
+    expect(proxies.structuredContent?.next_cursor).toBeNull();
+    expect(proxies.structuredContent?.orders).toEqual([expect.objectContaining({ kind: "proxy", id: "px_new", status: "provisioning" })]);
+  });
+
+  it("a status that the kind does not have is refused with the valid ones", async () => {
+    const http = createMockHttpClient();
+    const res = await listOrdersHandler(toolContext(http))({ kind: "dedicated", status: "cancelled" });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toContain("active, expired");
+    expect(http.history).toHaveLength(0);
+  });
+
+  it("an empty filtered page is a normal result", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/verifications?limit=20&status=code_received", ok([], { has_more: false, next_cursor: null }));
+    const res = await listOrdersHandler(toolContext(http))({ kind: "verification", status: "code_received" });
+    expect(res.isError).toBeFalsy();
+    expect(text(res)).toBe("No verification orders with status code_received.");
   });
 });

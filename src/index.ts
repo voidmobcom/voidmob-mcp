@@ -19,7 +19,7 @@ async function main() {
 
   let server;
   if (cfg.sandbox) {
-    server = buildSandboxServer();
+    server = buildSandboxServer(cfg.controls);
   } else if (cfg.apiKey) {
     server = buildLiveServer(cfg);
   } else {
@@ -27,7 +27,7 @@ async function main() {
       `[voidmob-mcp] no VOIDMOB_API_KEY set - tools are listed but every call will fail. ` +
       `Set VOIDMOB_API_KEY=vmk_live_... or VOIDMOB_SANDBOX=1 for mock data.\n`,
     );
-    server = buildUnconfiguredServer();
+    server = buildUnconfiguredServer(cfg.controls);
   }
   const transport = new StdioServerTransport();
   await server.connect(transport);

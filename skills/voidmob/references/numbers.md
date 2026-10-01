@@ -21,7 +21,7 @@ Show the monthly price, say that it cannot be cancelled or refunded, and get the
 ```bash
 IDEM=$(uuidgen 2>/dev/null || openssl rand -hex 16); echo "Idempotency-Key: $IDEM"
 curl -sS -m 60 -X POST "$API/dedicated/numbers" -H "$H" -H "Content-Type: application/json" \
-  -H "Idempotency-Key: $IDEM" -d '{"country":"de","max_price_cents":3499}'
+  -H "Idempotency-Key: $IDEM" -d '{"country":"uk","max_price_cents":1699}'
 ```
 
 `201` returns the number directly in `data` (no wrapper):

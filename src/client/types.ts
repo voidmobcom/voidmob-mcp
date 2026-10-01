@@ -80,6 +80,14 @@ export const VerificationCancelResult = z.object({
 });
 export type VerificationCancelResult = z.infer<typeof VerificationCancelResult>;
 
+// GET /v1/verifications/:id/messages: every SMS on the number, newest first.
+export const VerificationMessage = z.object({
+  code: z.string().nullable(),
+  text: z.string(),
+  received_at: z.string(),
+});
+export type VerificationMessage = z.infer<typeof VerificationMessage>;
+
 // ── Rentals (long-term + 28-day dedicated) ──────────────────────────────────
 
 export const RentalMessage = z.object({
@@ -251,8 +259,11 @@ export const ProxyList = z.object({
   rotation_period_seconds: z.number().int(),
   rotation_mode: z.string(),
   format: z.string(),
+  // Null for IP-whitelist lists (they authenticate by source IP).
   credentials: ProxyCredentials.nullable(),
   entries: z.array(z.string()),
+  // IP-whitelist lists: comma-separated IPv4 addresses / subnets; null otherwise.
+  network: z.string().nullable().optional(),
   activation_note: z.string(),
   created_at: z.string(),
 });

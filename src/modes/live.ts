@@ -11,5 +11,5 @@ export function buildLiveServer(cfg: Config): McpServer {
     debug: cfg.debug,
     userAgent: `voidmob-mcp/${VERSION} node/${process.version}`,
   });
-  return createVoidmobServer(http);
+  return createVoidmobServer(http, cfg.controls);
 }

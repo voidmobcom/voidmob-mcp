@@ -10,6 +10,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { buildLiveServer } from "../src/modes/live.js";
 import { buildSandboxServer } from "../src/modes/sandbox.js";
 import { buildUnconfiguredServer } from "../src/modes/unconfigured.js";
+import { DEFAULT_CONTROLS } from "../src/config.js";
 
 const FORBIDDEN =
   /provider|coronium|cyber ?yozh|infatica|pva ?deals|hero-?sms|sms-?man|text ?verified|quackr|mobimatter|esim ?go|plisio/i;
@@ -22,7 +23,7 @@ async function connect(server: McpServer) {
 }
 
 const modes: Array<[string, () => McpServer]> = [
-  ["live", () => buildLiveServer({ sandbox: false, apiKey: "vmk_live_" + "a".repeat(32), baseUrl: "https://x", debug: false })],
+  ["live", () => buildLiveServer({ sandbox: false, apiKey: "vmk_live_" + "a".repeat(32), baseUrl: "https://x", debug: false, controls: DEFAULT_CONTROLS })],
   ["sandbox", buildSandboxServer],
   ["unconfigured", buildUnconfiguredServer],
 ];
@@ -30,10 +31,10 @@ const modes: Array<[string, () => McpServer]> = [
 afterEach(() => vi.restoreAllMocks());
 
 describe.each(modes)("%s server over MCP", (_mode, build) => {
-  it("lists 29 tools, each with a title and explicit annotation booleans", async () => {
+  it("lists 30 tools, each with a title, an output schema and explicit annotation booleans", async () => {
     const client = await connect(build());
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(29);
+    expect(tools).toHaveLength(30);
     for (const tool of tools) {
       expect(tool.title, tool.name).toBeTruthy();
       for (const hint of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const) {
@@ -41,6 +42,9 @@ describe.each(modes)("%s server over MCP", (_mode, build) => {
       }
       // A read-only tool is never destructive.
       if (tool.annotations?.readOnlyHint) expect(tool.annotations.destructiveHint, tool.name).toBe(false);
+      // Output schemas are objects that never forbid extra fields.
+      expect(tool.outputSchema?.type, tool.name).toBe("object");
+      expect(JSON.stringify(tool.outputSchema), tool.name).not.toContain('"additionalProperties":false');
     }
   });
 
@@ -49,6 +53,8 @@ describe.each(modes)("%s server over MCP", (_mode, build) => {
     const instructions = client.getInstructions() ?? "";
     expect(instructions).toContain("prepaid USD balance");
     expect(instructions).toContain("Quote first");
+    expect(instructions).toContain("max_price_cents");
+    expect(instructions).toContain("wait_seconds");
     expect(instructions).toContain("refunded automatically");
     expect(instructions).toContain("do not buy again");
     const words = instructions.split(/\s+/).length;
@@ -59,7 +65,10 @@ describe.each(modes)("%s server over MCP", (_mode, build) => {
   it("nothing agent-visible names a supplier or says 'provider', and no em-dashes", async () => {
     const client = await connect(build());
     const { tools } = await client.listTools();
-    const visible = JSON.stringify({ tools, instructions: client.getInstructions() });
+    const { resources } = await client.listResources();
+    const { prompts } = await client.listPrompts();
+    const guides = await Promise.all(resources.map((r) => client.readResource({ uri: r.uri })));
+    const visible = JSON.stringify({ tools, instructions: client.getInstructions(), resources, prompts, guides });
     expect(visible).not.toMatch(FORBIDDEN);
     expect(visible).not.toContain("—");
   });
@@ -73,6 +82,15 @@ describe("spending tools are flagged for confirmation", () => {
     for (const name of ["rent_number", "purchase_esim", "purchase_proxy", "purchase_dedicated_number", "renew_proxy", "topup_proxy", "topup_esim", "re_rent_rental", "reuse_number"]) {
       expect(byName.get(name)).toMatchObject({ readOnlyHint: false, destructiveHint: true, openWorldHint: true });
     }
+    // Every money-moving tool takes the caller's price commitment; the ones
+    // that always spend require it.
+    const schemas = new Map(tools.map((t) => [t.name, t.inputSchema]));
+    for (const name of ["rent_number", "purchase_esim", "purchase_proxy", "purchase_dedicated_number", "renew_proxy", "topup_proxy", "re_rent_rental"]) {
+      expect(schemas.get(name)?.required, name).toContain("max_price_cents");
+    }
+    for (const name of ["reuse_number", "topup_esim"]) {
+      expect(Object.keys(schemas.get(name)?.properties ?? {}), name).toContain("max_price_cents");
+    }
     for (const name of ["get_account", "search_sms_services", "get_rental", "list_orders", "search_esim_plans", "get_esim_status", "get_esim_qr", "search_proxies", "get_geo", "list_proxy_lists", "search_dedicated_countries", "get_dedicated_number"]) {
       expect(byName.get(name)).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     }
@@ -83,7 +101,7 @@ describe("input validation at the protocol boundary", () => {
   it("rejects an id without its prefix or with path characters before any request is made", async () => {
     const fetchSpy = vi.fn(() => Promise.reject(new Error("network must not be touched")));
     vi.stubGlobal("fetch", fetchSpy);
-    const client = await connect(buildLiveServer({ sandbox: false, apiKey: "vmk_live_" + "a".repeat(32), baseUrl: "https://x", debug: false }));
+    const client = await connect(buildLiveServer({ sandbox: false, apiKey: "vmk_live_" + "a".repeat(32), baseUrl: "https://x", debug: false, controls: DEFAULT_CONTROLS }));
     const bad = [
       { name: "get_esim_status", arguments: { esim_id: "../me" } },
       { name: "delete_proxy_list", arguments: { proxy_id: "prx_1", list_id: "../../../rentals/ren_x" } },
@@ -105,7 +123,7 @@ describe("input validation at the protocol boundary", () => {
     const client = await connect(buildSandboxServer());
     const account = await client.callTool({ name: "get_account", arguments: {} });
     expect(account.isError ?? false).toBe(false);
-    const rent = await client.callTool({ name: "rent_number", arguments: { service_id: "svc_telegram" } });
+    const rent = await client.callTool({ name: "rent_number", arguments: { service_id: "svc_telegram", max_price_cents: 150 } });
     expect(rent.isError ?? false).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
     vi.unstubAllGlobals();

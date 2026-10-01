@@ -7,6 +7,7 @@ import {
   getEsimQrHandler,
 } from "../../src/tools/esim.js";
 import { createMockHttpClient } from "../mock-http.js";
+import { toolContext } from "../../src/tools/context.js";
 
 // ── Fixture builders ────────────────────────────────────────────────────────
 
@@ -84,9 +85,9 @@ function usageFixture(overrides: Partial<Record<string, unknown>> = {}) {
 // ── search_esim_plans ───────────────────────────────────────────────────────
 
 describe("search_esim_plans", () => {
-  it("composes query string with all filters and renders a list", async () => {
+  it("composes query string with all filters (country as the API's countries filter) and renders a list", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/esim_products?country=JP&min_data_gb=5&has_5g=true&limit=20", {
+    http.expect("GET", "/v1/esim_products?countries=JP&min_data_gb=5&has_5g=true&limit=20", {
       status: 200,
       headers: new Headers(),
       body: {
@@ -97,7 +98,7 @@ describe("search_esim_plans", () => {
         },
       },
     });
-    const res = await searchEsimPlansHandler(http)({
+    const res = await searchEsimPlansHandler(toolContext(http))({
       country: "JP",
       min_data_gb: 5,
       has_5g: true,
@@ -122,12 +123,12 @@ describe("search_esim_plans", () => {
 
   it("no matching plans is a normal empty result with a hint, not an error", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/esim_products?country=XX&limit=20", {
+    http.expect("GET", "/v1/esim_products?countries=XX&limit=20", {
       status: 200,
       headers: new Headers(),
       body: { success: true, data: { products: [], next_cursor: null } },
     });
-    const res = await searchEsimPlansHandler(http)({ country: "XX" });
+    const res = await searchEsimPlansHandler(toolContext(http))({ country: "xx" });
     expect(res.isError).toBeFalsy();
     expect(res.structuredContent?.esim_plans).toEqual([]);
     const t = res.content[0];
@@ -145,7 +146,7 @@ describe("search_esim_plans", () => {
         error: { code: "INTERNAL_ERROR", message: "boom", request_id: "req_esim_err", docs_url: "" },
       },
     });
-    const res = await searchEsimPlansHandler(http)({});
+    const res = await searchEsimPlansHandler(toolContext(http))({});
     expect(res.isError).toBe(true);
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
@@ -156,62 +157,48 @@ describe("search_esim_plans", () => {
 // ── purchase_esim ───────────────────────────────────────────────────────────
 
 describe("purchase_esim", () => {
-  it("quote-then-commit: GET product, POST /v1/esims with tied max_price_cents and idempotency", async () => {
+  it("commits with the caller's max_price_cents and idempotency, no internal quote; counts the charge", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/esim_products/esim_product_jp7d", {
-      status: 200,
-      headers: new Headers(),
-      body: { success: true, data: { product: productFixture() } },
-    });
     http.expect("POST", "/v1/esims", {
       status: 201,
       headers: new Headers(),
       body: { success: true, data: { esim: esimFixture() } },
     });
-    const res = await purchaseEsimHandler(http)({ plan_id: "esim_product_jp7d" });
+    const ctx = toolContext(http, { budgetCents: 5000 });
+    const res = await purchaseEsimHandler(ctx)({ plan_id: "esim_product_jp7d", max_price_cents: 1099 });
     expect(res.isError).toBeFalsy();
-    expect(http.history).toHaveLength(2);
-    expect(http.history[1].method).toBe("POST");
-    expect(http.history[1].body).toMatchObject({
-      product_id: "esim_product_jp7d",
-      max_price_cents: 999,
-    });
-    expect(http.history[1].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(http.history).toHaveLength(1);
+    expect(http.history[0].body).toEqual({ product_id: "esim_product_jp7d", max_price_cents: 1099 });
+    expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
     expect(res.structuredContent?.esim).toMatchObject({ id: "esim_abc" });
+    expect(ctx.guard.countedCents).toBe(esimFixture().charged_price_cents);
   });
 
   it("purchase output carries the LPA string, or says to poll while processing", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/esim_products/esim_product_jp7d", { status: 200, headers: new Headers(), body: { success: true, data: { product: productFixture() } } });
     http.expect("POST", "/v1/esims", {
       status: 201,
       headers: new Headers(),
       body: { success: true, data: { esim: esimFixture({ activation_code: "K2-AAAAAA-BBBBBB", smdp_address: "smdp.example.com" }) } },
     });
-    const done = await purchaseEsimHandler(http)({ plan_id: "esim_product_jp7d" });
+    const done = await purchaseEsimHandler(toolContext(http))({ plan_id: "esim_product_jp7d", max_price_cents: 999 });
     const t1 = done.content[0];
     if (t1.type !== "text") throw new Error("text");
     expect(t1.text).toContain("LPA:1$smdp.example.com$K2-AAAAAA-BBBBBB");
 
-    http.expect("GET", "/v1/esim_products/esim_product_jp7d", { status: 200, headers: new Headers(), body: { success: true, data: { product: productFixture() } } });
     http.expect("POST", "/v1/esims", {
       status: 202,
       headers: new Headers(),
       body: { success: true, data: { esim: esimFixture({ status: "processing", activation_code: null, smdp_address: null, iccid: null, qr_code_url: null }) } },
     });
-    const pending = await purchaseEsimHandler(http)({ plan_id: "esim_product_jp7d" });
+    const pending = await purchaseEsimHandler(toolContext(http))({ plan_id: "esim_product_jp7d", max_price_cents: 999 });
     const t2 = pending.content[0];
     if (t2.type !== "text") throw new Error("text");
     expect(t2.text).toContain("poll get_esim_status");
   });
 
-  it("maps PRICE_OVER_CAP from commit step with request_id", async () => {
+  it("PRICE_OVER_CAP returns the new price to re-confirm, with request_id; nothing counted", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/esim_products/esim_product_jp7d", {
-      status: 200,
-      headers: new Headers(),
-      body: { success: true, data: { product: productFixture() } },
-    });
     http.expect("POST", "/v1/esims", {
       status: 409,
       headers: new Headers(),
@@ -221,18 +208,31 @@ describe("purchase_esim", () => {
           code: "PRICE_OVER_CAP",
           message: "...",
           request_id: "req_esim_cap",
-          details: { max_price_cents: 999, available_price_cents: 1099 },
+          details: { available_price_cents: 1099 },
           docs_url: "",
         },
       },
     });
-    const res = await purchaseEsimHandler(http)({ plan_id: "esim_product_jp7d" });
+    const ctx = toolContext(http, { budgetCents: 5000 });
+    const res = await purchaseEsimHandler(ctx)({ plan_id: "esim_product_jp7d", max_price_cents: 999 });
     expect(res.isError).toBe(true);
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
-    expect(t.text).toContain("$9.99");
     expect(t.text).toContain("$10.99");
+    expect(t.text).toContain("max_price_cents=1099");
     expect(t.text).toContain("req_esim_cap");
+    expect(ctx.guard.countedCents).toBe(0);
+  });
+
+  it("a network failure after sending counts the full max price against the session budget", async () => {
+    const { NetworkError } = await import("../../src/client/http.js");
+    const ctx = toolContext({ request: () => Promise.reject(new NetworkError(new Error("reset"), "POST")) }, { budgetCents: 5000 });
+    const res = await purchaseEsimHandler(ctx)({ plan_id: "esim_product_jp7d", max_price_cents: 1200 });
+    expect(res.isError).toBe(true);
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("may or may not have gone through");
+    expect(ctx.guard.countedCents).toBe(1200);
   });
 });
 
@@ -251,7 +251,7 @@ describe("get_esim_status", () => {
       headers: new Headers(),
       body: { success: true, data: { usage: usageFixture() } },
     });
-    const res = await getEsimStatusHandler(http)({ esim_id: "esim_abc" });
+    const res = await getEsimStatusHandler(toolContext(http))({ esim_id: "esim_abc" });
     expect(res.isError).toBeFalsy();
     expect(res.structuredContent?.esim).toMatchObject({ id: "esim_abc" });
     expect(res.structuredContent?.usage).toMatchObject({
@@ -288,7 +288,7 @@ describe("get_esim_status", () => {
         },
       },
     });
-    const res = await getEsimStatusHandler(http)({ esim_id: "esim_abc" });
+    const res = await getEsimStatusHandler(toolContext(http))({ esim_id: "esim_abc" });
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
     expect(t.text).toContain("Usage (2 packages)");
@@ -307,7 +307,7 @@ describe("get_esim_status", () => {
       body: { success: true, data: { esim: esimFixture({ activation_code: "K2-2VOZBJ-22QT3D", smdp_address: "smdp.example.com" }) } },
     });
     http.expect("GET", "/v1/esims/esim_abc/usage", { status: 200, headers: new Headers(), body: { success: true, data: { usage: usageFixture() } } });
-    const res = await getEsimStatusHandler(http)({ esim_id: "esim_abc" });
+    const res = await getEsimStatusHandler(toolContext(http))({ esim_id: "esim_abc" });
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
     expect(t.text).toContain("LPA string:     LPA:1$smdp.example.com$K2-2VOZBJ-22QT3D");
@@ -330,7 +330,7 @@ describe("get_esim_status", () => {
         error: { code: "USAGE_UNAVAILABLE", message: "...", request_id: "req_u", docs_url: "" },
       },
     });
-    const res = await getEsimStatusHandler(http)({ esim_id: "esim_abc" });
+    const res = await getEsimStatusHandler(toolContext(http))({ esim_id: "esim_abc" });
     expect(res.isError).toBeFalsy();
     expect(res.structuredContent?.esim).toMatchObject({ id: "esim_abc" });
     expect(res.structuredContent?.usage).toBeNull();
@@ -359,7 +359,7 @@ describe("topup_esim", () => {
         },
       },
     });
-    const res = await topupEsimHandler(http)({ esim_id: "esim_abc" });
+    const res = await topupEsimHandler(toolContext(http))({ esim_id: "esim_abc" });
     expect(res.isError).toBeFalsy();
     expect(http.history).toHaveLength(1);
     const t = res.content[0];
@@ -376,21 +376,13 @@ describe("topup_esim", () => {
       headers: new Headers(),
       body: { success: true, data: { supports_topup: false, topups: [] } },
     });
-    const res = await topupEsimHandler(http)({ esim_id: "esim_abc" });
+    const res = await topupEsimHandler(toolContext(http))({ esim_id: "esim_abc" });
     expect(res.isError).toBeFalsy();
     expect(res.structuredContent?.topups).toEqual([]);
   });
 
-  it("purchase: topup_product_id supplied → quote then POST /v1/esims/:id/topups", async () => {
+  it("purchase: topup_product_id + max_price_cents → POST /v1/esims/:id/topups, no internal quote", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/esim_products/esim_topup_jp_3gb", {
-      status: 200,
-      headers: new Headers(),
-      body: {
-        success: true,
-        data: { product: productFixture({ id: "esim_topup_jp_3gb", title: "Japan +3GB", price_cents: 599, data_limit_gb: 3 }) },
-      },
-    });
     http.expect("POST", "/v1/esims/esim_abc/topups", {
       status: 201,
       headers: new Headers(),
@@ -413,20 +405,24 @@ describe("topup_esim", () => {
         },
       },
     });
-    const res = await topupEsimHandler(http)({
+    const res = await topupEsimHandler(toolContext(http))({
       esim_id: "esim_abc",
       topup_product_id: "esim_topup_jp_3gb",
-    });
-    expect(res.isError).toBeFalsy();
-    expect(http.history).toHaveLength(2);
-    expect(http.history[1].method).toBe("POST");
-    expect(http.history[1].path).toBe("/v1/esims/esim_abc/topups");
-    expect(http.history[1].body).toMatchObject({
-      product_id: "esim_topup_jp_3gb",
       max_price_cents: 599,
     });
-    expect(http.history[1].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(res.isError).toBeFalsy();
+    expect(http.history).toHaveLength(1);
+    expect(http.history[0].path).toBe("/v1/esims/esim_abc/topups");
+    expect(http.history[0].body).toEqual({ product_id: "esim_topup_jp_3gb", max_price_cents: 599 });
+    expect(http.history[0].headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
     expect(res.structuredContent?.esim).toMatchObject({ id: "esim_topup_xyz", is_topup: true });
+  });
+
+  it("purchase without max_price_cents is refused before any request", async () => {
+    const http = createMockHttpClient();
+    const res = await topupEsimHandler(toolContext(http))({ esim_id: "esim_abc", topup_product_id: "esim_topup_jp_3gb" });
+    expect(res.isError).toBe(true);
+    expect(http.history).toHaveLength(0);
   });
 });
 
@@ -442,7 +438,7 @@ describe("get_esim_qr", () => {
       headers: new Headers(),
       binary: png,
     });
-    const res = await getEsimQrHandler(http)({ esim_id: "esim_abc" });
+    const res = await getEsimQrHandler(toolContext(http))({ esim_id: "esim_abc" });
     expect(res.isError).toBeFalsy();
     expect(res.content).toHaveLength(2);
     expect(res.content[0].type).toBe("text");
@@ -460,7 +456,7 @@ describe("get_esim_qr", () => {
       status: 200,
       headers: new Headers(),
     });
-    const res = await getEsimQrHandler(http)({ esim_id: "esim_abc" });
+    const res = await getEsimQrHandler(toolContext(http))({ esim_id: "esim_abc" });
     expect(res.isError).toBe(true);
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");

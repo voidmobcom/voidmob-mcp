@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { getGeoHandler } from "../../src/tools/geo.js";
 import { createMockHttpClient } from "../mock-http.js";
+import { toolContext } from "../../src/tools/context.js";
 
 // ── Fixture builders ────────────────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ describe("get_geo", () => {
         data: { countries: [countryFixture(), countryFixture({ code: "GB", name: "United Kingdom", available_nodes: 500 })] },
       },
     });
-    const res = await getGeoHandler(http)({});
+    const res = await getGeoHandler(toolContext(http))({});
     expect(res.isError).toBeFalsy();
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
@@ -56,7 +57,7 @@ describe("get_geo", () => {
         data: { regions: [regionFixture()] },
       },
     });
-    const res = await getGeoHandler(http)({ country: "US" });
+    const res = await getGeoHandler(toolContext(http))({ country: "US" });
     expect(res.isError).toBeFalsy();
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
@@ -77,7 +78,7 @@ describe("get_geo", () => {
         data: { cities: [cityFixture(), cityFixture({ name: "San Francisco", available_nodes: 45 })] },
       },
     });
-    const res = await getGeoHandler(http)({ country: "US", region: "California" });
+    const res = await getGeoHandler(toolContext(http))({ country: "US", region: "California" });
     expect(res.isError).toBeFalsy();
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
@@ -99,7 +100,7 @@ describe("get_geo", () => {
         data: { isps: [ispFixture(), ispFixture({ name: "AT&T", available_nodes: 7 })] },
       },
     });
-    const res = await getGeoHandler(http)({ country: "US", region: "California", city: "Los Angeles" });
+    const res = await getGeoHandler(toolContext(http))({ country: "US", region: "California", city: "Los Angeles" });
     expect(res.isError).toBeFalsy();
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
@@ -125,7 +126,7 @@ describe("get_geo", () => {
         },
       },
     });
-    const res = await getGeoHandler(http)({ country: "ZZ" });
+    const res = await getGeoHandler(toolContext(http))({ country: "ZZ" });
     expect(res.isError).toBe(true);
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");

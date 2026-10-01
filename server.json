@@ -7,12 +7,12 @@
     "url": "https://github.com/voidmobcom/voidmob-mcp",
     "source": "github"
   },
-  "version": "1.1.8",
+  "version": "1.2.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@voidmob/mcp",
-      "version": "1.1.8",
+      "version": "1.2.0",
       "transport": {
         "type": "stdio"
       },
@@ -32,6 +32,38 @@
           "isSecret": false,
           "format": "string",
           "placeholder": "1"
+        },
+        {
+          "name": "VOIDMOB_READ_ONLY",
+          "description": "Set to 1 to hide every tool that spends money or changes anything (searches and reads stay available).",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "boolean",
+          "placeholder": "1"
+        },
+        {
+          "name": "VOIDMOB_MAX_ORDER_CENTS",
+          "description": "Refuse any single purchase, renewal or top-up whose max price is above this many US cents (e.g. 2500 = $25).",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "number",
+          "placeholder": "2500"
+        },
+        {
+          "name": "VOIDMOB_BUDGET_CENTS",
+          "description": "Spend cap in US cents for this server process (a per-session safety net, not an account limit); purchases that would exceed it, and turning on auto-renew, are refused.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "number",
+          "placeholder": "5000"
+        },
+        {
+          "name": "VOIDMOB_TOOLSETS",
+          "description": "Comma list of tool groups to load: sms, numbers, esim, proxy (account, orders and geo tools are always on). Default: all.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string",
+          "placeholder": "sms,esim"
         }
       ]
     }
