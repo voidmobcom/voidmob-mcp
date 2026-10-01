@@ -53,7 +53,7 @@ The key can spend the whole balance; there is no per-key spend cap. Suggest keep
 
 ## Two ways to call
 
-**MCP.** If tools such as `get_account`, `search_sms_services` or `rent_number` are available, the VoidMob MCP server is configured: use its tools, with the same money rules. Install it with `npx -y @voidmob/mcp@1.1.8` (pin a version you have reviewed; source and client configs: https://github.com/voidmobcom/voidmob-mcp) and `VOIDMOB_API_KEY` in the server's environment.
+**MCP.** If tools such as `get_account`, `search_sms_services` or `rent_number` are available, the VoidMob MCP server is configured: use its tools, with the same money rules. Install it with `npx -y @voidmob/mcp@1.2.0` (pin a version you have reviewed; source and client configs: https://github.com/voidmobcom/voidmob-mcp) and `VOIDMOB_API_KEY` in the server's environment.
 
 | Flow | MCP tools |
 |---|---|
