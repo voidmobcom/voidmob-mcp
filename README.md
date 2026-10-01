@@ -20,11 +20,20 @@ Step-by-step guides per client and agent runtime: [voidmob.com/mcp](https://void
 
 ### Claude Code
 
+As a plugin (MCP server + skill in one install; the dialog stores your key as a secret and offers sandbox, read-only and spend limits):
+
+```
+/plugin marketplace add voidmobcom/voidmob-plugin
+/plugin install voidmob@voidmob
+```
+
+Or the MCP server alone:
+
 ```bash
 claude mcp add voidmob -s user -e VOIDMOB_API_KEY=vmk_live_... -- npx -y @voidmob/mcp
 ```
 
-`-s user` makes the server available in every project; the key goes after `-e` and before `--`.
+`-s user` makes the server available in every project; the key goes after `-e` and before `--`. The same plugin also installs in Codex and Gemini CLI: see [voidmob-plugin](https://github.com/voidmobcom/voidmob-plugin).
 
 ### Cursor
 
