@@ -65,4 +65,23 @@ describe("parseEnv", () => {
     expect(cfg.apiKey).toBeNull();
     expect(cfg.sandbox).toBe(false);
   });
+
+  it("unexpanded ${...} placeholders from any client count as unset", () => {
+    const cfg = parseEnv({
+      VOIDMOB_API_KEY: "${VOIDMOB_API_KEY}",
+      VOIDMOB_SANDBOX: "${env:VOIDMOB_SANDBOX}",
+      VOIDMOB_READ_ONLY: "${VOIDMOB_READ_ONLY}",
+      VOIDMOB_MAX_ORDER_CENTS: "${VOIDMOB_MAX_ORDER_CENTS}",
+      VOIDMOB_BUDGET_CENTS: "${user_config.budget_cents}",
+    });
+    expect(cfg.apiKey).toBeNull();
+    expect(cfg.sandbox).toBe(false);
+    expect(cfg.controls.readOnly).toBe(false);
+    expect(cfg.controls.maxOrderCents).toBeNull();
+    expect(cfg.controls.budgetCents).toBeNull();
+  });
+
+  it("a value that only contains ${...} is still read as given", () => {
+    expect(() => parseEnv({ VOIDMOB_MAX_ORDER_CENTS: "25${x}" })).toThrow();
+  });
 });
