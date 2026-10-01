@@ -12,14 +12,19 @@ npx -y @voidmob/mcp
 
 ## Setup
 
-1. Generate an API key at https://dashboard.voidmob.com/developers/api-keys (keys are 32-char secrets prefixed `vmk_live_`).
+1. Generate an API key at https://dashboard.voidmob.com/developers/api-keys (keys are 32-char secrets prefixed `vmk_live_`) and top up the balance with crypto at https://dashboard.voidmob.com/wallet.
 2. Add the MCP to your client (snippets below). Provide the key as `VOIDMOB_API_KEY`.
+3. Optional: set a per-order limit and a session budget with the [owner controls](#owner-controls).
+
+Step-by-step guides per client and agent runtime: [voidmob.com/mcp](https://voidmob.com/mcp) and [voidmob.com/integrations](https://voidmob.com/integrations).
 
 ### Claude Code
 
 ```bash
-claude mcp add voidmob -e VOIDMOB_API_KEY=vmk_live_... -- npx -y @voidmob/mcp
+claude mcp add voidmob -s user -e VOIDMOB_API_KEY=vmk_live_... -- npx -y @voidmob/mcp
 ```
+
+`-s user` makes the server available in every project; the key goes after `-e` and before `--`.
 
 ### Cursor
 
@@ -41,7 +46,7 @@ Add to `~/.cursor/mcp.json`:
 
 **One-click bundle.** Download `voidmob-mcp.mcpb` from the [latest GitHub release](https://github.com/voidmobcom/voidmob-mcp/releases/latest) and open it (or drag it into Claude Desktop, or use Settings > Extensions > Advanced > Install Extension). Claude Desktop asks for the settings: API key (stored securely), sandbox mode, read-only, max per order and session budget (see [Owner controls](#owner-controls)). Build it yourself with `npm run pack:mcpb`.
 
-**Or by config file.** Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS), `%APPDATA%\Claude\claude_desktop_config.json` (Windows), or `~/.config/Claude/claude_desktop_config.json` (Linux):
+**Or by config file.** Open Settings > Developer > Edit Config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows) and add:
 
 ```json
 {
@@ -75,9 +80,9 @@ Add to `.vscode/mcp.json` (VS Code prompts for the key once and stores it secure
 }
 ```
 
-### Windsurf
+### Windsurf (Devin Desktop)
 
-Add to `~/.codeium/windsurf/mcp_config.json`:
+Open the MCP config from the Cascade panel menu (Open MCP config file). Current Devin Desktop builds keep it at `~/.config/devin/mcp_config.json` (Windows: `%APPDATA%\devin\mcp_config.json`); Windsurf builds from before the rename use `~/.codeium/windsurf/mcp_config.json`. Add:
 
 ```json
 {
@@ -93,7 +98,11 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 
 ### Codex CLI
 
-Add to `~/.codex/config.toml`:
+```bash
+codex mcp add voidmob --env VOIDMOB_API_KEY=vmk_live_... -- npx -y @voidmob/mcp
+```
+
+Or add to `~/.codex/config.toml` (shared by the Codex CLI, the IDE extension and the ChatGPT desktop app):
 
 ```toml
 [mcp_servers.voidmob]
@@ -102,12 +111,63 @@ args = ["-y", "@voidmob/mcp"]
 env = { VOIDMOB_API_KEY = "vmk_live_..." }
 ```
 
+### Gemini CLI
+
+Add to `~/.gemini/settings.json`, and export `VOIDMOB_API_KEY` in your shell (Gemini CLI hides variables named like a key from MCP servers unless the server's `env` lists them):
+
+```json
+{
+  "mcpServers": {
+    "voidmob": {
+      "command": "npx",
+      "args": ["-y", "@voidmob/mcp"],
+      "env": { "VOIDMOB_API_KEY": "$VOIDMOB_API_KEY" }
+    }
+  }
+}
+```
+
+### OpenClaw
+
+Put `VOIDMOB_API_KEY=vmk_live_...` in `~/.openclaw/.env`, then:
+
+```bash
+openclaw mcp set voidmob '{"command":"npx","args":["-y","@voidmob/mcp"],"env":{"VOIDMOB_API_KEY":"${VOIDMOB_API_KEY}"}}'
+openclaw mcp doctor voidmob --probe
+```
+
+Or use the [agent skill](#agent-skill). Guide: [voidmob.com/integrations/openclaw](https://voidmob.com/integrations/openclaw).
+
+### Hermes Agent
+
+Put `VOIDMOB_API_KEY=vmk_live_...` in `~/.hermes/.env` and add to `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  voidmob:
+    command: "npx"
+    args: ["-y", "@voidmob/mcp"]
+    env:
+      VOIDMOB_API_KEY: "${VOIDMOB_API_KEY}"
+```
+
+Or use the [agent skill](#agent-skill). Guide: [voidmob.com/integrations/hermes-agent](https://voidmob.com/integrations/hermes-agent).
+
+### Pi
+
+```bash
+pi mcp add voidmob --env VOIDMOB_API_KEY='${VOIDMOB_API_KEY}' -- npx -y @voidmob/mcp
+pi mcp list
+```
+
+The single quotes keep `${VOIDMOB_API_KEY}` as a reference that Pi reads from your shell. Guide: [voidmob.com/integrations/pi-coding-agent](https://voidmob.com/integrations/pi-coding-agent).
+
 ### Grok Bot
 
 1. In your Bot's **Secrets**, add a secret named `VOIDMOB_API_KEY` with your key as the value.
-2. In chat, send: *Add a custom MCP server called voidmob that runs: npx -y @voidmob/mcp*
+2. In chat, send: *Read https://voidmob.com/skill.md and follow it. My VoidMob API key is in the VOIDMOB_API_KEY secret.*
 
-Never paste the key itself into a chat.
+The skill runs the REST API with curl on the Bot's computer and reads the secret by name. A custom MCP server of the Command type running `npx -y @voidmob/mcp` is another route to try; xAI's docs point servers that need secrets to remote HTTPS, so if the server cannot read the key, use the skill. Never paste the key itself into a chat. Guide: [voidmob.com/integrations/grok-bot](https://voidmob.com/integrations/grok-bot).
 
 ## How money works
 
@@ -170,12 +230,17 @@ npx skills add voidmobcom/voidmob-mcp --skill voidmob
 # or from voidmob.com
 npx skills add https://voidmob.com --skill voidmob
 
-# Hermes Agent
+# Hermes Agent (use the full well-known address, not the voidmob.com/skill.md short link,
+# so the skill's reference files resolve)
+hermes skills install well-known:https://voidmob.com/.well-known/skills/voidmob
+# or
 hermes skills install voidmobcom/voidmob-mcp/skills/voidmob
 
-# OpenClaw (ClawHub)
-openclaw skills install @voidmob/voidmob
+# OpenClaw
+npx skills add voidmobcom/voidmob-mcp --skill voidmob -a openclaw -g
 ```
+
+On Hermes, also list the key under `terminal.env_passthrough` in `~/.hermes/config.yaml` so the skill's curl calls receive it.
 
 ## Configuration
 
