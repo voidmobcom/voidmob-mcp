@@ -238,6 +238,9 @@ hermes skills install voidmobcom/voidmob-mcp/skills/voidmob
 
 # OpenClaw
 npx skills add voidmobcom/voidmob-mcp --skill voidmob -a openclaw -g
+
+# Pi (skill only, from the npm package)
+pi install npm:@voidmob/mcp
 ```
 
 On Hermes, also list the key under `terminal.env_passthrough` in `~/.hermes/config.yaml` so the skill's curl calls receive it.

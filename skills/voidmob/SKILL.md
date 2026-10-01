@@ -1,6 +1,6 @@
 ---
 name: voidmob
-description: Receive an SMS verification code (OTP) on a real US non-VoIP mobile number, rent a number for days or keep a private dedicated number (several countries, SMS from any service), route traffic through a 4G/5G mobile carrier IP in a chosen country (rotating or dedicated proxy, HTTP or SOCKS5), or buy an eSIM data plan for mobile data abroad. Paid from a prepaid USD balance the user funds with crypto; no KYC. Use when the user needs a phone number to receive a verification code for their own account, a mobile IP by country (an alternative to residential proxies), or travel data. Calls the VoidMob REST API with curl (or the @voidmob/mcp tools). Requires VOIDMOB_API_KEY and the user's approval before every purchase.
+description: Receive an SMS verification code (OTP) on a real US non-VoIP mobile number, rent a number for days or keep a private dedicated number (several countries, SMS from any service), route traffic through a 4G/5G mobile carrier IP in a chosen country (rotating or dedicated proxy, HTTP or SOCKS5), or buy an eSIM data plan for mobile data abroad. Paid from a prepaid USD balance the user funds with crypto. Use when the user needs a phone number to receive a verification code for their own account, a mobile IP by country (an alternative to residential proxies), or travel data. Calls the VoidMob REST API with curl (or the @voidmob/mcp tools). Requires VOIDMOB_API_KEY and the user's approval before every purchase.
 license: MIT
 compatibility: Needs a shell with curl and outbound HTTPS to dashboard.voidmob.com (jq optional), or the @voidmob/mcp server (Node.js 22+). Reads the API key from the VOIDMOB_API_KEY environment variable.
 metadata:
@@ -53,7 +53,7 @@ The key can spend the whole balance; there is no per-key spend cap. Suggest keep
 
 ## Two ways to call
 
-**MCP.** If tools such as `get_account`, `search_sms_services` or `rent_number` are available, the VoidMob MCP server is configured: use its tools, with the same money rules. Install it with `npx -y @voidmob/mcp@1.2.0` (pin a version you have reviewed; source and client configs: https://github.com/voidmobcom/voidmob-mcp) and `VOIDMOB_API_KEY` in the server's environment.
+**MCP.** If tools such as `get_account`, `search_sms_services` or `rent_number` are available, the VoidMob MCP server is configured: use its tools, with the same money rules. Install it with `npx -y @voidmob/mcp@1.2.1` (pin a version you have reviewed; source and client configs: https://github.com/voidmobcom/voidmob-mcp) and `VOIDMOB_API_KEY` in the server's environment.
 
 | Flow | MCP tools |
 |---|---|

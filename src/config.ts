@@ -57,10 +57,12 @@ function validateBaseUrl(raw: string): string {
   );
 }
 
-// A Claude Desktop bundle (MCPB) passes an optional setting the user left
-// empty as the literal "${user_config.<key>}" placeholder, so that counts as
-// unset, like an empty value.
-const UNFILLED_PLACEHOLDER = /^\$\{user_config\.[^}]*\}$/;
+// Plugin and bundle installers can pass a setting the user left empty as the
+// literal placeholder they failed to expand ("${user_config.key}" from MCPB,
+// "${VOIDMOB_API_KEY}" or "${env:VOIDMOB_API_KEY}" from other clients), so a
+// whole-value ${...} counts as unset, like an empty value, instead of being
+// read as a key or a malformed limit.
+const UNFILLED_PLACEHOLDER = /^\$\{[^}]*\}$/;
 
 function readEnv(env: Record<string, string | undefined>, name: string): string {
   const raw = env[name]?.trim() ?? "";
