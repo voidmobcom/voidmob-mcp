@@ -13,6 +13,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { HttpClient } from "../src/client/http.js";
 import { createSandboxHttpClient, READY_AFTER_MS } from "../src/sandbox/mock-http.js";
 import { createVoidmobServer } from "../src/server.js";
+import { LIST_FORMATS } from "../src/tools/proxy.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -100,6 +101,11 @@ describe("contract: src/ against the OpenAPI spec", () => {
     const missing = [...found].filter((p) => !templates.some((t) => t.re.test(p.replace(/^\/v1/, "").replace(/\{x\}/g, "x"))));
     expect(missing).toEqual([]);
   });
+
+  it("offers exactly the spec's proxy list formats", () => {
+    const proxyFormat = deref<{ enum?: string[] }>({ $ref: "#/components/schemas/ProxyFormat" });
+    expect([...LIST_FORMATS].sort()).toEqual([...(proxyFormat.enum ?? [])].sort());
+  });
 });
 
 describe("contract: every request the tools make", () => {
@@ -159,7 +165,7 @@ describe("contract: every request the tools make", () => {
     await call("create_proxy_list", { proxy_id: prx, name: "b", countries: ["US", "CA"], network: "203.0.113.7" });
     await call("update_proxy_list", {
       proxy_id: prx, list_id: list, name: "a2", country: "DE", region: "Berlin", city: "Berlin", isp: "x", zip: "10115",
-      rotation_period_seconds: -1, rotation_mode: "instant", format: "json",
+      rotation_period_seconds: -1, rotation_mode: "instant", format: "login_pass_host_port_at",
     });
     await call("update_proxy_list", { proxy_id: prx, list_id: list, countries: ["DE", "FR"] });
     await call("regenerate_proxy_password", { proxy_id: prx, list_id: list });

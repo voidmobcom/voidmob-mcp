@@ -477,14 +477,14 @@ export const listProxyListsHandler = (ctx: ToolContext) =>
 
 // ── create_proxy_list / update_proxy_list ───────────────────────────────────
 
-const LIST_FORMATS = [
+export const LIST_FORMATS = [
   "login_pass_host_port",
-  "host_port_login_pass",
   "http_url",
   "socks5_url",
-  "host_port",
-  "login_pass_at_host_port",
-  "json",
+  "host_port_login_pass_colon",
+  "login_pass_host_port_colon",
+  "host_port_login_pass_comma",
+  "login_pass_host_port_at",
 ] as const;
 type ListFormat = (typeof LIST_FORMATS)[number];
 type RotationMode = "instant" | "delayed_5s" | "no_rotation_on_fail";
@@ -614,7 +614,10 @@ const listGeoInputs = {
 
 const rotationPeriodInput = z.number().int().min(-1).max(86400).describe("0=new IP per request, -1=sticky, N=keep the IP for N seconds (max 86400)");
 const rotationModeInput = z.enum(["instant", "delayed_5s", "no_rotation_on_fail"]).describe("What happens when the current node fails");
-const formatInput = z.enum(LIST_FORMATS).describe("Saved export-format preference for the dashboard. Does not change entries in the response.");
+const formatInput = z.enum(LIST_FORMATS).describe(
+  "Saved export-format preference for the dashboard. Does not change entries in the response. " +
+  "Each name lists the fields in order, ending in the separator (_colon, _comma, _at); login_pass_host_port is login:pass@host:port and the _url values add the scheme.",
+);
 
 export function registerProxyTools(server: McpServer, ctx: ToolContext) {
   defineTool(server, ctx, "search_proxies", {

@@ -6727,15 +6727,15 @@
       },
       "ProxyFormat": {
         "type": "string",
-        "description": "Saved credential-format preference for the dashboard's list export. API `entries` are always `login:pass@host:port`.",
+        "description": "Saved credential-format preference for the dashboard's list export.\nAPI `entries` are always `login:pass@host:port`. Each value names the\nexported line:\n\n- `login_pass_host_port`: `login:pass@host:port`\n- `http_url`: `http://login:pass@host:port`\n- `socks5_url`: `socks5://login:pass@host:port`\n- `host_port_login_pass_colon`: `host:port:login:pass`\n- `login_pass_host_port_colon`: `login:pass:host:port`\n- `host_port_login_pass_comma`: `host,port,login,pass`\n- `login_pass_host_port_at`: `login@pass@host@port`\n\nDeprecated names are still accepted on input but never returned:\n`host_port_login_pass` (= `host_port_login_pass_comma`), `host_port`\n(= `login_pass_host_port_colon`), `login_pass_at_host_port`\n(= `host_port_login_pass_colon`), `json` (= `login_pass_host_port_at`).\n",
         "enum": [
           "login_pass_host_port",
-          "host_port_login_pass",
           "http_url",
           "socks5_url",
-          "host_port",
-          "login_pass_at_host_port",
-          "json"
+          "host_port_login_pass_colon",
+          "login_pass_host_port_colon",
+          "host_port_login_pass_comma",
+          "login_pass_host_port_at"
         ]
       },
       "ProxyCredentials": {
@@ -7676,7 +7676,8 @@
           "supports_topup",
           "phone_number_prefix",
           "call_minutes",
-          "calls_unlimited"
+          "calls_unlimited",
+          "voice_note"
         ],
         "additionalProperties": false,
         "properties": {
@@ -7714,6 +7715,42 @@
           "calls_unlimited": {
             "type": "boolean",
             "description": "True when the plan includes unlimited calls."
+          },
+          "voice_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the included number and calls work. Null for data-only plans.",
+            "example": "Minutes cover calls to UK numbers. Receiving calls is free. SMS is not included."
+          }
+        }
+      },
+      "EsimProductNetwork": {
+        "type": "object",
+        "required": [
+          "country",
+          "name",
+          "has_4g",
+          "has_5g"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "country": {
+            "type": "string",
+            "description": "ISO-3166-1 alpha-2 country code (uppercase) where the carrier serves this plan.",
+            "example": "GB"
+          },
+          "name": {
+            "type": "string",
+            "description": "Carrier name.",
+            "example": "Vodafone"
+          },
+          "has_4g": {
+            "type": "boolean"
+          },
+          "has_5g": {
+            "type": "boolean"
           }
         }
       },
@@ -7729,6 +7766,11 @@
           "data_limit_gb",
           "data_unlimited",
           "validity_days",
+          "network_type",
+          "speed",
+          "speed_note",
+          "activation_policy",
+          "networks",
           "features",
           "price_cents",
           "currency"
@@ -7742,8 +7784,8 @@
           },
           "title": {
             "type": "string",
-            "description": "Human-readable product name.",
-            "example": "Europe 10GB 30 Days"
+            "description": "Plan name as the VoidMob dashboard shows it. Data and validity are not repeated in the name; read them from `data_limit_gb` / `data_unlimited` and `validity_days`.",
+            "example": "Europe"
           },
           "countries": {
             "type": "array",
@@ -7782,7 +7824,7 @@
               "number",
               "null"
             ],
-            "description": "Data allowance in GB. Null when `data_unlimited` is true.",
+            "description": "Data allowance in GB. Plans sold as 1 TB report 1024. Null when `data_unlimited` is true.",
             "example": 10
           },
           "data_unlimited": {
@@ -7794,6 +7836,36 @@
             "type": "integer",
             "description": "Plan validity in days from activation.",
             "example": 30
+          },
+          "network_type": {
+            "type": "string",
+            "description": "Network generations the plan uses.",
+            "example": "5G/4G/LTE"
+          },
+          "speed": {
+            "type": "string",
+            "description": "Speed policy, e.g. \"Unrestricted\", \"Limited\" or \"Total 30 GB at full speed, 2Mbps speed cap afterwards\".",
+            "example": "Unrestricted"
+          },
+          "speed_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Plain-language explanation of a capped speed. Null when the speed needs no explanation.",
+            "example": "1GB/day at high speed, then 512 Kbps for the rest of the day"
+          },
+          "activation_policy": {
+            "type": "string",
+            "description": "When the plan's validity starts.",
+            "example": "Package activates upon first data usage."
+          },
+          "networks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EsimProductNetwork"
+            },
+            "description": "Carrier networks the plan uses, one entry per country and carrier, sorted by country then name. Refreshed about weekly; empty for a plan added since the last refresh, and for top-up packages (a top-up runs on its eSIM's networks)."
           },
           "features": {
             "$ref": "#/components/schemas/EsimProductFeatures"
@@ -8408,7 +8480,7 @@
               "docs_url": {
                 "type": "string",
                 "format": "uri",
-                "description": "Deep link to the docs anchor for this error code."
+                "description": "Link to this error code in the developer docs (dashboard sign-in required)."
               },
               "request_id": {
                 "type": "string",
@@ -8757,7 +8829,7 @@
               "error": {
                 "code": "UNAUTHENTICATED",
                 "message": "Authentication required.",
-                "docs_url": "https://docs.voidmob.com/api/errors#unauthenticated",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#unauthenticated",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8787,7 +8859,7 @@
               "error": {
                 "code": "IP_NOT_ALLOWED",
                 "message": "Request source IP is not permitted for this key.",
-                "docs_url": "https://docs.voidmob.com/api/errors#ip_not_allowed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#ip_not_allowed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8817,7 +8889,7 @@
               "error": {
                 "code": "FORBIDDEN",
                 "message": "Your account cannot perform this action.",
-                "docs_url": "https://docs.voidmob.com/api/errors#forbidden",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#forbidden",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8847,7 +8919,7 @@
               "error": {
                 "code": "NOT_FOUND",
                 "message": "The requested resource was not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8880,7 +8952,7 @@
               "error": {
                 "code": "RATE_LIMITED",
                 "message": "Rate limit exceeded. Retry after the indicated interval.",
-                "docs_url": "https://docs.voidmob.com/api/errors#rate_limited",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#rate_limited",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8910,7 +8982,7 @@
               "error": {
                 "code": "IDEMPOTENCY_CONFLICT",
                 "message": "Idempotency key reused with a different request body.",
-                "docs_url": "https://docs.voidmob.com/api/errors#idempotency_conflict",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#idempotency_conflict",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8940,7 +9012,7 @@
               "error": {
                 "code": "IDEMPOTENCY_REPLAY_IN_FLIGHT",
                 "message": "Original request is still processing. Retry shortly.",
-                "docs_url": "https://docs.voidmob.com/api/errors#idempotency_replay_in_flight",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#idempotency_replay_in_flight",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8970,7 +9042,7 @@
               "error": {
                 "code": "VALIDATION_ERROR",
                 "message": "Request failed validation.",
-                "docs_url": "https://docs.voidmob.com/api/errors#validation_error",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#validation_error",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9000,7 +9072,7 @@
               "error": {
                 "code": "SERVICE_UNAVAILABLE",
                 "message": "Service is currently unavailable.",
-                "docs_url": "https://docs.voidmob.com/api/errors#service_unavailable",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#service_unavailable",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9030,7 +9102,7 @@
               "error": {
                 "code": "SERVICE_NOT_FOUND",
                 "message": "Unknown service id.",
-                "docs_url": "https://docs.voidmob.com/api/errors#service_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#service_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9060,7 +9132,7 @@
               "error": {
                 "code": "SERVICE_OUT_OF_STOCK",
                 "message": "This service is temporarily unavailable. Please try again shortly.",
-                "docs_url": "https://docs.voidmob.com/api/errors#service_out_of_stock",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#service_out_of_stock",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9090,7 +9162,7 @@
               "error": {
                 "code": "INSUFFICIENT_BALANCE",
                 "message": "Your wallet balance is too low for this purchase.",
-                "docs_url": "https://docs.voidmob.com/api/errors#insufficient_balance",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#insufficient_balance",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9120,7 +9192,7 @@
               "error": {
                 "code": "DAILY_SPEND_CAP_EXCEEDED",
                 "message": "This key has reached its daily spend cap.",
-                "docs_url": "https://docs.voidmob.com/api/errors#daily_spend_cap_exceeded",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#daily_spend_cap_exceeded",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9150,7 +9222,7 @@
               "error": {
                 "code": "VERIFICATION_NOT_FOUND",
                 "message": "Verification not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#verification_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#verification_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9180,7 +9252,7 @@
               "error": {
                 "code": "WEBHOOK_ENDPOINT_NOT_FOUND",
                 "message": "Webhook endpoint not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#webhook_endpoint_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#webhook_endpoint_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9210,7 +9282,7 @@
               "error": {
                 "code": "CANCEL_NOT_ALLOWED",
                 "message": "This verification can no longer be cancelled.",
-                "docs_url": "https://docs.voidmob.com/api/errors#cancel_not_allowed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#cancel_not_allowed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9243,7 +9315,7 @@
               "error": {
                 "code": "CANCEL_RATE_LIMITED",
                 "message": "Too many cancellations recently. Try again later.",
-                "docs_url": "https://docs.voidmob.com/api/errors#cancel_rate_limited",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#cancel_rate_limited",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9273,7 +9345,7 @@
               "error": {
                 "code": "COMPLETE_NOT_ALLOWED",
                 "message": "This verification can no longer be completed - it is already in a terminal state.",
-                "docs_url": "https://docs.voidmob.com/api/errors#complete_not_allowed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#complete_not_allowed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9303,7 +9375,7 @@
               "error": {
                 "code": "REUSE_NOT_ALLOWED",
                 "message": "Reuse is not available for this verification. Check allow_reuse / allow_paid_reuse on the verification before calling.",
-                "docs_url": "https://docs.voidmob.com/api/errors#reuse_not_allowed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#reuse_not_allowed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9336,7 +9408,7 @@
               "error": {
                 "code": "REUSE_RATE_LIMITED",
                 "message": "Too many reuse attempts on this verification. Try again shortly.",
-                "docs_url": "https://docs.voidmob.com/api/errors#reuse_rate_limited",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#reuse_rate_limited",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9366,7 +9438,7 @@
               "error": {
                 "code": "INTERNAL_ERROR",
                 "message": "An unexpected error occurred. Please try again.",
-                "docs_url": "https://docs.voidmob.com/api/errors#internal_error",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#internal_error",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9396,7 +9468,7 @@
               "error": {
                 "code": "PROXY_PLAN_NOT_FOUND",
                 "message": "Unknown proxy plan id.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_plan_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_plan_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9426,7 +9498,7 @@
               "error": {
                 "code": "PROXY_NOT_FOUND",
                 "message": "Proxy not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9456,7 +9528,7 @@
               "error": {
                 "code": "PROXY_LIST_NOT_FOUND",
                 "message": "Proxy list not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_list_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_list_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9486,7 +9558,7 @@
               "error": {
                 "code": "PROXY_NOT_READY",
                 "message": "Proxy is still provisioning. Retry shortly.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_not_ready",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_not_ready",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9516,7 +9588,7 @@
               "error": {
                 "code": "PROXY_EXPIRED",
                 "message": "Proxy has expired.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_expired",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_expired",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9546,7 +9618,7 @@
               "error": {
                 "code": "PROXY_EXHAUSTED",
                 "message": "Proxy traffic allocation is exhausted.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_exhausted",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_exhausted",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9576,7 +9648,7 @@
               "error": {
                 "code": "PROXY_LIST_LIMIT_EXCEEDED",
                 "message": "Maximum proxy lists per package reached.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_list_limit_exceeded",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_list_limit_exceeded",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9606,7 +9678,7 @@
               "error": {
                 "code": "PROXY_GEO_CONFLICT",
                 "message": "Geo targeting is invalid - subfilters require a single country.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_geo_conflict",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_geo_conflict",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9636,7 +9708,7 @@
               "error": {
                 "code": "PROXY_NETWORK_UNAVAILABLE",
                 "message": "One or more of these IPs is not available for whitelisting.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_network_unavailable",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_network_unavailable",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9666,7 +9738,7 @@
               "error": {
                 "code": "PROVISIONING_FAILED",
                 "message": "Proxy provisioning failed. Funds have been refunded.",
-                "docs_url": "https://docs.voidmob.com/api/errors#provisioning_failed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#provisioning_failed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9696,7 +9768,7 @@
               "error": {
                 "code": "PROVIDER_TIMEOUT",
                 "message": "Request timed out. Funds have been refunded.",
-                "docs_url": "https://docs.voidmob.com/api/errors#provider_timeout",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#provider_timeout",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9726,7 +9798,7 @@
               "error": {
                 "code": "PRICE_MISMATCH",
                 "message": "Price exceeds the supplied max_price_cents.",
-                "docs_url": "https://docs.voidmob.com/api/errors#price_mismatch",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#price_mismatch",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9756,7 +9828,7 @@
               "error": {
                 "code": "POOL_NOT_FOUND",
                 "message": "Pool not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#pool_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#pool_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9786,7 +9858,7 @@
               "error": {
                 "code": "POOL_LAPSED",
                 "message": "Pool validity has ended. Extend the pool to continue.",
-                "docs_url": "https://docs.voidmob.com/api/errors#pool_lapsed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#pool_lapsed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9816,7 +9888,7 @@
               "error": {
                 "code": "POOL_INSUFFICIENT_GB",
                 "message": "Not enough GB left in the pool.",
-                "docs_url": "https://docs.voidmob.com/api/errors#pool_insufficient_gb",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#pool_insufficient_gb",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9846,7 +9918,7 @@
               "error": {
                 "code": "POOL_SELF_EXTEND_DISABLED",
                 "message": "Self-serve extension is not enabled for this pool.",
-                "docs_url": "https://docs.voidmob.com/api/errors#pool_self_extend_disabled",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#pool_self_extend_disabled",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9876,7 +9948,7 @@
               "error": {
                 "code": "POOL_MIN_EXTEND",
                 "message": "Extension is below the pool's minimum GB.",
-                "docs_url": "https://docs.voidmob.com/api/errors#pool_min_extend",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#pool_min_extend",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9906,7 +9978,7 @@
               "error": {
                 "code": "OUT_OF_STOCK_AT_PRICE",
                 "message": "No stock available at or below the supplied max_price_cents.",
-                "docs_url": "https://docs.voidmob.com/api/errors#out_of_stock_at_price",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#out_of_stock_at_price",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9936,7 +10008,7 @@
               "error": {
                 "code": "PRICE_OVER_CAP",
                 "message": "Current price exceeds the supplied max_price_cents.",
-                "docs_url": "https://docs.voidmob.com/api/errors#price_over_cap",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#price_over_cap",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9966,7 +10038,7 @@
               "error": {
                 "code": "BAD_SERVICE",
                 "message": "Unknown or unsupported service.",
-                "docs_url": "https://docs.voidmob.com/api/errors#bad_service",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#bad_service",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9996,7 +10068,7 @@
               "error": {
                 "code": "ALREADY_COMPLETED",
                 "message": "Verification has already received a code and cannot be cancelled.",
-                "docs_url": "https://docs.voidmob.com/api/errors#already_completed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#already_completed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10026,7 +10098,7 @@
               "error": {
                 "code": "CANCEL_WINDOW_NOT_OPEN",
                 "message": "Cancellation is not yet available. Please retry after the cooldown.",
-                "docs_url": "https://docs.voidmob.com/api/errors#cancel_window_not_open",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#cancel_window_not_open",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10056,7 +10128,7 @@
               "error": {
                 "code": "NOT_SUPPORTED",
                 "message": "This action is not supported.",
-                "docs_url": "https://docs.voidmob.com/api/errors#not_supported",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#not_supported",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10086,7 +10158,7 @@
               "error": {
                 "code": "PROVIDER_ERROR",
                 "message": "Service error. Please retry shortly.",
-                "docs_url": "https://docs.voidmob.com/api/errors#provider_error",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#provider_error",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10116,7 +10188,7 @@
               "error": {
                 "code": "LTR_NOT_AVAILABLE",
                 "message": "Long-term rental is not available for this service or duration.",
-                "docs_url": "https://docs.voidmob.com/api/errors#ltr_not_available",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#ltr_not_available",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10146,7 +10218,7 @@
               "error": {
                 "code": "RE_RENT_NOT_AVAILABLE",
                 "message": "This number is no longer available for re-rent - it has been released. Start a fresh rental instead.",
-                "docs_url": "https://docs.voidmob.com/api/errors#re_rent_not_available",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#re_rent_not_available",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10176,7 +10248,7 @@
               "error": {
                 "code": "DEDICATED_NOT_AVAILABLE",
                 "message": "Dedicated numbers are not available for this country.",
-                "docs_url": "https://docs.voidmob.com/api/errors#dedicated_not_available",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#dedicated_not_available",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10206,7 +10278,7 @@
               "error": {
                 "code": "PRODUCT_NOT_FOUND",
                 "message": "Product not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#product_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#product_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10236,7 +10308,7 @@
               "error": {
                 "code": "ESIM_NOT_FOUND",
                 "message": "eSIM not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#esim_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#esim_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10266,7 +10338,7 @@
               "error": {
                 "code": "PARENT_ORDER_NOT_FOUND",
                 "message": "Parent eSIM order not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#parent_order_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#parent_order_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10296,7 +10368,7 @@
               "error": {
                 "code": "PARENT_ORDER_NOT_ACTIVE",
                 "message": "Parent eSIM is not in an active state for topups.",
-                "docs_url": "https://docs.voidmob.com/api/errors#parent_order_not_active",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#parent_order_not_active",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10326,7 +10398,7 @@
               "error": {
                 "code": "TOPUP_INCOMPATIBLE",
                 "message": "This topup is not compatible with the parent eSIM.",
-                "docs_url": "https://docs.voidmob.com/api/errors#topup_incompatible",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#topup_incompatible",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10356,7 +10428,7 @@
               "error": {
                 "code": "PRODUCT_UNAVAILABLE",
                 "message": "Product is temporarily unavailable.",
-                "docs_url": "https://docs.voidmob.com/api/errors#product_unavailable",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#product_unavailable",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10386,7 +10458,7 @@
               "error": {
                 "code": "USAGE_UNAVAILABLE",
                 "message": "Usage data is not currently available. Please try again later.",
-                "docs_url": "https://docs.voidmob.com/api/errors#usage_unavailable",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#usage_unavailable",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10416,7 +10488,7 @@
               "error": {
                 "code": "ESIM_GONE",
                 "message": "This eSIM has been cancelled or refunded.",
-                "docs_url": "https://docs.voidmob.com/api/errors#esim_gone",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#esim_gone",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10446,7 +10518,7 @@
               "error": {
                 "code": "ESIM_NOT_ACTIVE",
                 "message": "eSIM is not in an active state.",
-                "docs_url": "https://docs.voidmob.com/api/errors#esim_not_active",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#esim_not_active",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
