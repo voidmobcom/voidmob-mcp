@@ -78,7 +78,7 @@ describe("structuredContent matches outputSchema for every tool (sandbox)", () =
     const prx = sc(await call("purchase_proxy", { plan_id: "plan_US5GB30D", max_price_cents: 1800 })).proxy.id;
     await new Promise((r) => setTimeout(r, READY_AFTER_MS + 100));
     await call("get_proxy_status", { proxy_id: prx });
-    await call("topup_proxy", { proxy_id: prx, additional_gb: 2, max_price_cents: 720 });
+    await call("topup_proxy", { proxy_id: prx, additional_gb: 2, max_price_cents: 798 });
     await call("renew_proxy", { proxy_id: prx, max_price_cents: 1800 });
     await call("regenerate_proxy_password", { proxy_id: prx });
     const list = sc(await call("create_proxy_list", { proxy_id: prx, name: "la", country: "US", city: "Los Angeles" })).list.id;

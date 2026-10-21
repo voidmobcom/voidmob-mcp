@@ -126,7 +126,7 @@ The usage, lists, flex_credentials and regenerate_password endpoints are shared-
 ## Usage, top-up, renew, auto-renew
 
 - Live traffic (shared): `GET /proxies/{id}/usage` -> `data.usage`: `total_bytes`, `total_gb_allocated`, `remaining_bytes`, `daily_bytes`, `weekly_bytes`, `monthly_bytes`.
-- Top-up (shared only, charges the balance, ask first): `POST /proxies/{id}/topup` with `{"additional_gb":5,"max_price_cents":225}` and a new `Idempotency-Key`. Price = plan price / plan GB x GB, rounded, with the user's discount. Works on `active`, `exhausted`, and `expired` less than 7 days ago.
+- Top-up (shared only, charges the balance, ask first): `POST /proxies/{id}/topup` with `{"additional_gb":10,"max_price_cents":3500}` and a new `Idempotency-Key`. Priced by size, the same on every package: the proxy object's `topup_prices` has the exact charge (with the user's discount) and days added for 1, 10, 25, 50 and 100 GB; another size costs the per-GB rate of the largest listed size below it, never more than the next listed size. Each GB adds 3 days to the expiry (10 GB or more adds 30). Works on `active`, `exhausted`, and `expired` less than 7 days ago.
 - Renew (charges, ask first): `POST /proxies/{id}/renew` with `{"max_price_cents": <next_renewal_price_cents>}` and a new `Idempotency-Key`. Shared: adds the plan's GB and one period; allowed until 7 days after expiry. Dedicated: adds one term, only while `active`; an expired dedicated proxy cannot be renewed.
 - Auto-renew (Standard dedicated only; future charges, ask first): `POST /proxies/{id}/auto_renew` with `{"enabled":true}`. Renews about 12 hours before `expires_at`.
 

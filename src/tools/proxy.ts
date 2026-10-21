@@ -9,6 +9,7 @@ import { Proxy, ProxyPlan, ProxyList, ProxyGateway, type ProxyPlan as ProxyPlanT
 import { ToolRefusal } from "../controls/spend-guard.js";
 import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { formatUsd } from "../utils/format.js";
+import { topupQuote } from "../utils/topup-price.js";
 import { READ_ONLY, SPENDS } from "../utils/annotations.js";
 import { outputObject } from "../utils/output.js";
 import { ProxyId, ProxyListId, ProxyPlanId } from "../constants/ids.js";
@@ -36,16 +37,6 @@ const isDedicated = (type: string | undefined): boolean => type === "dedicated_s
 /** Ready-to-paste proxy URL; credentials are percent-encoded so any character survives. */
 const proxyUrl = (scheme: "http" | "socks5", username: string, password: string, host: string, port: number): string =>
   `${scheme}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
-
-/**
- * A top-up has no quote endpoint; the API prices it from the plan's price per
- * GB, with discounts and rounding applied to the total. The plan's current
- * price per GB is therefore an estimate that can differ by a few cents.
- */
-function topupEstimateCents(plan: ProxyPlanT, gb: number): number | null {
-  if (!plan.data_gb || plan.data_gb <= 0) return null;
-  return Math.round((plan.quoted_price_cents / plan.data_gb) * gb);
-}
 
 /**
  * On PRICE_MISMATCH (the API's "price above max_price_cents", which carries
@@ -189,14 +180,12 @@ export const ProxyStatusOutput = outputObject({
   proxy: Proxy,
   usage: ProxyUsage.nullable(),
   nolist_credentials: ProxyGateway.nullable(),
-  // Shared proxies: the plan's current price per GB, the basis of a top-up price.
-  topup_estimate_per_gb_cents: z.number().int().nullable().optional(),
 });
 
 export const getProxyStatusHandler = (ctx: ToolContext) =>
   wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
-    // The core GET is the source of truth (and enforces auth/ownership). Usage,
-    // the Flex gateway and the top-up estimate are best-effort enrichment:
+    // The core GET is the source of truth (and enforces auth/ownership). Usage
+    // and the Flex gateway are best-effort enrichment:
     // degrade each to null on ANY API/network error so a transient secondary
     // failure never sinks a status read. Non-API throws (bugs) still propagate.
     // Logged, so a moved endpoint shows up instead of hiding as "no gateway".
@@ -246,12 +235,6 @@ export const getProxyStatusHandler = (ctx: ToolContext) =>
       }).catch(degradeToNull);
       gateway = flexRaw ? Proxy.parse(flexRaw.proxy).gateway : null;
     }
-    // Top-up price basis for a shared proxy that can take one.
-    let perGbCents: number | null = null;
-    if (!dedicated && core.plan_id && ["active", "exhausted", "expired"].includes(core.status)) {
-      const plan = await fetchProxyPlan(ctx, core.plan_id).catch(degradeToNull);
-      perGbCents = plan ? topupEstimateCents(plan, 1) : null;
-    }
     const proxy = { ...core, gateway };
     const lines = [
       `Proxy ${proxy.id}`,
@@ -272,7 +255,10 @@ export const getProxyStatusHandler = (ctx: ToolContext) =>
     if (proxy.next_renewal_price_cents != null) {
       lines.push(`  Renewal price: ${formatUsd(proxy.next_renewal_price_cents)} (renew_proxy max_price_cents=${proxy.next_renewal_price_cents})`);
     }
-    if (perGbCents !== null) lines.push(`  Top-up price:  about ${formatUsd(perGbCents)} per GB (topup_proxy; the exact total can differ by a few cents)`);
+    if (proxy.topup_prices?.length) {
+      const sizes = proxy.topup_prices.map((t) => `${t.additional_gb} GB ${formatUsd(t.price_cents)} (+${t.days_added}d)`).join(", ");
+      lines.push(`  Top-up prices: ${sizes} (topup_proxy; pass the price as max_price_cents)`);
+    }
     if (proxy.rotation_url) lines.push(`  Rotation URL:  ${proxy.rotation_url}`);
     if (proxy.gateway) {
       const gw = proxy.gateway;
@@ -314,7 +300,6 @@ export const getProxyStatusHandler = (ctx: ToolContext) =>
       proxy,
       usage,
       nolist_credentials: proxy.gateway,
-      ...(dedicated ? {} : { topup_estimate_per_gb_cents: perGbCents }),
     });
   });
 
@@ -406,15 +391,21 @@ export const topupProxyHandler = (ctx: ToolContext) =>
       }),
       async () => {
         const proxy = await fetchProxy(ctx, args.proxy_id);
-        const plan = proxy.plan_id ? await fetchProxyPlan(ctx, proxy.plan_id) : null;
-        const estimate = plan ? topupEstimateCents(plan, args.additional_gb) : null;
-        if (estimate === null) return null;
-        // A ceiling a little above both the estimate and the refused cap, so
-        // an approved retry is not refused again over a few cents.
-        const suggested = Math.ceil(Math.max(estimate, max) * 1.05);
+        const quote = proxy.topup_prices ? topupQuote(proxy.topup_prices, args.additional_gb) : null;
+        if (quote === null) return null;
+        const refused = `The ${args.additional_gb} GB top-up costs more than your max_price_cents ${max} (${formatUsd(max)}), so nothing was charged. `;
+        if (quote.exact) {
+          return (
+            refused +
+            `It costs ${formatUsd(quote.cents)}. Show the user; only if they approve it, call topup_proxy again with max_price_cents=${quote.cents}`
+          );
+        }
+        // Off-list size: a ceiling a little above the estimate, so an approved
+        // retry is not refused again over a cent of discount rounding.
+        const suggested = Math.ceil(Math.max(quote.cents, max) * 1.01) + 1;
         return (
-          `The ${args.additional_gb} GB top-up costs more than your max_price_cents ${max} (${formatUsd(max)}), so nothing was charged. ` +
-          `At the plan's current price it comes to about ${formatUsd(estimate)}; the exact total can be a few cents higher (discounts and rounding apply to the total). ` +
+          refused +
+          `It comes to about ${formatUsd(quote.cents)} (the exact total can be a cent higher after your discount). ` +
           `Show the user; only if they approve a ceiling a little above that, call topup_proxy again with it as max_price_cents (e.g. ${suggested})`
         );
       },
@@ -722,8 +713,9 @@ export function registerProxyTools(server: McpServer, ctx: ToolContext) {
     writes: true,
     title: "Add data to a shared proxy",
     description:
-      "Add GB to a shared proxy (dedicated proxies are unmetered), charged to your balance immediately. The price is about the plan's price per GB times additional_gb " +
-      "(get_proxy_status shows it; the exact total can differ by a few cents). Also re-activates a proxy that ran out of data or expired less than 7 days ago. " +
+      "Add GB to a shared proxy (dedicated proxies are unmetered), charged to your balance immediately. The price depends only on the size: get_proxy_status lists the exact " +
+      "price for 1, 10, 25, 50 and 100 GB; another size costs the per-GB rate of the largest listed size below it, never more than the next listed size. " +
+      "Each GB adds 3 days to the expiry (10 GB or more adds 30). Also re-activates a proxy that ran out of data or expired less than 7 days ago. " +
       "Requires max_price_cents: the total you showed the user and they approved; refused uncharged if the price is higher.",
     inputSchema: {
       proxy_id: ProxyId.describe("prx_... id of a shared proxy"),

@@ -285,6 +285,12 @@ export const Proxy = z.object({
   auto_renew: z.boolean().optional(),
   // What a renew (or auto-renew) charges now; null when it cannot be renewed.
   next_renewal_price_cents: z.number().int().nullable().optional(),
+  // Shared: the exact top-up charge and days added per listed size; null when
+  // it cannot take a paid top-up. Absent from dashboards older than 2026-10.
+  topup_prices: z
+    .array(z.object({ additional_gb: z.number().int(), price_cents: z.number().int(), days_added: z.number() }))
+    .nullable()
+    .optional(),
   gateway: ProxyGateway.nullable(),
   lists: z.array(ProxyList).default([]),
   rotation_url: z.string().nullable().optional(),

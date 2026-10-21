@@ -108,7 +108,7 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
     await waitUntilReady();
     const status = okResult(await getProxyStatusHandler(ctx)({ proxy_id: id })); // active: gateway set up
     expect((status.content[0] as { text: string }).text).toMatch(/HTTP URL: +http:\/\/vm_\w+:\w+@proxy\.voidmob\.com:10092/);
-    okResult(await topupProxyHandler(ctx)({ proxy_id: id, additional_gb: 5, max_price_cents: 1800 }));
+    okResult(await topupProxyHandler(ctx)({ proxy_id: id, additional_gb: 5, max_price_cents: 1995 }));
     okResult(await renewProxyHandler(ctx)({ proxy_id: id, max_price_cents: 1800 }));
     okResult(await regenerateProxyPasswordHandler(ctx)({ proxy_id: id }));
     const list = okResult(await createProxyListHandler(ctx)({ proxy_id: id, name: "la", country: "us", city: "Los Angeles" }));

@@ -60,6 +60,14 @@ function proxyResp(id: string, overrides: Partial<Record<string, unknown>> = {})
   };
 }
 
+const TOPUP_PRICES = [
+  { additional_gb: 1, price_cents: 399, days_added: 3 },
+  { additional_gb: 10, price_cents: 3500, days_added: 30 },
+  { additional_gb: 25, price_cents: 8125, days_added: 30 },
+  { additional_gb: 50, price_cents: 14950, days_added: 30 },
+  { additional_gb: 100, price_cents: 25000, days_added: 30 },
+];
+
 function dedicatedPlanFixture(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: "plan_DED_US_NY",
@@ -252,7 +260,6 @@ describe("get_proxy_status", () => {
         data: { proxy: proxyResp("proxy_xyz", { data_bytes_used: 1073741824 }) },
       },
     });
-    http.expect("GET", "/v1/proxy_plans/proxy_plan_us_shared_5gb", planOk());
     const res = await getProxyStatusHandler(toolContext(http))({ proxy_id: "proxy_xyz" });
     expect(res.isError).toBeFalsy();
     // Regression: v1.1.5 called the removed nolist_credentials alias and the
@@ -279,18 +286,18 @@ describe("get_proxy_status", () => {
         data: {
           proxy: proxyResp("prx_flex", {
             gateway: gatewayFixture({ host: "proxy.voidmob.com", port: 10092, username_geo_hint: "Flex mode: append parameters to username. _c_US (country)" }),
+            topup_prices: TOPUP_PRICES,
           }),
         },
       },
     });
     http.expect("GET", "/v1/proxies/prx_flex/usage", usageOk);
-    http.expect("GET", "/v1/proxy_plans/proxy_plan_us_shared_5gb", planOk());
     const res = await getProxyStatusHandler(toolContext(http))({ proxy_id: "prx_flex" });
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");
-    // Top-up price basis: 1499c / 5 GB.
-    expect(t.text).toContain("Top-up price:  about $3.00 per GB");
-    expect(res.structuredContent?.topup_estimate_per_gb_cents).toBe(300);
+    // The API's exact top-up prices, straight from the proxy object - no plan read.
+    expect(t.text).toContain("Top-up prices: 1 GB $3.99 (+3d), 10 GB $35.00 (+30d), 25 GB $81.25 (+30d), 50 GB $149.50 (+30d), 100 GB $250.00 (+30d)");
+    expect(http.history.some((h) => h.path.startsWith("/v1/proxy_plans"))).toBe(false);
     expect(t.text).toContain("HTTP URL:  http://vm_abc123:p4ssw0rd@proxy.voidmob.com:10092");
     expect(t.text).toContain("Flex mode: append parameters to username.");
     expect(t.text).toContain("http://vm_abc123_c_US:p4ssw0rd@proxy.voidmob.com:10092");
@@ -306,10 +313,11 @@ describe("get_proxy_status", () => {
       body: { success: true, data: { proxy: proxyResp("proxy_xyz", { data_bytes_used: 3221225472 }) } },
     });
     http.expect("GET", "/v1/proxies/proxy_xyz/usage", usageOk);
-    http.expect("GET", "/v1/proxy_plans/proxy_plan_us_shared_5gb", planOk());
     const res = await getProxyStatusHandler(toolContext(http))({ proxy_id: "proxy_xyz" });
     expect(res.isError).toBeFalsy();
     expect(http.history.map((h) => h.method)).not.toContain("POST");
+    // No topup_prices on the proxy (older dashboard or not top-uppable): no price line.
+    expect(textOf(res)).not.toContain("Top-up prices");
     expect(res.structuredContent?.proxy).toMatchObject({ data_bytes_used: 3221225472 });
     expect(res.structuredContent?.nolist_credentials).toMatchObject({ username: "vm_abc123" });
   });
@@ -327,7 +335,6 @@ describe("get_proxy_status", () => {
       headers: new Headers(),
       body: { success: true, data: { proxy: proxyResp("proxy_xyz", { data_bytes_used: 0 }) } },
     });
-    http.expect("GET", "/v1/proxy_plans/proxy_plan_us_shared_5gb", planOk());
     const res = await getProxyStatusHandler(toolContext(http))({ proxy_id: "proxy_xyz" });
     expect(res.structuredContent?.proxy).toMatchObject({ data_bytes_used: 3221225472 });
     expect(res.structuredContent?.nolist_credentials).toMatchObject({ username: "vm_abc123" });
@@ -383,15 +390,9 @@ describe("get_proxy_status", () => {
         error: { code: "PROXY_NOT_READY", message: "not ready", request_id: "req_flex_409", docs_url: "" },
       },
     });
-    http.expect("GET", "/v1/proxy_plans/proxy_plan_us_shared_5gb", {
-      status: 500, headers: new Headers(),
-      body: { success: false, error: { code: "INTERNAL_ERROR", message: "x", request_id: "r" } },
-    });
     const res = await getProxyStatusHandler(toolContext(http))({ proxy_id: "proxy_xyz" });
     expect(res.isError).toBeFalsy();
     expect(res.structuredContent?.nolist_credentials).toBeNull();
-    // The failed plan read degrades to no top-up price, never an error.
-    expect(res.structuredContent?.topup_estimate_per_gb_cents).toBeNull();
   });
 
   it("read-only mode never creates the gateway login (no POST) and says why", async () => {
@@ -402,7 +403,6 @@ describe("get_proxy_status", () => {
       body: { success: true, data: { proxy: proxyResp("proxy_xyz", { gateway: null }) } },
     });
     http.expect("GET", "/v1/proxies/proxy_xyz/usage", usageOk);
-    http.expect("GET", "/v1/proxy_plans/proxy_plan_us_shared_5gb", planOk());
     const res = await getProxyStatusHandler(toolContext(http, { readOnly: true }))({ proxy_id: "proxy_xyz" });
     expect(res.isError).toBeFalsy();
     expect(http.history.every((h) => h.method === "GET")).toBe(true);
@@ -521,17 +521,28 @@ describe("topup_proxy", () => {
     expect(ctx.guard.countedCents).toBe(1500);
   });
 
-  it("PRICE_MISMATCH: estimates from the plan's price per GB and suggests a ceiling above the refused one", async () => {
+  it("PRICE_MISMATCH on a listed size: hands back the exact price from topup_prices", async () => {
     const http = createMockHttpClient();
     http.expect("POST", "/v1/proxies/proxy_xyz/topup", priceMismatch);
-    http.expect("GET", "/v1/proxies/proxy_xyz", { status: 200, headers: new Headers(), body: { success: true, data: { proxy: proxyResp("proxy_xyz") } } });
-    http.expect("GET", "/v1/proxy_plans/proxy_plan_us_shared_5gb", planOk(planFixture({ quoted_price_cents: 2000 })));
-    const res = await topupProxyHandler(toolContext(http))({ proxy_id: "proxy_xyz", additional_gb: 5, max_price_cents: 1500 });
+    http.expect("GET", "/v1/proxies/proxy_xyz", { status: 200, headers: new Headers(), body: { success: true, data: { proxy: proxyResp("proxy_xyz", { topup_prices: TOPUP_PRICES }) } } });
+    const res = await topupProxyHandler(toolContext(http))({ proxy_id: "proxy_xyz", additional_gb: 10, max_price_cents: 3000 });
     expect(res.isError).toBe(true);
     const t = textOf(res);
     expect(t).toContain("nothing was charged");
-    expect(t).toContain("about $20.00");
-    expect(t).toContain("max_price_cents (e.g. 2100)");
+    expect(t).toContain("It costs $35.00");
+    expect(t).toContain("max_price_cents=3500");
+  });
+
+  it("PRICE_MISMATCH on another size: the API's rule over topup_prices, with a small ceiling buffer", async () => {
+    const http = createMockHttpClient();
+    http.expect("POST", "/v1/proxies/proxy_xyz/topup", priceMismatch);
+    http.expect("GET", "/v1/proxies/proxy_xyz", { status: 200, headers: new Headers(), body: { success: true, data: { proxy: proxyResp("proxy_xyz", { topup_prices: TOPUP_PRICES }) } } });
+    const res = await topupProxyHandler(toolContext(http))({ proxy_id: "proxy_xyz", additional_gb: 5, max_price_cents: 1500 });
+    expect(res.isError).toBe(true);
+    const t = textOf(res);
+    // 5 GB at the 1 GB rate: 5 x $3.99
+    expect(t).toContain("about $19.95");
+    expect(t).toContain("max_price_cents (e.g. 2016)");
   });
 });
 
