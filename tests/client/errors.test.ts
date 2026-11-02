@@ -187,7 +187,16 @@ describe("app connection refusals", () => {
     expect(mapApiError(err, links)).toContain("only the account owner can change the permission level");
   });
 
-  it("paused connected-app purchases: a clear try-again-later, with no provider wording", () => {
+  it("paused connected-app purchases are matched by their reason, whatever else is known", () => {
+    const err = new HttpError(503, "SERVICE_UNAVAILABLE", "req_5", { reason: "connected_app_purchases_paused" },
+      "Purchases through connected apps are paused right now. Try again later.", { method: "POST", retryAfterSeconds: 300 });
+    const expected = "Purchases through connected apps are paused right now, so nothing was charged. Try again later (in about 5 minutes) (request_id: req_5)";
+    expect(mapApiError(err, links)).toBe(expected);
+    // Even without the connection's kind (its /v1/me read failed).
+    expect(mapApiError(err, { depositUrl: links.depositUrl, hosted: true })).toBe(expected);
+  });
+
+  it("paused connected-app purchases without the reason (an older API): matched by shape", () => {
     const err = new HttpError(503, "SERVICE_UNAVAILABLE", "req_3", undefined,
       "Purchases through connected apps are paused right now. Try again later.", { method: "POST", retryAfterSeconds: 300 });
     const text = mapApiError(err, links);
