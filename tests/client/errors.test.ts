@@ -164,3 +164,40 @@ describe("mapApiError", () => {
     }
   });
 });
+
+describe("app connection refusals", () => {
+  const oauth = { permission: "buy" as const, autoMode: false, maxOrderCents: null, dailyLimitCents: null, kind: "oauth" as const };
+  const links = { depositUrl: "https://dashboard.voidmob.com/wallet", hosted: true, connection: oauth };
+
+  it("connection_not_allowed shows the API's message, never the permission-level advice", () => {
+    const err = new HttpError(403, "PERMISSION_DENIED", "req_1", {
+      reason: "connection_not_allowed", settings_url: "https://dashboard.voidmob.com/account/connected-apps",
+    }, "App connections can't turn auto-renew on. Do this in the VoidMob dashboard or with an API key.", { method: "PATCH" });
+    const text = mapApiError(err, links);
+    expect(text).toBe(
+      "App connections can't turn auto-renew on. Do this in the VoidMob dashboard or with an API key. Nothing was charged or changed. (request_id: req_1)",
+    );
+    expect(text).not.toMatch(/permission level|account owner/);
+  });
+
+  it("an ordinary PERMISSION_DENIED still names the levels and where they change", () => {
+    const err = new HttpError(403, "PERMISSION_DENIED", "req_2", {
+      permission: "view", required_permission: "buy", settings_url: "https://dashboard.voidmob.com/account/connected-apps",
+    }, "x", { method: "POST" });
+    expect(mapApiError(err, links)).toContain("only the account owner can change the permission level");
+  });
+
+  it("paused connected-app purchases: a clear try-again-later, with no provider wording", () => {
+    const err = new HttpError(503, "SERVICE_UNAVAILABLE", "req_3", undefined,
+      "Purchases through connected apps are paused right now. Try again later.", { method: "POST", retryAfterSeconds: 300 });
+    const text = mapApiError(err, links);
+    expect(text).toBe("Purchases through connected apps are paused right now, so nothing was charged. Try again later (in about 5 minutes) (request_id: req_3)");
+    expect(text).not.toMatch(/provider|Retry-After/i);
+  });
+
+  it("a short throttle (retry_after_seconds) keeps the API's own message", () => {
+    const err = new HttpError(503, "SERVICE_UNAVAILABLE", "req_4", { retry_after_seconds: 5 },
+      "This service is momentarily unavailable. Please retry after the interval in the Retry-After header.", { method: "POST", retryAfterSeconds: 5 });
+    expect(mapApiError(err, links)).toContain("This service is momentarily unavailable");
+  });
+});

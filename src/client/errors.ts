@@ -79,6 +79,11 @@ function unauthenticatedText(links: ErrorLinks, reqLine: string): string {
 
 /** Copy for a call above the key's or connection's permission level. */
 function permissionDeniedText(err: HttpError, reqLine: string): string {
+  // Something app connections can never do, whatever their level: the API
+  // says what to use instead (the dashboard or an API key).
+  if (err.details?.reason === "connection_not_allowed") {
+    return `${apiMessage(err) ?? "App connections can't do this. Do it in the VoidMob dashboard or with an API key."} Nothing was charged or changed.${reqLine}`;
+  }
   const have = levelLabel(err.details?.permission);
   const need = levelLabel(err.details?.required_permission);
   const settings = stringDetail(err, "settings_url");
@@ -182,6 +187,18 @@ export function mapApiError(err: unknown, links: ErrorLinks = DEFAULT_LINKS): st
     case "PROVIDER_TIMEOUT":
     case "PROVISIONING_FAILED":
       return `The order could not be completed, and its charge was refunded to your balance. You can retry${reqLine}`;
+    case "SERVICE_UNAVAILABLE":
+      // VoidMob paused buying through app connections: refused before
+      // anything ran. (The other 503, a short throttle, carries
+      // retry_after_seconds and keeps the API's own message.)
+      if (write && links.connection?.kind === "oauth" && err.details?.retry_after_seconds === undefined) {
+        const minutes = wait ? Math.max(1, Math.round(wait / 60)) : undefined;
+        return (
+          `Purchases through connected apps are paused right now, so nothing was charged. ` +
+          `Try again later${minutes ? ` (in about ${minutes} minute${minutes === 1 ? "" : "s"})` : ""}${reqLine}`
+        );
+      }
+      return `${err.message ?? err.code}${reqLine}`;
     case "PROVIDER_ERROR":
       return `Temporary service error. Please retry shortly${reqLine}`;
     case "INTERNAL_ERROR":
