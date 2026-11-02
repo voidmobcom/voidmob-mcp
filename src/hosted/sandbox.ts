@@ -5,7 +5,7 @@ export const SANDBOX_MAX_ENTRIES = 1_000;
 export const SANDBOX_IDLE_MS = 60 * 60_000;
 
 /**
- * Sandbox state per caller: the path token when given, else the client IP.
+ * Persistent sandbox state per path token.
  * Least recently used first; an entry idle for an hour starts over, and the
  * oldest goes when 1,000 are held.
  */

@@ -16,6 +16,7 @@ import type { JWTVerifyGetKey } from "jose";
 import { createHttpClient, HttpError, type HttpClient } from "../client/http.js";
 import { DEFAULT_CONTROLS } from "../config.js";
 import { loadConnection, type Connection } from "../connection.js";
+import { createSandboxHttpClient } from "../sandbox/mock-http.js";
 import { createVoidmobServer, VERSION } from "../server.js";
 import { createTokenVerifier, hostedAuthOf, remoteJwks, type HostedAuth } from "./auth.js";
 import { MAX_BODY_BYTES, type HostedConfig } from "./config.js";
@@ -28,7 +29,7 @@ const FORWARD_TIMEOUT_MS = 10_000;
 /** A sandbox path token: 16 to 128 URL-safe characters, so tokens are hard to guess. */
 const SANDBOX_PATH = /^\/sandbox(?:\/([A-Za-z0-9_-]{16,128}))?$/;
 
-/** JSON-RPC messages per minute for one sandbox: its path token, or the IP on bare /sandbox. */
+/** JSON-RPC messages per minute for one sandbox path token. */
 export const SANDBOX_MESSAGES_PER_MINUTE = 60;
 /** JSON-RPC messages per minute from one IP, on /mcp and (separately) on /sandbox. */
 export const IP_MESSAGES_PER_MINUTE = 600;
@@ -60,7 +61,7 @@ export interface HostedDeps {
   /** One line per request; defaults to stdout. */
   log?: (line: string) => void;
   sandboxes?: SandboxStore;
-  /** Per sandbox (path token, or IP on bare /sandbox). */
+  /** Per sandbox path token. */
   sandboxLimiter?: RateLimiter;
   /** Per IP across /sandbox. */
   sandboxIpLimiter?: RateLimiter;
@@ -100,9 +101,9 @@ function clientIp(request: Request): string {
   return request.headers.get("cf-connecting-ip")?.trim().slice(0, 64) || "local";
 }
 
-function sandboxKey(request: Request): string {
-  const token = SANDBOX_PATH.exec(new URL(request.url).pathname)?.[1];
-  return token ? `token:${token}` : `ip:${clientIp(request)}`;
+/** The path token of a persistent sandbox, or undefined on bare /sandbox. */
+function sandboxToken(request: Request): string | undefined {
+  return SANDBOX_PATH.exec(new URL(request.url).pathname)?.[1];
 }
 
 const credentialHash = (token: string): string => createHash("sha256").update(token).digest("hex");
@@ -333,9 +334,16 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
     }
   };
 
+  // Bare /sandbox keeps nothing: every request starts from fresh demo data,
+  // so callers behind one address never see each other's orders. A path
+  // token is a persistent playground, kept for an hour idle.
+  const playgroundUrl = `${cfg.resourceUrl.origin}/sandbox/<any-random-id>`;
   const sandboxFactory: McpServerFactory = ({ requestInfo }) => {
     if (!requestInfo) throw new Error("no request on a sandbox request");
-    return createVoidmobServer(sandboxes.get(sandboxKey(requestInfo)), DEFAULT_CONTROLS, null, { hosted: true });
+    const token = sandboxToken(requestInfo);
+    return token
+      ? createVoidmobServer(sandboxes.get(token), DEFAULT_CONTROLS, null, { hosted: true })
+      : createVoidmobServer(createSandboxHttpClient(), DEFAULT_CONTROLS, null, { hosted: true, statelessSandbox: { playgroundUrl } });
   };
 
   // Stateless: 2025-era clients are served per request (legacy: "stateless"),
@@ -430,7 +438,11 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
       if (badOrigin) return badOrigin;
       const ip = clientIp(request);
       const shape = await bodyShape(request);
-      const wait = sandboxLimiter.hit(sandboxKey(request), shape.messages) || sandboxIpLimiter.hit(ip, shape.messages);
+      // A playground is limited per token; every sandbox request counts
+      // toward its IP's ceiling (bare /sandbox has only the ceiling: it holds
+      // no state, and many users can share one egress address).
+      const token = sandboxToken(request);
+      const wait = (token ? sandboxLimiter.hit(token, shape.messages) : 0) || sandboxIpLimiter.hit(ip, shape.messages);
       if (wait > 0) return tooManyRequests(wait);
       const release = shape.listenId !== undefined ? sandboxListens.take(ip) : undefined;
       if (release === null) return listenRefused(shape.listenId!);

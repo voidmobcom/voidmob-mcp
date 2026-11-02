@@ -164,6 +164,8 @@ async function connectClient(app: { fetch(r: Request): Promise<Response> }, era:
 }
 
 const toolCount = async (client: Client) => (await client.listTools()).tools.length;
+const balance = async (client: Client): Promise<number> =>
+  ((await client.callTool({ name: "get_account", arguments: {} })).structuredContent as Record<string, any>).account.balance.amount_cents;
 const text = (r: Awaited<ReturnType<Client["callTool"]>>) => (r.content as Array<{ text?: string }>)[0]?.text ?? "";
 
 describe("GET /health", () => {
@@ -357,24 +359,38 @@ describe.each<Era>(["legacy", "modern"])("MCP over HTTP (%s era)", (era) => {
     await client.close();
   });
 
-  it("sandbox state persists across requests for the same address, and a path token gets its own", async () => {
+  it("a sandbox path token keeps its state across requests; another token has its own", async () => {
     const up = stubUpstream();
     const { app } = makeApp();
-    const first = await connectClient(app, era, "/sandbox");
+    const playground = `/sandbox/demo-${era}-0123456789`;
+    const first = await connectClient(app, era, playground);
     const bought = await first.callTool({ name: "rent_number", arguments: { service_id: "svc_telegram", max_price_cents: 150 } });
     expect(bought.isError ?? false).toBe(false);
+    expect(first.getInstructions()).not.toContain("keeps no state");
     await first.close();
 
-    const balance = async (client: Client) =>
-      (((await client.callTool({ name: "get_account", arguments: {} })).structuredContent as Record<string, any>).account.balance.amount_cents);
-    const again = await connectClient(app, era, "/sandbox");
+    const again = await connectClient(app, era, playground);
     expect(await balance(again)).toBe(50_000 - 150);
     await again.close();
 
-    const own = await connectClient(app, era, `/sandbox/demo-${era}-0123456789`);
-    expect(await balance(own)).toBe(50_000);
-    await own.close();
+    const other = await connectClient(app, era, `/sandbox/other-${era}-0123456789`);
+    expect(await balance(other)).toBe(50_000);
+    await other.close();
     expect(up.calls).toHaveLength(0);
+  });
+
+  it("bare /sandbox keeps nothing between requests, even from one address, and says so", async () => {
+    const { app } = makeApp();
+    const client = await connectClient(app, era, "/sandbox");
+    expect(client.getInstructions()).toContain("This sandbox keeps no state between calls");
+    expect(client.getInstructions()).toContain("https://mcp.voidmob.com/sandbox/<any-random-id>");
+    const bought = await client.callTool({ name: "rent_number", arguments: { service_id: "svc_telegram", max_price_cents: 150 } });
+    expect(bought.isError ?? false).toBe(false);
+    expect(await balance(client)).toBe(50_000);
+    await client.close();
+    const next = await connectClient(app, era, "/sandbox");
+    expect(await balance(next)).toBe(50_000);
+    await next.close();
   });
 });
 
@@ -388,7 +404,7 @@ describe("rate limits", () => {
       body,
     }));
 
-  it("sandbox: every message of a batch counts, per path token (or IP on bare /sandbox), under a per-IP ceiling", async () => {
+  it("sandbox: every message of a batch counts, per path token, under a per-IP ceiling (bare /sandbox: the ceiling only)", async () => {
     const { app, lines } = makeApp({}, { sandboxLimiter: new RateLimiter(3), sandboxIpLimiter: new RateLimiter(5) });
     const [a, b, c] = ["a", "b", "c"].map((x) => x.repeat(16));
     expect((await post(app, `/sandbox/${a}`, pings(4))).status).toBe(429); // 4 messages, 3 per token
@@ -400,8 +416,9 @@ describe("rate limits", () => {
     expect(capped.status).toBe(429);
     expect(Number(capped.headers.get("retry-after"))).toBeGreaterThan(0);
     expect((await post(app, `/sandbox/${c}`, initialize, "198.51.100.10")).status).toBe(200);
-    // Bare /sandbox is keyed by IP.
-    expect((await post(app, "/sandbox", pings(4), "198.51.100.11")).status).toBe(429);
+    // Bare /sandbox: only the per-IP ceiling.
+    expect((await post(app, "/sandbox", pings(5), "198.51.100.11")).status).not.toBe(429);
+    expect((await post(app, "/sandbox", initialize, "198.51.100.11")).status).toBe(429);
     // Path tokens never reach the log.
     expect(lines.join("\n")).not.toContain(a);
     expect(lines.some((l) => l.includes("/sandbox/:token 429"))).toBe(true);

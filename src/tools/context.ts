@@ -45,6 +45,8 @@ export interface ToolContext {
 export interface ServeOptions {
   /** Served over HTTP at mcp.voidmob.com: shorter SMS waits, and error texts that speak of the app's connection. */
   hosted?: boolean;
+  /** The hosted bare /sandbox, which keeps no state between calls; the instructions point at a persistent playground URL. */
+  statelessSandbox?: { playgroundUrl: string };
 }
 
 export function createToolContext(

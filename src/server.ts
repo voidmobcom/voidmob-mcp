@@ -58,6 +58,14 @@ function keyLimits(connection: Connection | null): string | null {
   return parts.length ? parts.join(" and ") : null;
 }
 
+/** Said on the hosted bare /sandbox, where every call starts from fresh demo data. */
+export function statelessSandboxNote(playgroundUrl: string): string {
+  return (
+    `This sandbox keeps no state between calls: every call starts from fresh demo data, so an order made in one call is gone in the next. ` +
+    `For a playground that keeps its state, connect to ${playgroundUrl} instead (any id of 16 or more letters, digits, - or _).`
+  );
+}
+
 /** The instructions for this server: its permission level, limits and auto-mode. */
 export function serverInstructions(ctx: ToolContext): string {
   const buys = levelAllows(ctx.level, "buy");
@@ -100,7 +108,9 @@ export function createVoidmobServer(
   const server = new McpServer(
     { name: "@voidmob/mcp", version: VERSION },
     {
-      instructions: serverInstructions(ctx),
+      instructions: options.statelessSandbox
+        ? `${serverInstructions(ctx)} ${statelessSandboxNote(options.statelessSandbox.playgroundUrl)}`
+        : serverInstructions(ctx),
       // No tool takes an array, and the widest takes a handful of fields:
       // anything bigger on the public endpoint is refused before validation.
       ...(ctx.hosted ? { maxToolInputElements: HOSTED_MAX_TOOL_INPUT_ELEMENTS } : {}),
