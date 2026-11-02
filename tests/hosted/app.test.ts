@@ -68,7 +68,7 @@ const meKey = (over: Record<string, unknown> = {}) => ({
 });
 
 interface Upstream {
-  calls: Array<{ url: string; method: string; auth: string | null; ua: string | null; contentType: string | null; body: string }>;
+  calls: Array<{ url: string; method: string; auth: string | null; ua: string | null; contentType: string | null; body: string; headerNames: string[] }>;
 }
 
 /**
@@ -87,7 +87,10 @@ function stubUpstream(opts: {
     const url = String(input instanceof Request ? input.url : input);
     const headers = new Headers(init?.headers);
     const body = init?.body ? Buffer.from(init.body as ArrayBuffer).toString("utf8") : "";
-    up.calls.push({ url, method: init?.method ?? "GET", auth: headers.get("authorization"), ua: headers.get("user-agent"), contentType: headers.get("content-type"), body });
+    up.calls.push({
+      url, method: init?.method ?? "GET", auth: headers.get("authorization"), ua: headers.get("user-agent"),
+      contentType: headers.get("content-type"), body, headerNames: [...headers.keys()],
+    });
     if (url.startsWith(`${API}/v1/me`)) {
       if (opts.meStatus) {
         if (opts.meBare) return new Response("<html>gateway</html>", { status: opts.meStatus });
@@ -544,6 +547,52 @@ describe("OAuth forwards", () => {
     expect(up.calls[0].body).toBe(form);
     expect(up.calls[0].auth).toBe("Basic YzE6cw==");
     expect(lines.join("\n")).not.toContain("secret-code");
+  });
+
+  it("limits each forwarded step per IP with an OAuth-style 429, and sends no client IP upstream", async () => {
+    const up = stubUpstream({ oauth: () => Response.json({ ok: true }) });
+    const { app } = makeApp({}, {
+      forwardLimiters: { "/token": new RateLimiter(2), "/register": new RateLimiter(1, 3_600_000), "/authorize": new RateLimiter(1) },
+    });
+    const from = (ip: string) => ({ "cf-connecting-ip": ip, "x-forwarded-for": ip, "x-real-ip": ip });
+    const token = (ip: string) => app.fetch(req("/token", {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...from(ip) }, body: "grant_type=refresh_token&refresh_token=r",
+    }));
+    const register = (ip: string) => app.fetch(req("/register", {
+      method: "POST", headers: { "content-type": "application/json", ...from(ip) }, body: "{}",
+    }));
+    const authorize = (ip: string) => app.fetch(req("/authorize?client_id=c", { headers: from(ip) }));
+
+    expect((await token("203.0.113.50")).status).toBe(200);
+    expect((await token("203.0.113.50")).status).toBe(200);
+    const limited = await token("203.0.113.50");
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toEqual({ error: "temporarily_unavailable", error_description: "Too many requests. Try again later." });
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect((await token("203.0.113.51")).status).toBe(200);
+
+    expect((await register("203.0.113.50")).status).toBe(200);
+    const hourly = await register("203.0.113.50");
+    expect(hourly.status).toBe(429);
+    expect(Number(hourly.headers.get("retry-after"))).toBeGreaterThan(60);
+
+    expect((await authorize("203.0.113.50")).status).toBe(302);
+    expect((await authorize("203.0.113.50")).status).toBe(429);
+
+    expect(up.calls.length).toBe(4);
+    for (const call of up.calls) {
+      for (const name of ["cf-connecting-ip", "x-forwarded-for", "x-real-ip", "forwarded"]) expect(call.headerNames).not.toContain(name);
+    }
+  });
+
+  it("forwards also count under the IP's /mcp ceiling", async () => {
+    stubUpstream({ oauth: () => Response.json({ ok: true }) });
+    const { app } = makeApp({}, { mcpIpLimiter: new RateLimiter(2) });
+    const ip = { "cf-connecting-ip": "203.0.113.60" };
+    expect((await app.fetch(req("/authorize?client_id=c", { headers: ip }))).status).toBe(302);
+    expect((await app.fetch(req("/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...ip }, body: "a=b" }))).status).toBe(200);
+    expect((await app.fetch(req("/authorize?client_id=c", { headers: ip }))).status).toBe(429);
+    expect((await app.fetch(mcpPost(null, ip))).status).toBe(429);
   });
 
   it("answers 503 when the dashboard cannot be reached, and 405 for the wrong method", async () => {

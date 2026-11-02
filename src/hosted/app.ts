@@ -43,6 +43,18 @@ export const IP_MESSAGES_PER_MINUTE = 600;
  * limits still apply behind it.
  */
 export const CREDENTIAL_MESSAGES_PER_MINUTE = 600;
+/**
+ * Per-IP limits on the OAuth steps the MCP host forwards, at or below the
+ * dashboard's own: it sees this server's address for every forwarded call, so
+ * one flood here must not use up its buckets for everyone else.
+ */
+export const FORWARD_LIMITS = {
+  "/authorize": { limit: 120, windowMs: 60_000 },
+  "/token": { limit: 60, windowMs: 60_000 },
+  "/register": { limit: 30, windowMs: 3_600_000 },
+} as const;
+type ForwardPath = keyof typeof FORWARD_LIMITS;
+
 /** How long a good /v1/me read marks a credential as known (the connection cache's age). */
 const KNOWN_GOOD_TTL_MS = 60_000;
 /** Open subscriptions/listen streams per credential on /mcp and per IP on /sandbox. */
@@ -81,6 +93,8 @@ export interface HostedDeps {
   mcpIpLimiter?: RateLimiter;
   /** Per credential on /mcp, once the API has accepted it. */
   mcpCredentialLimiter?: RateLimiter;
+  /** Per IP on each forwarded OAuth step. */
+  forwardLimiters?: Partial<Record<ForwardPath, RateLimiter>>;
   /** Credential hashes the API refused, answered 401 without another /v1/me. */
   refusedCredentials?: ExpiringSet;
 }
@@ -298,6 +312,24 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
   const mcpIpLimiter = deps.mcpIpLimiter ?? new RateLimiter(IP_MESSAGES_PER_MINUTE);
   const mcpCredentialLimiter = deps.mcpCredentialLimiter ?? new RateLimiter(CREDENTIAL_MESSAGES_PER_MINUTE);
   const knownGood = new ExpiringSet(KNOWN_GOOD_TTL_MS);
+  const forwardLimiters = Object.fromEntries(
+    (Object.keys(FORWARD_LIMITS) as ForwardPath[]).map((p) => [
+      p,
+      deps.forwardLimiters?.[p] ?? new RateLimiter(FORWARD_LIMITS[p].limit, FORWARD_LIMITS[p].windowMs),
+    ]),
+  ) as Record<ForwardPath, RateLimiter>;
+  // Each forward counts once on its own limit and once on the IP's /mcp
+  // ceiling. No client-IP header goes upstream: the dashboard trusts none.
+  const forwardRefused = (path: ForwardPath, request: Request): Response | undefined => {
+    const ip = clientIp(request);
+    const wait = forwardLimiters[path].hit(ip) || mcpIpLimiter.hit(ip);
+    if (wait === 0) return undefined;
+    return json(
+      429,
+      { error: "temporarily_unavailable", error_description: "Too many requests. Try again later." },
+      { "Retry-After": String(wait), "Cache-Control": "no-store" },
+    );
+  };
   const refused = deps.refusedCredentials ?? new ExpiringSet(REFUSED_CREDENTIAL_TTL_MS);
   const mcpListens = new Slots(LISTEN_STREAMS_PER_CALLER);
   const sandboxListens = new Slots(LISTEN_STREAMS_PER_CALLER);
@@ -408,11 +440,15 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
     if (path === "/authorize") {
       note.route = path;
       if (request.method !== "GET") return methodNotAllowed("GET");
+      const limited = forwardRefused(path, request);
+      if (limited) return limited;
       return new Response(null, { status: 302, headers: { Location: `${cfg.issuer}/oauth/authorize${url.search}`, "Cache-Control": "no-store" } });
     }
     if (path === "/token" || path === "/register") {
       note.route = path;
       if (request.method !== "POST") return methodNotAllowed("POST");
+      const limited = forwardRefused(path, request);
+      if (limited) return limited;
       return forward(request, `${cfg.issuer}/oauth${path}`);
     }
 
