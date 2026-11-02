@@ -35,12 +35,12 @@ export const getAccountHandler = (ctx: ToolContext) =>
       ...Object.entries(me.rate_limits).map(
         ([g, l]) => `    ${g.padEnd(20)} ${l.limit}/min`,
       ),
-      ...describeLimits(ctx.guard, ctx.readOnly),
+      ...describeLimits(ctx.guard, ctx.level === "view"),
     ].join("\n");
     return structuredOk(text, {
       account: me,
       owner_limits: {
-        read_only: ctx.readOnly,
+        read_only: ctx.level === "view",
         max_order_cents: ctx.guard.maxOrderCents,
         budget_cents: ctx.guard.budgetCents,
         budget_counted_cents: ctx.guard.countedCents,
@@ -52,7 +52,7 @@ export const getAccountHandler = (ctx: ToolContext) =>
 export function registerAccountTools(server: McpServer, ctx: ToolContext) {
   defineTool(server, ctx, "get_account", {
     group: "core",
-    writes: false,
+    level: "view",
     title: "Account balance",
     description:
       "Get the authenticated account: id, prepaid USD balance, and per-endpoint-group rate limits, plus any spend limits the owner set on this server. " +

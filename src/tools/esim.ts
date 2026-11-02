@@ -5,6 +5,7 @@ import { callApi } from "../client/call-api.js";
 import { path } from "../client/path.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
 import { EsimProduct, Esim, EsimUsage, type Esim as EsimT, type EsimUsage as EsimUsageT } from "../client/types.js";
+import { mapApiError } from "../client/errors.js";
 import { structuredOk, structuredWithImage, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { formatUsd, formatData } from "../utils/format.js";
 import { READ_ONLY, SPENDS } from "../utils/annotations.js";
@@ -89,7 +90,7 @@ function installLines(esim: EsimT): string[] {
     ...(esim.smdp_address ? [`  SM-DP+ address: ${esim.smdp_address}`] : []),
     `  Activation code: ${esim.activation_code}`,
     ...(lpa ? [`  LPA string:     ${lpa}`] : []),
-    `  Install:        scan the QR from get_esim_qr, or enter the LPA string (or SM-DP+ address + activation code) manually`,
+    `  Install:        scan the QR from get_esim_status with include_qr=true, or enter the LPA string (or SM-DP+ address + activation code) manually`,
   ];
 }
 
@@ -122,8 +123,8 @@ export const purchaseEsimHandler = (ctx: ToolContext) =>
       ...installLines(esim),
       ``,
       esim.status === "processing"
-        ? `Still processing - poll get_esim_status(esim_id="${esim.id}") until status is completed, then get_esim_qr for the QR image.`
-        : `Use get_esim_qr(esim_id="${esim.id}") to fetch the QR code as an image.`,
+        ? `Still processing - poll get_esim_status(esim_id="${esim.id}") until status is completed, then call it with include_qr=true for the QR image.`
+        : `Use get_esim_status(esim_id="${esim.id}", include_qr=true) to fetch the QR code as an image.`,
     ].join("\n");
     return structuredOk(text, { esim });
   });
@@ -151,8 +152,29 @@ function usageLines(usage: EsimUsageT | null): string[] {
 
 export const EsimStatusOutput = outputObject({ esim: Esim, usage: EsimUsage.nullable() });
 
+/**
+ * The activation QR (PNG, base64) for include_qr, or the line saying why there
+ * is none. Only a completed base eSIM has one: the API answers 404 for a
+ * top-up or an eSIM still processing, so those are not asked for. A failed
+ * read leaves the status result intact; the install details work without it.
+ */
+async function readQr(ctx: ToolContext, esim: EsimT): Promise<{ base64: string } | { note: string }> {
+  if (esim.is_topup) return { note: `  QR code:     none for a top-up (its data is added to the eSIM already installed)` };
+  if (!esim.activation_code) return { note: `  QR code:     not ready yet (poll get_esim_status until status is completed)` };
+  try {
+    const res = await ctx.http.request("GET", path`/v1/esims/${esim.id}/qr.png`, { expectBinary: true });
+    if (res.binary) return { base64: res.binary.toString("base64") };
+    return { note: `  QR code:     could not be read (no image came back); install with the details above` };
+  } catch (e) {
+    if (e instanceof HttpError || e instanceof NetworkError) {
+      return { note: `  QR code:     could not be read (${mapApiError(e)}); install with the details above` };
+    }
+    throw e;
+  }
+}
+
 export const getEsimStatusHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { esim_id: string }): Promise<ToolResult> => {
+  wrapToolErrors(async (args: { esim_id: string; include_qr?: boolean }): Promise<ToolResult> => {
     // Usage is best-effort enrichment on a read path: degrade to null on ANY
     // API/network error so a transient usage-subservice failure never sinks the
     // core eSIM status read. Non-API throws (bugs) still propagate.
@@ -175,8 +197,14 @@ export const getEsimStatusHandler = (ctx: ToolContext) =>
       `  Expires:     ${esim.expires_at ?? "(not yet activated)"}`,
       ...usageLines(usage),
       ...(esim.is_topup ? [] : ["", ...installLines(esim)]),
-    ].join("\n");
-    return structuredOk(text, { esim, usage });
+    ];
+    const qr = args.include_qr ? await readQr(ctx, esim) : null;
+    if (qr && "base64" in qr) {
+      text.push(``, `  QR code:     attached as an image; scan it with the phone's camera to install.`);
+      return structuredWithImage(text.join("\n"), { esim, usage }, { mimeType: "image/png", base64: qr.base64 });
+    }
+    if (qr) text.push(``, qr.note);
+    return structuredOk(text.join("\n"), { esim, usage });
   });
 
 // ── topup_esim ──────────────────────────────────────────────────────────────
@@ -241,30 +269,12 @@ export const topupEsimHandler = (ctx: ToolContext) =>
     return structuredOk(text, { esim });
   });
 
-// ── get_esim_qr ─────────────────────────────────────────────────────────────
-
-export const EsimQrOutput = outputObject({ esim_id: z.string() });
-
-export const getEsimQrHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { esim_id: string }): Promise<ToolResult> => {
-    const res = await ctx.http.request("GET", path`/v1/esims/${args.esim_id}/qr.png`, {
-      expectBinary: true,
-    });
-    if (!res.binary) return toolError("QR fetch returned no binary payload.");
-    const base64 = res.binary.toString("base64");
-    return structuredWithImage(
-      `QR code for eSIM ${args.esim_id}. Scan with your device camera to install.`,
-      { esim_id: args.esim_id },
-      { mimeType: "image/png", base64 },
-    );
-  });
-
 // ── registration ────────────────────────────────────────────────────────────
 
 export function registerEsimTools(server: McpServer, ctx: ToolContext) {
   defineTool(server, ctx, "search_esim_plans", {
     group: "esim",
-    writes: false,
+    level: "view",
     title: "Search eSIM plans",
     description:
       "Search prepaid eSIM data plans for travel by country or region: data allowance, validity, price, 5G, hotspot, calls/SMS and top-up support. " +
@@ -286,12 +296,12 @@ export function registerEsimTools(server: McpServer, ctx: ToolContext) {
 
   defineTool(server, ctx, "purchase_esim", {
     group: "esim",
-    writes: true,
+    level: "buy",
     title: "Buy an eSIM",
     description:
       "Buy an eSIM data plan, charged to your balance immediately. It cannot be cancelled through this server once issued. " +
       "Requires max_price_cents: the price from search_esim_plans that you showed the user and they approved; if the price is now higher, nothing is charged and the new price comes back to re-confirm. " +
-      "Returns the esim_ id with install details (LPA string, SM-DP+ address, activation code); if it is still processing, poll get_esim_status. Use get_esim_qr for the QR image.",
+      "Returns the esim_ id with install details (LPA string, SM-DP+ address, activation code); if it is still processing, poll get_esim_status. get_esim_status with include_qr=true returns the QR image.",
     inputSchema: {
       plan_id: EsimProductId.describe("prod_... id from search_esim_plans"),
       max_price_cents: MaxPriceCents,
@@ -302,18 +312,22 @@ export function registerEsimTools(server: McpServer, ctx: ToolContext) {
 
   defineTool(server, ctx, "get_esim_status", {
     group: "esim",
-    writes: false,
-    title: "eSIM status and usage",
+    level: "view",
+    title: "eSIM status, usage and QR code",
     description:
-      "Read an eSIM's status, expiry, install details (LPA string) and data usage for every package on it (the base plan plus any top-ups), with an eSIM-level total.",
-    inputSchema: { esim_id: EsimId.describe("esim_... id from purchase_esim or list_orders") },
+      "Read an eSIM's status, expiry, install details (LPA string) and data usage for every package on it (the base plan plus any top-ups), with an eSIM-level total. " +
+      "With include_qr=true it also returns the activation QR code as an image, which most clients show inline for the user to scan.",
+    inputSchema: {
+      esim_id: EsimId.describe("esim_... id from purchase_esim or list_orders"),
+      include_qr: z.boolean().default(false).describe("Also return the activation QR code as a PNG image (completed eSIMs; top-ups have none)"),
+    },
     outputSchema: EsimStatusOutput,
     annotations: READ_ONLY,
   }, getEsimStatusHandler(ctx));
 
   defineTool(server, ctx, "topup_esim", {
     group: "esim",
-    writes: true,
+    level: "buy",
     title: "Browse or buy eSIM top-ups",
     description:
       "Add data to an existing eSIM. Without topup_product_id: lists compatible top-ups with prices (no charge). " +
@@ -328,15 +342,4 @@ export function registerEsimTools(server: McpServer, ctx: ToolContext) {
     outputSchema: TopupEsimOutput,
     annotations: SPENDS,
   }, topupEsimHandler(ctx));
-
-  defineTool(server, ctx, "get_esim_qr", {
-    group: "esim",
-    writes: false,
-    title: "eSIM QR code",
-    description:
-      "Fetch the activation QR code for an eSIM as an image. Most MCP clients render the image inline so the user can scan it directly.",
-    inputSchema: { esim_id: EsimId.describe("esim_... id") },
-    outputSchema: EsimQrOutput,
-    annotations: READ_ONLY,
-  }, getEsimQrHandler(ctx));
 }

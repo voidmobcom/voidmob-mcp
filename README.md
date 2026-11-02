@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/node/v/@voidmob/mcp)](https://nodejs.org)
 
-Mobile proxies, non-VoIP SMS verifications, dedicated numbers, and global eSIMs - exposed as 30 tools your AI agent can call directly, plus short guides (resources) and guided prompts.
+Mobile proxies, non-VoIP SMS verifications, dedicated numbers, and global eSIMs - exposed as 26 tools your AI agent can call directly, plus short guides (resources) and guided prompts.
 
 ```bash
 npx -y @voidmob/mcp
@@ -269,7 +269,7 @@ On Hermes, also list the key under `terminal.env_passthrough` in `~/.hermes/conf
 
 ## Tools
 
-30 tools across six domains. Every tool returns text plus `structuredContent` that matches its declared `outputSchema`.
+26 tools across six domains. Every tool returns text plus `structuredContent` that matches its declared `outputSchema`.
 
 ### Account (1)
 
@@ -283,46 +283,46 @@ On Hermes, also list the key under `terminal.env_passthrough` in `~/.hermes/conf
 |---|---|
 | `search_sms_services` | List services with prices |
 | `rent_number` | Rent a US number: one-time verification (15 min, refunded if no SMS) or long-term rental; takes `max_price_cents` |
-| `get_rental` | Read status, the latest code and received messages; `wait_seconds` waits for the code |
+| `get_rental` | Read a verification, rental or dedicated number (`ded_`): status, the latest code and received messages; `wait_seconds` waits for a verification's code |
 | `cancel_rental` | Cancel a verification (before any SMS) or long-term rental (within 60 min), with a full refund |
 | `reuse_number` | Free or paid reuse of an earlier verification's number (paid: `max_price_cents`) |
 | `re_rent_rental` | Re-rent an expired long-term rental's number for another period; takes `max_price_cents` |
-| `toggle_auto_renew` | Turn auto-renewal on or off (rentals and dedicated numbers) |
+| `toggle_auto_renew` | Turn auto-renewal on or off for a rental, dedicated number or dedicated proxy (`prx_`) |
 
-### Dedicated numbers (3)
+### Dedicated numbers (2)
 
 | Tool | Description |
 |---|---|
 | `search_dedicated_countries` | Countries, monthly prices, and stock |
 | `purchase_dedicated_number` | Buy a private all-services monthly number; takes `max_price_cents` |
-| `get_dedicated_number` | Status and received SMS with parsed codes |
 
-### eSIM (5)
+Read a number's received SMS with `get_rental` and set its auto-renew with `toggle_auto_renew`.
+
+### eSIM (4)
 
 | Tool | Description |
 |---|---|
 | `search_esim_plans` | Find global data plans |
 | `purchase_esim` | Buy a plan; takes `max_price_cents` |
-| `get_esim_status` | Status, install details (LPA string) and data usage across all packages |
+| `get_esim_status` | Status, install details (LPA string) and data usage across all packages; `include_qr` adds the activation QR as an inline image |
 | `topup_esim` | Browse top-ups, or buy one with `max_price_cents` |
-| `get_esim_qr` | Fetch the activation QR as an inline image |
 
-### Proxy (12)
+### Proxy (10)
 
 | Tool | Description |
 |---|---|
 | `search_proxies` | List mobile (shared) and dedicated proxy plans, with dedicated stock |
 | `purchase_proxy` | Buy a mobile or dedicated proxy; takes `max_price_cents` |
-| `get_proxy_status` | Status, usage, expiry, auto-renew, renewal and top-up prices, ready-to-paste connection URLs |
+| `get_proxy_status` | Status, usage, expiry, auto-renew, renewal and top-up prices, ready-to-paste connection URLs, and its geo-targeted lists |
 | `rotate_proxy_ip` | Rotate a dedicated proxy to a new IP |
 | `renew_proxy` | Extend expiry at the proxy's renewal price; takes `max_price_cents` |
-| `set_proxy_auto_renew` | Turn auto-renew on or off for a dedicated proxy |
 | `topup_proxy` | Add data to a mobile proxy; takes `max_price_cents` |
 | `regenerate_proxy_password` | Rotate the gateway password, or one list's login with `list_id` |
-| `list_proxy_lists` | List geo-targeted sub-pools |
 | `create_proxy_list` | Create a geo-targeted sub-pool with its own login, or IP-whitelist auth with `network` |
 | `update_proxy_list` | Change a sub-pool's name, geo, rotation or format (the IP whitelist cannot change) |
 | `delete_proxy_list` | Remove a sub-pool |
+
+Turn a dedicated proxy's auto-renew on or off with `toggle_auto_renew`.
 
 ### Discovery + history (2)
 

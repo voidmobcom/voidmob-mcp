@@ -58,9 +58,9 @@ The key can spend the whole balance; there is no per-key spend cap. Suggest keep
 | Flow | MCP tools |
 |---|---|
 | SMS verification, rental | `search_sms_services`, `rent_number`, `get_rental` (`wait_seconds` waits for the code), `cancel_rental`, `reuse_number` |
-| Dedicated number | `search_dedicated_countries`, `purchase_dedicated_number`, `get_dedicated_number`, `toggle_auto_renew` |
+| Dedicated number | `search_dedicated_countries`, `purchase_dedicated_number`, `get_rental` (reads `ded_` numbers too), `toggle_auto_renew` |
 | Proxy | `search_proxies`, `purchase_proxy`, `get_proxy_status`, `create_proxy_list`, `update_proxy_list`, `rotate_proxy_ip`, `renew_proxy`, `topup_proxy` |
-| eSIM | `search_esim_plans`, `purchase_esim`, `get_esim_status`, `get_esim_qr`, `topup_esim` |
+| eSIM | `search_esim_plans`, `purchase_esim`, `get_esim_status` (`include_qr` for the QR image), `topup_esim` |
 | Balance, lost results | `get_account`, `list_orders` (`kind`, `status`, `cursor`) |
 
 Every MCP buy, renewal, top-up and paid reuse takes the approved price as `max_price_cents`; if the price rose, nothing is charged and the tool returns the new price to confirm again. The owner may run the server read-only or with a per-order limit and a session budget: `get_account` shows them, and a refusal from them charges nothing.

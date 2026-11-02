@@ -32,7 +32,7 @@ export const SERVER_INSTRUCTIONS = [
 /** The fixed instructions plus a line for any owner control in force. */
 export function serverInstructions(ctx: ToolContext): string {
   const extra: string[] = [];
-  if (ctx.readOnly) extra.push("This server is read-only: it cannot buy or change anything.");
+  if (ctx.level === "view") extra.push("This server is read-only: it cannot buy or change anything.");
   else if (ctx.guard.maxOrderCents !== null || ctx.guard.budgetCents !== null) {
     extra.push("The owner set spend limits on this server (see get_account); a refusal from them means nothing was charged.");
   }

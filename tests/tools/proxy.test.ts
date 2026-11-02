@@ -7,12 +7,11 @@ import {
   renewProxyHandler,
   topupProxyHandler,
   regenerateProxyPasswordHandler,
-  listProxyListsHandler,
   createProxyListHandler,
   deleteProxyListHandler,
-  setProxyAutoRenewHandler,
   updateProxyListHandler,
 } from "../../src/tools/proxy.js";
+import { toggleAutoRenewHandler } from "../../src/tools/sms.js";
 import { createMockHttpClient } from "../mock-http.js";
 import { toolContext } from "../../src/tools/context.js";
 
@@ -565,41 +564,51 @@ describe("regenerate_proxy_password", () => {
   });
 });
 
-// ── list_proxy_lists ────────────────────────────────────────────────────────
+// ── get_proxy_status: lists (formerly list_proxy_lists) ─────────────────────
 
-describe("list_proxy_lists", () => {
-  it("reads lists from GET /v1/proxies/:id (no list collection endpoint)", async () => {
-    const http = createMockHttpClient();
-    http.expect("GET", "/v1/proxies/prx_abc", {
-      status: 200, headers: new Headers(),
-      body: { success: true, data: { proxy: proxyResp("prx_abc", { lists: [{
-        id: "lst_1", proxy_id: "prx_abc", name: "Default",
-        country: null, countries: ["us", "ca"], region: null, city: null, isp: null, zip: null,
-        rotation_period_seconds: 0, rotation_mode: "instant", format: "login_pass_host_port",
-        credentials: { host: "proxy.voidmob.com", port: 10000, protocol: "http", username: "u", password: "p" },
-        entries: ["u:p@proxy.voidmob.com:10000"], activation_note: "List active within 1-2 minutes.",
-        created_at: "2026-05-01T00:00:00Z",
-      }] }) } },
-    });
-    const res = await listProxyListsHandler(toolContext(http))({ proxy_id: "prx_abc" });
-    expect(res.isError).toBeFalsy();
-    expect(res.structuredContent?.lists).toHaveLength(1);
-    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
-    expect(t.text).toContain("per-request");
-    expect(t.text).toContain("us,ca");
+describe("get_proxy_status - lists", () => {
+  const usageOk = { status: 200, headers: new Headers(), body: { success: true, data: { usage: { total_bytes: 0 } } } };
+  const list = (overrides: Record<string, unknown>) => ({
+    id: "lst_1", proxy_id: "prx_abc", name: "Default",
+    country: null, countries: ["us", "ca"], region: null, city: null, isp: null, zip: null,
+    rotation_period_seconds: 0, rotation_mode: "instant", format: "login_pass_host_port",
+    credentials: { host: "proxy.voidmob.com", port: 10000, protocol: "http", username: "u", password: "p" },
+    entries: ["u:p@proxy.voidmob.com:10000"], activation_note: "List active within 1-2 minutes.",
+    created_at: "2026-05-01T00:00:00Z",
+    ...overrides,
   });
 
-  it("empty lists → normal empty result pointing at create_proxy_list", async () => {
+  it("shows every list from GET /v1/proxies/:id (no list collection endpoint); the full lists stay in proxy.lists", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxies/prx_abc", {
       status: 200, headers: new Headers(),
-      body: { success: true, data: { proxy: proxyResp("prx_abc", { lists: [] }) } },
+      body: { success: true, data: { proxy: proxyResp("prx_abc", { lists: [
+        list({}),
+        list({ id: "lst_2", name: "Office", countries: null, country: "DE", city: "Berlin", rotation_period_seconds: -1, credentials: null, entries: ["proxy.voidmob.com:10000"], network: "203.0.113.7" }),
+      ] }) } },
     });
-    const res = await listProxyListsHandler(toolContext(http))({ proxy_id: "prx_abc" });
+    http.expect("GET", "/v1/proxies/prx_abc/usage", usageOk);
+    http.expect("GET", "/v1/proxy_plans/proxy_plan_us_shared_5gb", planOk());
+    const res = await getProxyStatusHandler(toolContext(http))({ proxy_id: "prx_abc" });
     expect(res.isError).toBeFalsy();
-    expect(res.structuredContent?.lists).toEqual([]);
-    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
-    expect(t.text).toContain("create_proxy_list");
+    const t = textOf(res);
+    expect(t).toContain("Lists (2):");
+    expect(t).toContain("Default (lst_1) geo=us,ca rotation=per-request mode=instant");
+    expect(t).toContain("Office (lst_2) geo=DE/Berlin rotation=sticky mode=instant ip-whitelist=203.0.113.7");
+    const lists = (res.structuredContent?.proxy as { lists: Array<Record<string, unknown>> }).lists;
+    expect(lists).toHaveLength(2);
+    expect(lists[0]).toMatchObject({ id: "lst_1", credentials: { username: "u", password: "p" } });
+  });
+
+  it("no lists yet: says so and points at create_proxy_list", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/prx_abc", { status: 200, headers: new Headers(), body: { success: true, data: { proxy: proxyResp("prx_abc", { lists: [] }) } } });
+    http.expect("GET", "/v1/proxies/prx_abc/usage", usageOk);
+    http.expect("GET", "/v1/proxy_plans/proxy_plan_us_shared_5gb", planOk());
+    const res = await getProxyStatusHandler(toolContext(http))({ proxy_id: "prx_abc" });
+    expect(res.isError).toBeFalsy();
+    expect(textOf(res)).toContain("Lists:         none yet (create_proxy_list adds one)");
+    expect((res.structuredContent?.proxy as { lists: unknown[] }).lists).toEqual([]);
   });
 
   it("propagates request_id on PROXY_NOT_FOUND", async () => {
@@ -608,10 +617,13 @@ describe("list_proxy_lists", () => {
       status: 404, headers: new Headers(),
       body: { success: false, error: { code: "PROXY_NOT_FOUND", message: "Proxy not found.", request_id: "req_listmissing", docs_url: "" } },
     });
-    const res = await listProxyListsHandler(toolContext(http))({ proxy_id: "prx_missing" });
+    http.expect("GET", "/v1/proxies/prx_missing/usage", {
+      status: 404, headers: new Headers(),
+      body: { success: false, error: { code: "PROXY_NOT_FOUND", message: "Proxy not found.", request_id: "req_u", docs_url: "" } },
+    });
+    const res = await getProxyStatusHandler(toolContext(http))({ proxy_id: "prx_missing" });
     expect(res.isError).toBe(true);
-    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
-    expect(t.text).toContain("req_listmissing");
+    expect(textOf(res)).toContain("req_listmissing");
   });
 });
 
@@ -828,6 +840,8 @@ describe("get_proxy_status - dedicated", () => {
     expect(t.text).not.toContain("_c_US");
     expect(t.text).toContain("Auto-renew:    on");
     expect(t.text).toContain("$55.20");
+    // Lists are a shared-proxy feature.
+    expect(t.text).not.toContain("Lists");
   });
 
   it("an active Premium proxy never triggers a flex call and says where its credentials are", async () => {
@@ -866,7 +880,7 @@ describe("topup_proxy - dedicated", () => {
   });
 });
 
-describe("set_proxy_auto_renew", () => {
+describe("toggle_auto_renew with a proxy (prx_, formerly set_proxy_auto_renew)", () => {
   it("POSTs the explicit state and reports the renewal price and timing", async () => {
     const http = createMockHttpClient();
     http.expect("POST", "/v1/proxies/prx_ded/auto_renew", {
@@ -874,7 +888,7 @@ describe("set_proxy_auto_renew", () => {
       headers: new Headers(),
       body: { success: true, data: { proxy: dedicatedResp("prx_ded", { auto_renew: true, next_renewal_price_cents: 5520 }) } },
     });
-    const res = await setProxyAutoRenewHandler(toolContext(http))({ proxy_id: "prx_ded", enabled: true });
+    const res = await toggleAutoRenewHandler(toolContext(http))({ rental_id: "prx_ded", auto_renew: true });
     expect(res.isError).toBeFalsy();
     expect(http.history[0].body).toEqual({ enabled: true });
     expect(http.history[0].headers["Idempotency-Key"]).toBeUndefined();
@@ -882,16 +896,29 @@ describe("set_proxy_auto_renew", () => {
     if (t.type !== "text") throw new Error("text");
     expect(t.text).toContain("Auto-renew is on");
     expect(t.text).toContain("$55.20");
+    expect(res.structuredContent?.proxy).toMatchObject({ id: "prx_ded", auto_renew: true });
+  });
+
+  it("a legacy PRX reference routes to the proxy endpoint too", async () => {
+    const http = createMockHttpClient();
+    http.expect("POST", "/v1/proxies/PRX08781M/auto_renew", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: dedicatedResp("PRX08781M") } },
+    });
+    const res = await toggleAutoRenewHandler(toolContext(http))({ rental_id: "PRX08781M", auto_renew: false });
+    expect(res.isError).toBeFalsy();
+    expect(textOf(res)).toContain("Auto-renew is off");
   });
 
   it("owner limits: turning auto-renew on checks the renewal price against the per-order limit, and is off-limits with a budget", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxies/prx_ded", { status: 200, headers: new Headers(), body: { success: true, data: { proxy: dedicatedResp("prx_ded") } } });
-    const over = await setProxyAutoRenewHandler(toolContext(http, { maxOrderCents: 5000 }))({ proxy_id: "prx_ded", enabled: true });
+    const over = await toggleAutoRenewHandler(toolContext(http, { maxOrderCents: 5000 }))({ rental_id: "prx_ded", auto_renew: true });
     expect(over.isError).toBe(true);
     expect(textOf(over)).toContain("$69.00");
     expect(http.history).toHaveLength(1);
-    const budget = await setProxyAutoRenewHandler(toolContext(http, { budgetCents: 100_000 }))({ proxy_id: "prx_ded", enabled: true });
+    const budget = await toggleAutoRenewHandler(toolContext(http, { budgetCents: 100_000 }))({ rental_id: "prx_ded", auto_renew: true });
     expect(budget.isError).toBe(true);
     expect(textOf(budget)).toContain("VOIDMOB_BUDGET_CENTS");
     expect(http.history).toHaveLength(1);
@@ -899,12 +926,12 @@ describe("set_proxy_auto_renew", () => {
 
   it("surfaces NOT_SUPPORTED for a shared proxy", async () => {
     const http = createMockHttpClient();
-    http.expect("POST", "/v1/proxies/proxy_xyz/auto_renew", {
+    http.expect("POST", "/v1/proxies/prx_shared/auto_renew", {
       status: 422,
       headers: new Headers(),
       body: { success: false, error: { code: "NOT_SUPPORTED", message: "Not supported.", request_id: "req_ns", docs_url: "" } },
     });
-    const res = await setProxyAutoRenewHandler(toolContext(http))({ proxy_id: "proxy_xyz", enabled: true });
+    const res = await toggleAutoRenewHandler(toolContext(http))({ rental_id: "prx_shared", auto_renew: true });
     expect(res.isError).toBe(true);
     const t = res.content[0];
     if (t.type !== "text") throw new Error("text");

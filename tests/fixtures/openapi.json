@@ -652,11 +652,15 @@
           "500": {
             "$ref": "#/components/responses/INTERNAL_ERROR"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVIDER_ERROR"
-          },
           "503": {
-            "$ref": "#/components/responses/PRODUCT_UNAVAILABLE"
+            "description": "Service unavailable - PRODUCT_UNAVAILABLE or PROVIDER_ERROR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
@@ -883,11 +887,15 @@
           "500": {
             "$ref": "#/components/responses/INTERNAL_ERROR"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVIDER_ERROR"
-          },
           "503": {
-            "$ref": "#/components/responses/USAGE_UNAVAILABLE"
+            "description": "Service unavailable - USAGE_UNAVAILABLE or PROVIDER_ERROR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -1090,11 +1098,15 @@
           "500": {
             "$ref": "#/components/responses/INTERNAL_ERROR"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVIDER_ERROR"
-          },
           "503": {
-            "$ref": "#/components/responses/PRODUCT_UNAVAILABLE"
+            "description": "Service unavailable - PRODUCT_UNAVAILABLE or PROVIDER_ERROR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -1789,7 +1801,7 @@
           "Rentals"
         ],
         "summary": "Create a long-term rental",
-        "description": "Reserves a dedicated phone number for a fixed duration (3, 7, 14, or 30\ndays). All incoming SMS messages are collected and accessible via\n`GET /v1/rentals/{id}`. Idempotent by `Idempotency-Key`.\n\n## Price over cap\n\nLTR pricing can drift. If the lowest available price exceeds your\n`max_price_cents` ceiling at request time, the API returns\n**`409 PRICE_OVER_CAP`** with both values in the error details:\n\n```json\n{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"PRICE_OVER_CAP\",\n    \"details\": {\n      \"max_price_cents\": 1500,\n      \"available_price_cents\": 1750\n    }\n  }\n}\n```\n\nNo partial state is created and no funds are touched. Decide locally\nwhether to retry with a higher cap or surface the price to the user.\n\n## Duration\n\n`duration` must be one of `3D`, `7D`, `14D`, or `30D`. Only\n`country=\"us\"` is currently supported.\n\n## Auto-renew\n\nSet `auto_renew: true` to automatically charge the same duration at\nexpiry. Toggle at any time via `POST /v1/rentals/{id}/auto_renew`.\n",
+        "description": "Reserves a dedicated phone number for a fixed duration (3, 7, 14, or 30\ndays). All incoming SMS messages are collected and accessible via\n`GET /v1/rentals/{id}`. Idempotent by `Idempotency-Key`.\n\n## Price over cap\n\nLTR pricing can drift. If the lowest available price exceeds your\n`max_price_cents` ceiling at request time, the API returns\n**`409 PRICE_OVER_CAP`** with both values in the error details:\n\n```json\n{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"PRICE_OVER_CAP\",\n    \"details\": {\n      \"max_price_cents\": 1500,\n      \"available_price_cents\": 1750\n    }\n  }\n}\n```\n\nNo partial state is created and no funds are touched. Decide locally\nwhether to retry with a higher cap or surface the price to the user.\n\n## Duration\n\n`duration` must be one of `3D`, `7D`, `14D`, or `30D`. Only\n`country=\"us\"` is currently supported.\n\n## Auto-renew\n\nSet `auto_renew: true` to automatically charge the same duration\nshortly before `paid_until`. Toggle at any time via\n`POST /v1/rentals/{id}/auto_renew`. If the balance cannot cover the\nrenewal in time, auto-renew is turned off and\n`rental.auto_renew_disabled` fires.\n",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -1884,14 +1896,15 @@
           "500": {
             "$ref": "#/components/responses/INTERNAL_ERROR"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVIDER_ERROR"
-          },
           "503": {
-            "$ref": "#/components/responses/SERVICE_OUT_OF_STOCK"
-          },
-          "504": {
-            "$ref": "#/components/responses/PROVIDER_TIMEOUT"
+            "description": "Service unavailable - SERVICE_OUT_OF_STOCK, PROVIDER_ERROR or PROVIDER_TIMEOUT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
@@ -1996,7 +2009,7 @@
           "Rentals"
         ],
         "summary": "Get a long-term rental by id",
-        "description": "Returns the full rental resource including all received messages. Poll\nevery few seconds during active rentals; prefer webhooks for production\nuse.\n\nUse the `messages_limit` and `messages_before` query parameters to page\nthrough older messages when there are many.\n",
+        "description": "Returns the full rental resource including all received messages. Poll\nevery few seconds during active rentals; prefer webhooks for production\nuse.\n\nUse the `messages_limit` and `messages_before` query parameters to page\nthrough older messages when there are many.\n\nIf a renewal landed before it could be paid, `payment_due` shows the\namount owed. It is collected automatically as soon as the balance\ncovers it. SMS received meanwhile are stored but withheld (`text`/`code`\nnull, `content_withheld: true`) until it is paid, and stay withheld if\nthe term ends unpaid.\n",
         "parameters": [
           {
             "$ref": "#/components/parameters/RentalId"
@@ -2221,7 +2234,7 @@
           "500": {
             "$ref": "#/components/responses/INTERNAL_ERROR"
           },
-          "502": {
+          "503": {
             "$ref": "#/components/responses/PROVIDER_ERROR"
           }
         }
@@ -2234,7 +2247,7 @@
           "Rentals"
         ],
         "summary": "Enable or disable auto-renew on a rental",
-        "description": "Sets the `auto_renew` flag to an explicit state. Unlike a toggle,\ncalling with the same `enabled` value twice is safe (idempotent by\nconstruction). No `Idempotency-Key` header is required.\n\nWhen `enabled: true`, the rental will automatically renew for the same\nduration at expiry. When `enabled: false`, the rental expires normally\nwhen `expires_at` is reached.\n\nReturns `400 VALIDATION_ERROR` if the rental has already expired.\n",
+        "description": "Sets the `auto_renew` flag to an explicit state. Unlike a toggle,\ncalling with the same `enabled` value twice is safe (idempotent by\nconstruction). No `Idempotency-Key` header is required.\n\nWhen `enabled: true`, the rental will automatically renew for the same\nduration at expiry, charged to your balance shortly before\n`paid_until`. When `enabled: false`, the rental expires normally when\n`expires_at` is reached.\n\nTurning auto-renew off after the next term was already charged refunds\nthat charge to your balance. If the renewal is already under way, the\ncall returns `400 VALIDATION_ERROR` (\"This rental is already renewing\nand the next term is paid. Turn auto-renew off after it renews.\") and\nauto-renew stays on.\n\nReturns `400 VALIDATION_ERROR` if the rental has already expired.\n",
         "parameters": [
           {
             "$ref": "#/components/parameters/RentalId"
@@ -2310,7 +2323,7 @@
           "500": {
             "$ref": "#/components/responses/INTERNAL_ERROR"
           },
-          "502": {
+          "503": {
             "$ref": "#/components/responses/PROVIDER_ERROR"
           }
         }
@@ -2548,7 +2561,7 @@
           "Proxies"
         ],
         "summary": "Purchase a proxy package",
-        "description": "Buys a mobile/GB proxy package or a Standard dedicated proxy, either\nby `plan_id` (charged to the wallet) or by `pool_id` (a mobile/GB\nsub-order drawn from a reseller GB pool the caller owns - see the\n`Proxy pools` tag). Provide exactly one of `plan_id` or `pool_id`.\nReturns **`202 Accepted`**. A mobile/GB package comes back\n`status: provisioning` and becomes active within 1-2 minutes. A\nStandard dedicated proxy comes back `active` with its `gateway` when\nthe modem is issued immediately, otherwise `provisioning` (settled\nwithin about 5 minutes). The `proxy.ready` webhook fires when the\norder becomes active; `proxy.provisioning_failed` (with the refund)\nif it cannot be provisioned.\n\nFor a Standard dedicated plan, nothing is charged unless the plan is\nstill available: a sold-out plan returns `503 SERVICE_OUT_OF_STOCK`\nand a price above `max_price_cents` returns `409 PRICE_MISMATCH`,\nboth before any charge. Premium dedicated plans are not available\nover the API.\n\nWallet deduction and refund-on-failure are atomic for a `plan_id`\npurchase. A `pool_id` purchase never touches the wallet - GB is drawn\nfrom the pool's ledger and returned to it if provisioning fails.\n",
+        "description": "Buys a mobile/GB proxy package or a Standard dedicated proxy, either\nby `plan_id` (charged to the wallet) or by `pool_id` (a mobile/GB\nsub-order drawn from a reseller GB pool the caller owns - see the\n`Proxy pools` tag). Provide exactly one of `plan_id` or `pool_id`.\nReturns **`202 Accepted`**. A mobile/GB package comes back\n`status: provisioning` and becomes active within 1-2 minutes. A\nStandard dedicated proxy comes back `active` with its `gateway` when\nthe device is issued immediately, otherwise `provisioning` (settled\nwithin about 5 minutes). The `proxy.ready` webhook fires when the\norder becomes active; `proxy.provisioning_failed` (with the refund)\nif it cannot be provisioned.\n\nFor a Standard dedicated plan, nothing is charged unless the plan is\nstill available: a sold-out plan returns `503 SERVICE_OUT_OF_STOCK`\nand a price above `max_price_cents` returns `409 PRICE_MISMATCH`,\nboth before any charge. Premium dedicated plans are not available\nover the API.\n\nWallet deduction and refund-on-failure are atomic for a `plan_id`\npurchase. A `pool_id` purchase never touches the wallet - GB is drawn\nfrom the pool's ledger and returned to it if provisioning fails.\n",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -2627,14 +2640,15 @@
           "429": {
             "$ref": "#/components/responses/RATE_LIMITED"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVISIONING_FAILED"
-          },
           "503": {
-            "$ref": "#/components/responses/SERVICE_OUT_OF_STOCK"
-          },
-          "504": {
-            "$ref": "#/components/responses/PROVIDER_TIMEOUT"
+            "description": "Service unavailable - SERVICE_OUT_OF_STOCK or PROVISIONING_FAILED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
@@ -2916,7 +2930,7 @@
           "Proxies"
         ],
         "summary": "Re-buy the plan on a package (adds a full plan of GB and one period)",
-        "description": "Adds one full plan allocation of GB on top of whatever is left and\nextends `expires_at` by one plan period (from now if the package had\nalready lapsed). Accepted on `active`, `exhausted`, and `expired`\npackages within 7 days of expiry; the package is `active` afterwards\nand the traffic webhooks are re-armed. Charged at the plan's current\nprice; refunded automatically on failure.\n\nOn a pool-backed sub-order (`proxy.pool_id` set), renew instead\nre-allocates the sub-order's **original** GB and duration from the\npool - not one plan period - at no incremental wallet charge.\n`max_price_cents` is ignored. See the `Proxy pools` tag.\n\nOn a Standard dedicated proxy, renew extends an `active` proxy by one\nterm of its own plan, from the current `expires_at`, at the price it\nwas bought at with your current discount. `max_price_cents` is\nrequired and checked before charging. An expired dedicated proxy\ncannot be renewed (`409 PROXY_EXPIRED`); a Premium one returns\n`422 NOT_SUPPORTED`. `proxy.renewed` fires on success.\n",
+        "description": "Adds one full plan allocation of GB on top of whatever is left and\nextends `expires_at` by one plan period (from now if the package had\nalready lapsed). Accepted on `active`, `exhausted`, and `expired`\npackages within 7 days of expiry; the package is `active` afterwards\nand the traffic webhooks are re-armed. Charged at the plan's current\nprice; refunded automatically on failure.\n\nOn a pool-backed sub-order (`proxy.pool_id` set), renew instead\nre-allocates the sub-order's **original** GB and duration from the\npool - not one plan period - at no incremental wallet charge.\n`max_price_cents` is ignored. See the `Proxy pools` tag.\n\nOn a Standard dedicated proxy, renew extends an `active` proxy by one\nterm of its own plan, from the current `expires_at`, at the price it\nwas bought at with your current discount. `max_price_cents` is\nrequired and checked before charging. An expired dedicated proxy\ncannot be renewed (`409 PROXY_EXPIRED`); a Premium one returns\n`422 NOT_SUPPORTED`. `proxy.renewed` fires on success.\n\nOne renewal or top-up runs at a time on a mobile/GB package: a second\nrequest while one is in progress returns `409 PROXY_NOT_READY` (\"A\nrenewal or top-up is already in progress - try again in a moment.\")\nand charges nothing. A 4xx response is cached under its\n`Idempotency-Key`, so retry with a new key.\n",
         "parameters": [
           {
             "name": "id",
@@ -2985,7 +2999,7 @@
             "$ref": "#/components/responses/PROXY_NOT_FOUND"
           },
           "409": {
-            "description": "Conflict - PRICE_MISMATCH (catalog or dedicated), PROXY_EXPIRED / PROXY_NOT_READY, or POOL_LAPSED / POOL_INSUFFICIENT_GB (pool-backed).",
+            "description": "Conflict - PRICE_MISMATCH (catalog or dedicated), PROXY_EXPIRED / PROXY_NOT_READY (still provisioning, or another renewal or top-up on a mobile/GB package is in progress - nothing charged, retry with a new Idempotency-Key), or POOL_LAPSED / POOL_INSUFFICIENT_GB (pool-backed).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2997,7 +3011,7 @@
           "422": {
             "$ref": "#/components/responses/NOT_SUPPORTED"
           },
-          "502": {
+          "503": {
             "$ref": "#/components/responses/PROVISIONING_FAILED"
           }
         }
@@ -3106,7 +3120,7 @@
           "Proxies"
         ],
         "summary": "Add GB to a proxy package",
-        "description": "Prorated from the plan's per-GB price. Accepted on `active`,\n`exhausted`, and `expired` packages within 7 days of expiry; a\nsuccessful top-up leaves the package `active` and re-arms the\n`proxy.traffic_low` / `proxy.traffic_exhausted` webhooks. Expiry grows\nin proportion to the GB added, from the current expiry or from now if\nthe package had lapsed.\n\nOn a pool-backed sub-order (`proxy.pool_id` set), the GB is drawn from\nthe pool instead of the wallet and `max_price_cents` is ignored. See\nthe `Proxy pools` tag.\n\nDedicated proxies are unmetered and return `422 NOT_SUPPORTED`.\n",
+        "description": "Priced by size, the same on every package whatever plan it was bought\non: 1 GB $3.99, 10 GB $35, 25 GB $81.25, 50 GB $149.50, 100 GB $250.\nAny other size is charged at the per-GB rate of the largest listed\nsize below it, but never more than the next listed size. Your discount\napplies; `proxy.topup_prices` has the exact charges. Accepted on\n`active`, `exhausted`, and `expired` packages within 7 days of expiry;\na successful top-up leaves the package `active` and re-arms the\n`proxy.traffic_low` / `proxy.traffic_exhausted` webhooks. Each GB adds\n3 days to the expiry (10 GB or more adds 30), from the current expiry\nor from now if the package had lapsed.\n\nOn a pool-backed sub-order (`proxy.pool_id` set), the GB is drawn from\nthe pool instead of the wallet and `max_price_cents` is ignored. See\nthe `Proxy pools` tag.\n\nDedicated proxies are unmetered and return `422 NOT_SUPPORTED`.\n\nOne renewal or top-up runs at a time on a mobile/GB package: a second\nrequest while one is in progress returns `409 PROXY_NOT_READY` (\"A\nrenewal or top-up is already in progress - try again in a moment.\")\nand charges nothing. A 4xx response is cached under its\n`Idempotency-Key`, so retry with a new key.\n",
         "parameters": [
           {
             "name": "id",
@@ -3175,7 +3189,7 @@
             "$ref": "#/components/responses/PROXY_NOT_FOUND"
           },
           "409": {
-            "description": "Conflict - PRICE_MISMATCH (catalog), or POOL_LAPSED / POOL_INSUFFICIENT_GB (pool-backed).",
+            "description": "Conflict - PRICE_MISMATCH (catalog), PROXY_EXPIRED / PROXY_NOT_READY (still provisioning, or another renewal or top-up on a mobile/GB package is in progress - nothing charged, retry with a new Idempotency-Key), or POOL_LAPSED / POOL_INSUFFICIENT_GB (pool-backed).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3186,6 +3200,9 @@
           },
           "422": {
             "$ref": "#/components/responses/NOT_SUPPORTED"
+          },
+          "503": {
+            "$ref": "#/components/responses/PROVISIONING_FAILED"
           }
         }
       }
@@ -3258,7 +3275,7 @@
           "Proxies"
         ],
         "summary": "Rotate the proxy's exit IP",
-        "description": "Triggers an IP rotation for a dedicated proxy. Each call requests a\nfresh exit IP; the modem typically reflects the new address within a\nfew seconds. Subsequent reads of `GET /v1/proxies/{id}` will show\nthe updated `current_ip` once the rotation lands.\n\nConstraints:\n- Only dedicated proxies support this endpoint. Calling it on a\n  shared (gb) proxy returns `422 NOT_SUPPORTED`.\n- The proxy must be `status: active`, else `409 PROXY_NOT_READY`.\n- Hard cooldown of 60 seconds per proxy, independent of the API\n  key's rate-limit bucket. Each proxy has its own cooldown bucket -\n  rotating proxy A does not block rotating proxy B. Excess calls\n  on the same proxy return `429 RATE_LIMITED`.\n\nThis endpoint is not idempotent by design; each successful call\nproduces a different IP. `Idempotency-Key` is not honored.\n",
+        "description": "Triggers an IP rotation for a dedicated proxy. Each call requests a\nfresh exit IP; the device typically reflects the new address within a\nfew seconds. Subsequent reads of `GET /v1/proxies/{id}` will show\nthe updated `current_ip` once the rotation lands.\n\nConstraints:\n- Only dedicated proxies support this endpoint. Calling it on a\n  shared (gb) proxy returns `422 NOT_SUPPORTED`.\n- The proxy must be `status: active`, else `409 PROXY_NOT_READY`.\n- Hard cooldown of 60 seconds per proxy, independent of the API\n  key's rate-limit bucket. Each proxy has its own cooldown bucket -\n  rotating proxy A does not block rotating proxy B. Excess calls\n  on the same proxy return `429 RATE_LIMITED`.\n\nThis endpoint is not idempotent by design; each successful call\nproduces a different IP. `Idempotency-Key` is not honored.\n",
         "parameters": [
           {
             "name": "id",
@@ -3271,7 +3288,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Rotation accepted. `current_ip` is best-effort and may be `null` if the modem hasn't reported the new address yet.",
+            "description": "Rotation accepted. `current_ip` is best-effort and may be `null` if the device hasn't reported the new address yet.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3325,7 +3342,7 @@
           "429": {
             "$ref": "#/components/responses/RATE_LIMITED"
           },
-          "502": {
+          "503": {
             "$ref": "#/components/responses/PROVIDER_ERROR"
           }
         }
@@ -4332,6 +4349,7 @@
                           "quoted_price_cents",
                           "charged_price_cents",
                           "next_renewal_price_cents",
+                          "payment_due",
                           "auto_renew",
                           "created_at",
                           "paid_until",
@@ -4402,6 +4420,17 @@
                             "description": "Price that will be charged on next renewal in USD cents.",
                             "example": 3499
                           },
+                          "payment_due": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/components/schemas/PaymentDue"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Set while a renewal that landed unpaid is owed; null otherwise. `status` is unchanged."
+                          },
                           "auto_renew": {
                             "type": "boolean",
                             "description": "Whether this number auto-renews at period end."
@@ -4440,7 +4469,16 @@
                                   ]
                                 },
                                 "text": {
-                                  "type": "string"
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "content_withheld": {
+                                  "type": "boolean",
+                                  "enum": [
+                                    true
+                                  ]
                                 },
                                 "received_at": {
                                   "type": "string",
@@ -4575,6 +4613,7 @@
                             "quoted_price_cents",
                             "charged_price_cents",
                             "next_renewal_price_cents",
+                            "payment_due",
                             "auto_renew",
                             "created_at",
                             "paid_until",
@@ -4645,6 +4684,17 @@
                               "description": "Price that will be charged on next renewal in USD cents.",
                               "example": 3499
                             },
+                            "payment_due": {
+                              "oneOf": [
+                                {
+                                  "$ref": "#/components/schemas/PaymentDue"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Set while a renewal that landed unpaid is owed; null otherwise. `status` is unchanged."
+                            },
                             "auto_renew": {
                               "type": "boolean",
                               "description": "Whether this number auto-renews at period end."
@@ -4683,7 +4733,16 @@
                                     ]
                                   },
                                   "text": {
-                                    "type": "string"
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "content_withheld": {
+                                    "type": "boolean",
+                                    "enum": [
+                                      true
+                                    ]
                                   },
                                   "received_at": {
                                     "type": "string",
@@ -4719,14 +4778,15 @@
           "429": {
             "$ref": "#/components/responses/RATE_LIMITED"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVIDER_ERROR"
-          },
           "503": {
-            "$ref": "#/components/responses/SERVICE_OUT_OF_STOCK"
-          },
-          "504": {
-            "$ref": "#/components/responses/PROVIDER_TIMEOUT"
+            "description": "Service unavailable - SERVICE_OUT_OF_STOCK, PROVIDER_ERROR or PROVIDER_TIMEOUT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -4738,7 +4798,7 @@
           "Dedicated Numbers"
         ],
         "summary": "Get a dedicated number with its messages",
-        "description": "Returns a single dedicated number owned by the authenticated user, including\npaginated SMS messages received on the number. Use `messages_before` and\n`messages_limit` to page through message history (newest-first fetch, returned\nin ascending order).\n",
+        "description": "Returns a single dedicated number owned by the authenticated user, including\npaginated SMS messages received on the number. Use `messages_before` and\n`messages_limit` to page through message history (newest-first fetch, returned\nin ascending order).\n\nIf a renewal landed before it could be paid, `payment_due` shows the amount\nowed. It is collected automatically as soon as the balance covers it. SMS\nreceived meanwhile are stored but withheld (`text`/`code` null,\n`content_withheld: true`) until it is paid, and stay withheld if the\nperiod ends unpaid.\n",
         "parameters": [
           {
             "name": "id",
@@ -4807,6 +4867,7 @@
                             "quoted_price_cents",
                             "charged_price_cents",
                             "next_renewal_price_cents",
+                            "payment_due",
                             "auto_renew",
                             "created_at",
                             "paid_until",
@@ -4877,6 +4938,17 @@
                               "description": "Price that will be charged on next renewal in USD cents.",
                               "example": 3499
                             },
+                            "payment_due": {
+                              "oneOf": [
+                                {
+                                  "$ref": "#/components/schemas/PaymentDue"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Set while a renewal that landed unpaid is owed; null otherwise. `status` is unchanged."
+                            },
                             "auto_renew": {
                               "type": "boolean",
                               "description": "Whether this number auto-renews at period end."
@@ -4896,7 +4968,7 @@
                             },
                             "messages": {
                               "type": "array",
-                              "description": "SMS messages received on this number, in ascending order. Paginate with messages_before cursor.",
+                              "description": "SMS messages received on this number, in ascending order. Paginate with messages_before cursor. A message received while payment is due has `text` and `code` null and `content_withheld: true`.",
                               "items": {
                                 "type": "object",
                                 "required": [
@@ -4914,11 +4986,21 @@
                                       "string",
                                       "null"
                                     ],
-                                    "description": "Parsed OTP/verification code, if detected."
+                                    "description": "Parsed OTP/verification code, if detected. Null while the content is withheld."
                                   },
                                   "text": {
-                                    "type": "string",
-                                    "description": "Full message text."
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "description": "Full message text. Null only while the content is withheld."
+                                  },
+                                  "content_withheld": {
+                                    "type": "boolean",
+                                    "enum": [
+                                      true
+                                    ],
+                                    "description": "Present (always `true`) only on an SMS received while a renewal is unpaid (`payment_due`); its `text` and `code` are null until paid. Absent otherwise."
                                   },
                                   "received_at": {
                                     "type": "string",
@@ -4958,7 +5040,7 @@
           "Dedicated Numbers"
         ],
         "summary": "Toggle auto-renew for a dedicated number",
-        "description": "Sets auto-renew to the specified state for a dedicated number owned by the\nauthenticated user. Unlike a flip toggle, this is idempotent - calling with\nthe same `enabled` value twice is safe.\n",
+        "description": "Sets auto-renew to the specified state for a dedicated number owned by the\nauthenticated user. Unlike a flip toggle, this is idempotent - calling with\nthe same `enabled` value twice is safe.\n\nTurning auto-renew off after the next period was already charged refunds\nthat charge to your balance. If the renewal is already under way, the call\nreturns `400 VALIDATION_ERROR` (\"This number is already renewing and the\nnext term is paid. Turn auto-renew off after it renews.\") and auto-renew\nstays on.\n\nSome UK, Hong Kong and Indonesia renewals are locked in during the last\ndays of the period. Turning auto-renew off then returns\n`400 VALIDATION_ERROR` (\"Auto-renew can't be turned off this close to the\nrenewal. This term will renew.\"). Turning it on then renews the number\nright away, so the next period is charged first; without enough balance\nthe call returns `402 INSUFFICIENT_BALANCE` and nothing changes.\n",
         "parameters": [
           {
             "name": "id",
@@ -5027,6 +5109,7 @@
                             "quoted_price_cents",
                             "charged_price_cents",
                             "next_renewal_price_cents",
+                            "payment_due",
                             "auto_renew",
                             "created_at",
                             "paid_until",
@@ -5097,6 +5180,17 @@
                               "description": "Price that will be charged on next renewal in USD cents.",
                               "example": 3499
                             },
+                            "payment_due": {
+                              "oneOf": [
+                                {
+                                  "$ref": "#/components/schemas/PaymentDue"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Set while a renewal that landed unpaid is owed; null otherwise. `status` is unchanged."
+                            },
                             "auto_renew": {
                               "type": "boolean",
                               "description": "Whether this number auto-renews at period end."
@@ -5135,7 +5229,16 @@
                                     ]
                                   },
                                   "text": {
-                                    "type": "string"
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "content_withheld": {
+                                    "type": "boolean",
+                                    "enum": [
+                                      true
+                                    ]
                                   },
                                   "received_at": {
                                     "type": "string",
@@ -5159,17 +5262,24 @@
           "401": {
             "$ref": "#/components/responses/UNAUTHENTICATED"
           },
+          "402": {
+            "$ref": "#/components/responses/INSUFFICIENT_BALANCE"
+          },
           "404": {
             "$ref": "#/components/responses/NOT_FOUND"
           },
           "429": {
             "$ref": "#/components/responses/RATE_LIMITED"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVIDER_ERROR"
-          },
           "503": {
-            "$ref": "#/components/responses/SERVICE_UNAVAILABLE"
+            "description": "Service unavailable - SERVICE_UNAVAILABLE or PROVIDER_ERROR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -5312,7 +5422,7 @@
     },
     "rental.message_received": {
       "post": {
-        "summary": "Fired once for every new SMS on an API-bought rental or dedicated number, with or without a detected code. A coded message fires this first, then rental.code_received.",
+        "summary": "Fired once for every new SMS on an API-bought rental or dedicated number, with or without a detected code. A coded message fires this first, then rental.code_received. An SMS received while a renewal is unpaid arrives with text and code null and content_withheld true.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5331,7 +5441,7 @@
     },
     "rental.code_received": {
       "post": {
-        "summary": "Fired when a new SMS with a detected code arrives on an API-bought rental or dedicated number.",
+        "summary": "Fired when a new SMS with a detected code arrives on an API-bought rental or dedicated number. Not fired for a code withheld while a renewal is unpaid.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5350,7 +5460,7 @@
     },
     "rental.renewed": {
       "post": {
-        "summary": "Fired when a rental successfully auto-renews.",
+        "summary": "Fired on every renewal that landed, including one that landed unpaid (then payment_due is set on the rental and rental.auto_renew_disabled also fires once auto-renew is stopped).",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5407,7 +5517,7 @@
     },
     "rental.auto_renew_disabled": {
       "post": {
-        "summary": "Fired when auto-renew is disabled on a rental (e.g. due to insufficient balance at renewal time).",
+        "summary": "Fired when auto-renew is turned off because the next term could not be paid or renewed - shortly before paid_until when the balance cannot cover it, or after a renewal landed unpaid.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5844,6 +5954,8 @@
           "id",
           "balance",
           "rate_limits",
+          "key",
+          "deposit_url",
           "created_at"
         ],
         "additionalProperties": false,
@@ -5862,9 +5974,79 @@
               "$ref": "#/components/schemas/RateLimit"
             }
           },
+          "key": {
+            "$ref": "#/components/schemas/MeKey"
+          },
+          "deposit_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Where the user adds funds to their balance."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "MeKey": {
+        "type": "object",
+        "description": "The API key or app connection that made this request.",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "permission",
+          "max_order_cents",
+          "daily_limit_cents",
+          "spent_24h_cents",
+          "auto_mode"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "key",
+              "oauth"
+            ],
+            "description": "`key` for an API key, `oauth` for a connected app."
+          },
+          "name": {
+            "type": "string"
+          },
+          "permission": {
+            "type": "string",
+            "enum": [
+              "view",
+              "manage",
+              "buy"
+            ],
+            "description": "`view` reads only; `manage` also makes changes that don't spend\n(cancel, free reuse, rotate, lists, auto-renew off); `buy` also\nmakes purchases and turns auto-renew on.\n"
+          },
+          "max_order_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Per-order spending limit in cents, or null for no limit."
+          },
+          "daily_limit_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Spending limit over a rolling 24 hours, net of refunds, in cents. Null for no limit."
+          },
+          "spent_24h_cents": {
+            "type": "integer",
+            "description": "Spent by this key over the last 24 hours, net of refunds, in cents."
+          },
+          "auto_mode": {
+            "type": "boolean",
+            "description": "Whether the owner lets agents buy with this key without asking first."
           }
         }
       },
@@ -6362,6 +6544,27 @@
           "cancelled"
         ]
       },
+      "PaymentDue": {
+        "type": "object",
+        "description": "A renewal that landed before it could be paid. The term is renewed but\nowed; the amount is collected automatically as soon as the balance\ncovers it. SMS received meanwhile are withheld (`content_withheld`)\nuntil it is paid, and stay withheld if the term ends unpaid.\n",
+        "required": [
+          "amount_cents",
+          "since"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "amount_cents": {
+            "type": "integer",
+            "description": "Amount owed, in USD cents.",
+            "example": 1499
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the renewal landed unpaid."
+          }
+        }
+      },
       "RentalMessage": {
         "type": "object",
         "required": [
@@ -6381,13 +6584,23 @@
               "string",
               "null"
             ],
-            "description": "Extracted numeric code, if any. Null when the SMS is informational.",
+            "description": "Extracted numeric code, if any. Null when the SMS is informational or its content is withheld.",
             "example": "123456"
           },
           "text": {
-            "type": "string",
-            "description": "Full raw SMS text.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full raw SMS text. Null only while the content is withheld.",
             "example": "Your verification code is 123456."
+          },
+          "content_withheld": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "Present (always `true`) only on an SMS received while a renewal\nis unpaid (`payment_due`): stored, but `text` and `code` are null\nuntil the due is paid. Absent on every other message.\n"
           },
           "received_at": {
             "type": "string",
@@ -6413,8 +6626,11 @@
             "example": "msg_01HXYZ789GHI"
           },
           "text": {
-            "type": "string",
-            "description": "Full raw SMS text.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full raw SMS text. Null only while the content is withheld.",
             "example": "Your account was accessed from a new device."
           },
           "code": {
@@ -6422,8 +6638,15 @@
               "string",
               "null"
             ],
-            "description": "Detected OTP / verification code, or null when none was found.",
+            "description": "Detected OTP / verification code, or null when none was found or the content is withheld.",
             "example": null
+          },
+          "content_withheld": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "Present (always `true`) only on an SMS received while a renewal\nis unpaid (`payment_due` on the rental). Its `text` and `code` are\nnull, and it fires no `rental.code_received`.\n"
           },
           "sender": {
             "type": [
@@ -6453,6 +6676,7 @@
           "charged_price_cents",
           "auto_renew",
           "next_renewal_price_cents",
+          "payment_due",
           "re_rent_available",
           "re_rent_price_cents",
           "re_rent_blocked_at",
@@ -6548,6 +6772,17 @@
             "description": "Estimated cost of the next auto-renewal at current pricing.",
             "example": 2500
           },
+          "payment_due": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentDue"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set while a renewal that landed unpaid is owed; null otherwise\n(paid, or the term ended unpaid). `status` is unchanged.\n"
+          },
           "re_rent_available": {
             "type": "boolean",
             "description": "Whether this rental is eligible for re-rent on the same number after\nit expires. `true` only when the rental is `expired` and the number\nhas not yet been released. `false` for all non-expired rentals and\nfor expired rentals that are no longer eligible.\n",
@@ -6600,7 +6835,7 @@
             "items": {
               "$ref": "#/components/schemas/RentalMessage"
             },
-            "description": "SMS messages received on this number, sorted oldest-first."
+            "description": "SMS messages received on this number, sorted oldest-first. A\nmessage received while payment is due has `text` and `code` null\nand `content_withheld: true`.\n"
           }
         }
       },
@@ -6781,7 +7016,7 @@
           "password"
         ],
         "additionalProperties": false,
-        "description": "Connection details. For a mobile/GB package this is the\npackage-level Flex gateway: geo, session stickiness, and rotation\nare controlled per request via underscore-prefixed parameters\nappended to `username` (see the proxies docs reference), and\n`username_geo_hint` is present. For an active Standard dedicated\nproxy it is the modem's own connection: `username` is used as-is,\n`port` is the HTTP port and `socks_port` is present.\n",
+        "description": "Connection details. For a mobile/GB package this is the\npackage-level Flex gateway: geo, session stickiness, and rotation\nare controlled per request via underscore-prefixed parameters\nappended to `username` (see the proxies docs reference), and\n`username_geo_hint` is present. For an active Standard dedicated\nproxy it is the device's own connection: `username` is used as-is,\n`port` is the HTTP port and `socks_port` is present.\n",
         "properties": {
           "host": {
             "type": "string",
@@ -6915,7 +7150,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Ready-to-paste connection strings in `login:pass@host:port` form, regardless of the saved `format` (which applies to the dashboard's list export). For IP-whitelist lists these are bare `host:port` strings. For SOCKS5, use the same host, port and credentials with a `socks5://` scheme."
+            "description": "Ready-to-paste connection strings in `login:pass@host:port` form, regardless of the saved `format` (which applies to the dashboard's list export). For IP-whitelist lists these are bare `host:port` strings. For SOCKS5, use the same host, port and credentials with a `socks5://` scheme; SOCKS5 also relays UDP, for QUIC (HTTP/3) to the target."
           },
           "network": {
             "type": [
@@ -7038,6 +7273,16 @@
             ],
             "description": "What a renewal (manual or auto-renew) charges right now, with\nyour current discount - pass it as `max_price_cents` to\n`POST /v1/proxies/{id}/renew`. Null when the proxy cannot be\nrenewed over the API at the moment (pool sub-order, Premium\ndedicated, dedicated not active or its plan no longer sold,\npackage past its renewal window).\n"
           },
+          "topup_prices": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ProxyTopupPrice"
+            },
+            "description": "Mobile/GB packages: what `POST /v1/proxies/{id}/topup` charges\nright now for the listed sizes (1, 10, 25, 50, 100 GB), with your\ncurrent discount, and the days each adds to the expiry. Pass a\nsize's `price_cents` as `max_price_cents`. Null when the package\ncannot take a paid top-up at the moment (dedicated, pool sub-order,\ncustom plan, still provisioning, or past its 7-day window).\n"
+          },
           "gateway": {
             "oneOf": [
               {
@@ -7155,14 +7400,14 @@
               "string",
               "null"
             ],
-            "description": "Standard dedicated plans only. Mobile carrier of the modem."
+            "description": "Standard dedicated plans only. Mobile carrier of the device."
           },
           "region": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Standard dedicated plans only. Region the modem sits in; null if the plan takes any region."
+            "description": "Standard dedicated plans only. Region the device sits in; null if the plan takes any region."
           },
           "data_gb": {
             "type": [
@@ -7188,7 +7433,7 @@
           },
           "available": {
             "type": "boolean",
-            "description": "Always true for mobile/GB plans. For a Standard dedicated plan,\nwhether its own region has a modem free right now. Refreshes\nevery 10 minutes; a purchase re-checks before charging.\n"
+            "description": "Always true for mobile/GB plans. For a Standard dedicated plan,\nwhether its own region has a device free right now. Refreshes\nevery 10 minutes; a purchase re-checks before charging.\n"
           }
         }
       },
@@ -7354,6 +7599,31 @@
             "type": "integer",
             "minimum": 0,
             "description": "Required for a catalog (plan-backed) package; ignored for a pool-backed sub-order, where GB is drawn from the pool instead."
+          }
+        }
+      },
+      "ProxyTopupPrice": {
+        "type": "object",
+        "required": [
+          "additional_gb",
+          "price_cents",
+          "days_added"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "additional_gb": {
+            "type": "integer",
+            "example": 10
+          },
+          "price_cents": {
+            "type": "integer",
+            "description": "The exact charge for this size, after your discount.",
+            "example": 3500
+          },
+          "days_added": {
+            "type": "integer",
+            "description": "Days the top-up adds to the current expiry (3 per GB, at most 30).",
+            "example": 30
           }
         }
       },
@@ -7759,6 +8029,7 @@
         "required": [
           "id",
           "title",
+          "full_title",
           "countries",
           "region",
           "country_count",
@@ -7786,6 +8057,11 @@
             "type": "string",
             "description": "Plan name as the VoidMob dashboard shows it. Data and validity are not repeated in the name; read them from `data_limit_gb` / `data_unlimited` and `validity_days`.",
             "example": "Europe"
+          },
+          "full_title": {
+            "type": "string",
+            "description": "Plan name with its data allowance and validity, for listings that show one line per plan. Built from `title`, so the two always agree.",
+            "example": "Europe 10 GB - 30 Days"
           },
           "countries": {
             "type": "array",
@@ -7865,7 +8141,7 @@
             "items": {
               "$ref": "#/components/schemas/EsimProductNetwork"
             },
-            "description": "Carrier networks the plan uses, one entry per country and carrier, sorted by country then name. Refreshed about weekly; empty for a plan added since the last refresh, and for top-up packages (a top-up runs on its eSIM's networks)."
+            "description": "Carrier networks the plan uses, one entry per country and carrier, sorted by country then name. Names are the network the eSIM attaches to, not a retail brand. A territory with no network of its own (Vatican City, San Marino) lists the carriers of the host country it is covered by. Refreshed about weekly. A covered country has no entry when its carriers are not published, and the list is empty for a plan added since the last refresh and for top-up packages (a top-up runs on its eSIM's networks)."
           },
           "features": {
             "$ref": "#/components/schemas/EsimProductFeatures"
@@ -7958,7 +8234,7 @@
               "null"
             ],
             "description": "SM-DP+ matching ID used by the device to install the profile. Combine\nwith `smdp_address` to form the full LPA URI: `LPA:1$<smdp_address>$<activation_code>`.\nThe PNG returned from `qr_code_url` already encodes the full URI for direct\nscanning. Null for topups and processing orders.\n",
-            "example": "K2-2VOZBJ-22QT3D"
+            "example": "ACTIVATION-CODE"
           },
           "qr_code_url": {
             "type": [
@@ -7974,7 +8250,7 @@
               "null"
             ],
             "description": "SM-DP+ server hostname. Combine with `activation_code` to build the LPA URI for manual activation. Null for topups and processing orders.",
-            "example": "smdp.io"
+            "example": "smdp.example.com"
           },
           "data_limit_gb": {
             "type": [
@@ -8231,17 +8507,23 @@
         "properties": {
           "name": {
             "type": "string",
-            "description": "Data package name.",
-            "example": "Europe 10GB"
+            "description": "Plan name, as the catalog's `full_title`.",
+            "example": "Europe 10 GB - 30 Days"
           },
           "total_mb": {
-            "type": "number",
-            "description": "Total data allocation in megabytes.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Total data allocation in megabytes (1 GB = 1024 MB). Null on unlimited plans.",
             "example": 10240
           },
           "total_gb": {
-            "type": "number",
-            "description": "Total data allocation in gigabytes.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Total data allocation in gigabytes. Plans sold as 1 TB report 1024. Null on unlimited plans.",
             "example": 10
           },
           "used_mb": {
@@ -8255,18 +8537,27 @@
             "example": 1
           },
           "remaining_mb": {
-            "type": "number",
-            "description": "Remaining data in megabytes.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Remaining data in megabytes. Null on unlimited plans.",
             "example": 9216
           },
           "remaining_gb": {
-            "type": "number",
-            "description": "Remaining data in gigabytes.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Remaining data in gigabytes. Null on unlimited plans.",
             "example": 9
           },
           "percent_used": {
-            "type": "number",
-            "description": "Percentage of allocation consumed (0-100).",
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Percentage of allocation consumed (0-100). Null on unlimited plans.",
             "example": 10
           },
           "activation_date": {
@@ -8325,13 +8616,11 @@
                   "esim_status": {
                     "type": "string",
                     "enum": [
-                      "processing",
-                      "completed",
-                      "cancelled",
-                      "refunded",
-                      "expired"
+                      "available",
+                      "in_use",
+                      "unknown"
                     ],
-                    "description": "Current status of the eSIM order at time of query."
+                    "description": "The eSIM's install state at time of query, separate from the order `status`.\n`available`: ready to install, not yet on a device. `in_use`: installed on a device, or data has been used.\n`unknown`: this plan does not report install state and no data has been used yet; it becomes `in_use` with the first data use.\n"
                   },
                   "packages": {
                     "type": "array",
@@ -8390,6 +8679,7 @@
           "UNAUTHENTICATED",
           "IP_NOT_ALLOWED",
           "FORBIDDEN",
+          "PERMISSION_DENIED",
           "NOT_FOUND",
           "RATE_LIMITED",
           "IDEMPOTENCY_CONFLICT",
@@ -8400,6 +8690,7 @@
           "SERVICE_OUT_OF_STOCK",
           "INSUFFICIENT_BALANCE",
           "DAILY_SPEND_CAP_EXCEEDED",
+          "ORDER_LIMIT_EXCEEDED",
           "VERIFICATION_NOT_FOUND",
           "WEBHOOK_ENDPOINT_NOT_FOUND",
           "CANCEL_NOT_ALLOWED",
@@ -8896,6 +9187,36 @@
           }
         }
       },
+      "PERMISSION_DENIED": {
+        "description": "403 - This key's permission level does not allow this action.",
+        "headers": {
+          "X-RateLimit-Limit": {
+            "$ref": "#/components/headers/X-RateLimit-Limit"
+          },
+          "X-RateLimit-Remaining": {
+            "$ref": "#/components/headers/X-RateLimit-Remaining"
+          },
+          "X-RateLimit-Reset": {
+            "$ref": "#/components/headers/X-RateLimit-Reset"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "success": false,
+              "error": {
+                "code": "PERMISSION_DENIED",
+                "message": "This key's permission level does not allow this action.",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#permission_denied",
+                "request_id": "req_01HXYZ123456789ABCDEFG"
+              }
+            }
+          }
+        }
+      },
       "NOT_FOUND": {
         "description": "404 - The requested resource was not found.",
         "headers": {
@@ -9193,6 +9514,36 @@
                 "code": "DAILY_SPEND_CAP_EXCEEDED",
                 "message": "This key has reached its daily spend cap.",
                 "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#daily_spend_cap_exceeded",
+                "request_id": "req_01HXYZ123456789ABCDEFG"
+              }
+            }
+          }
+        }
+      },
+      "ORDER_LIMIT_EXCEEDED": {
+        "description": "402 - This order is over this key's per-order spending limit.",
+        "headers": {
+          "X-RateLimit-Limit": {
+            "$ref": "#/components/headers/X-RateLimit-Limit"
+          },
+          "X-RateLimit-Remaining": {
+            "$ref": "#/components/headers/X-RateLimit-Remaining"
+          },
+          "X-RateLimit-Reset": {
+            "$ref": "#/components/headers/X-RateLimit-Reset"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "success": false,
+              "error": {
+                "code": "ORDER_LIMIT_EXCEEDED",
+                "message": "This order is over this key's per-order spending limit.",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#order_limit_exceeded",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9716,7 +10067,7 @@
         }
       },
       "PROVISIONING_FAILED": {
-        "description": "502 - Proxy provisioning failed. Funds have been refunded.",
+        "description": "503 - Proxy provisioning failed. Funds have been refunded.",
         "headers": {
           "X-RateLimit-Limit": {
             "$ref": "#/components/headers/X-RateLimit-Limit"
@@ -9746,7 +10097,7 @@
         }
       },
       "PROVIDER_TIMEOUT": {
-        "description": "504 - Request timed out. Funds have been refunded.",
+        "description": "503 - Request timed out. Funds have been refunded.",
         "headers": {
           "X-RateLimit-Limit": {
             "$ref": "#/components/headers/X-RateLimit-Limit"
@@ -10136,7 +10487,7 @@
         }
       },
       "PROVIDER_ERROR": {
-        "description": "502 - Service error. Please retry shortly.",
+        "description": "503 - Service error. Please retry shortly.",
         "headers": {
           "X-RateLimit-Limit": {
             "$ref": "#/components/headers/X-RateLimit-Limit"

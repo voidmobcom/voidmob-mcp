@@ -137,14 +137,14 @@ describe("contract: every request the tools make", () => {
     await call("re_rent_rental", { rental_id: "ren_sandboxexpired1", max_price_cents: 600 });
     await call("search_dedicated_countries");
     const ded = (await call("purchase_dedicated_number", { country: "uk", max_price_cents: 1699, auto_renew: true })).dedicated_number.id;
-    await call("get_dedicated_number", { number_id: ded });
+    await call("get_rental", { rental_id: ded });
     await call("toggle_auto_renew", { rental_id: ded, auto_renew: false });
     await call("search_esim_plans", { country: "us", min_data_gb: 1, min_days: 5, has_5g: true, query: "USA", limit: 5, cursor: "x" });
     const esim = (await call("purchase_esim", { plan_id: "prod_us_5gb_30d", max_price_cents: 1500 })).esim.id;
     await call("get_esim_status", { esim_id: esim });
     await call("topup_esim", { esim_id: esim });
     await call("topup_esim", { esim_id: esim, topup_product_id: "prod_topup_5gb", max_price_cents: 1400 });
-    await call("get_esim_qr", { esim_id: esim });
+    await call("get_esim_status", { esim_id: esim, include_qr: true });
     await call("search_proxies", { type: "dedicated", country: "US", min_data_gb: 0, available_only: true, cursor: "x" });
     await call("purchase_proxy", { plan_id: "plan_US5GB30D", max_price_cents: 100 }); // PRICE_MISMATCH -> plan lookup
     const prx = (await call("purchase_proxy", { plan_id: "plan_US5GB30D", max_price_cents: 1800 })).proxy.id;
@@ -166,10 +166,10 @@ describe("contract: every request the tools make", () => {
     });
     await call("update_proxy_list", { proxy_id: prx, list_id: list, countries: ["DE", "FR"] });
     await call("regenerate_proxy_password", { proxy_id: prx, list_id: list });
-    await call("list_proxy_lists", { proxy_id: prx });
+    await call("get_proxy_status", { proxy_id: prx });
     await call("delete_proxy_list", { proxy_id: prx, list_id: list });
     const dedPrx = (await call("purchase_proxy", { plan_id: "plan_DEDUSNY30D", max_price_cents: 6900 })).proxy.id;
-    await call("set_proxy_auto_renew", { proxy_id: dedPrx, enabled: true });
+    await call("toggle_auto_renew", { rental_id: dedPrx, auto_renew: true });
     await call("rotate_proxy_ip", { proxy_id: dedPrx });
     await call("get_geo", {});
     await call("get_geo", { country: "US", region: "California", city: "Los Angeles" });

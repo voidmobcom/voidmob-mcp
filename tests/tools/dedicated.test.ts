@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { DedicatedCountry, DedicatedNumber } from "../../src/client/types.js";
 import { isDedicatedId } from "../../src/constants/rental-id.js";
-import { searchDedicatedCountriesHandler, getDedicatedNumberHandler, purchaseDedicatedNumberHandler } from "../../src/tools/dedicated.js";
+import { searchDedicatedCountriesHandler, purchaseDedicatedNumberHandler } from "../../src/tools/dedicated.js";
+import { getRentalHandler } from "../../src/tools/sms.js";
 import { createMockHttpClient } from "../mock-http.js";
 import { dedCountryFixture, dedNumberFixture } from "../fixtures/dedicated.js";
 import { toolContext } from "../../src/tools/context.js";
@@ -50,24 +51,40 @@ describe("search_dedicated_countries", () => {
   });
 });
 
-describe("get_dedicated_number", () => {
+describe("get_rental with a dedicated number (ded_)", () => {
   it("renders status and messages with codes", async () => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/dedicated/numbers/ded_abc123", okBody(dedNumberFixture({
       messages: [{ id: "msg_1", code: "424242", text: "Your code is 424242", received_at: "2026-07-01T13:00:00Z" }],
     })));
-    const res = await getDedicatedNumberHandler(toolContext(http))({ number_id: "ded_abc123" });
+    const res = await getRentalHandler(toolContext(http))({ rental_id: "ded_abc123" });
+    expect(res.isError).toBeFalsy();
     const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("Dedicated number ded_abc123");
     expect(t.text).toContain("+4915123456789");
     expect(t.text).toContain('code="424242"');
     expect(t.text).toContain("UNTRUSTED SMS TEXT");
     expect(res.structuredContent?.dedicated_number).toMatchObject({ id: "ded_abc123" });
+    expect(res.structuredContent?.verification).toBeUndefined();
+    expect(res.structuredContent?.rental).toBeUndefined();
   });
 
-  it("rejects non-ded_ ids without calling the API", async () => {
+  it("reads once: wait_seconds is for verifications only", async () => {
     const http = createMockHttpClient();
-    const res = await getDedicatedNumberHandler(toolContext(http))({ number_id: "ren_abc" });
+    http.expect("GET", "/v1/dedicated/numbers/ded_abc123", okBody(dedNumberFixture()));
+    const res = await getRentalHandler(toolContext(http))({ rental_id: "ded_abc123", wait_seconds: 30 });
+    expect(res.isError).toBeFalsy();
+    expect(http.history).toHaveLength(1);
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("wait_seconds applies to verifications only");
+  });
+
+  it("rejects an id of another kind without calling the API, naming the three accepted prefixes", async () => {
+    const http = createMockHttpClient();
+    const res = await getRentalHandler(toolContext(http))({ rental_id: "prx_abc" });
     expect(res.isError).toBe(true);
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    expect(t.text).toContain("ded_xxx");
     expect(http.history).toHaveLength(0);
   });
 });

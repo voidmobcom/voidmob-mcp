@@ -19,7 +19,7 @@ const sc = (r: Result) => r.structuredContent as Record<string, any>;
 const WRITE_TOOLS = [
   "rent_number", "cancel_rental", "reuse_number", "re_rent_rental", "toggle_auto_renew",
   "purchase_dedicated_number", "purchase_esim", "topup_esim",
-  "purchase_proxy", "rotate_proxy_ip", "renew_proxy", "set_proxy_auto_renew", "topup_proxy",
+  "purchase_proxy", "rotate_proxy_ip", "renew_proxy", "topup_proxy",
   "regenerate_proxy_password", "create_proxy_list", "update_proxy_list", "delete_proxy_list",
 ];
 
@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe("structuredContent matches outputSchema for every tool (sandbox)", () => {
-  it("drives all 30 tools over the protocol and validates each result against its declared schema", async () => {
+  it("drives all 26 tools over the protocol and validates each result against its declared schema", async () => {
     const fetchSpy = vi.fn(() => Promise.reject(new Error("network must not be touched")));
     vi.stubGlobal("fetch", fetchSpy);
     const client = await sandbox();
@@ -59,13 +59,13 @@ describe("structuredContent matches outputSchema for every tool (sandbox)", () =
     await call("re_rent_rental", { rental_id: "ren_sandboxexpired1", max_price_cents: 600 });
     await call("search_dedicated_countries");
     const ded = sc(await call("purchase_dedicated_number", { country: "uk", max_price_cents: 1699 })).dedicated_number.id;
-    await call("get_dedicated_number", { number_id: ded });
+    await call("get_rental", { rental_id: ded });
     await call("search_esim_plans", { country: "us" });
     const esim = sc(await call("purchase_esim", { plan_id: "prod_us_5gb_30d", max_price_cents: 1500 })).esim.id;
     await call("get_esim_status", { esim_id: esim });
     await call("topup_esim", { esim_id: esim });
     await call("topup_esim", { esim_id: esim, topup_product_id: "prod_topup_5gb", max_price_cents: 1400 });
-    await call("get_esim_qr", { esim_id: esim });
+    await call("get_esim_status", { esim_id: esim, include_qr: true });
     await call("search_proxies", { type: "all" });
     const prx = sc(await call("purchase_proxy", { plan_id: "plan_US5GB30D", max_price_cents: 1800 })).proxy.id;
     await new Promise((r) => setTimeout(r, READY_AFTER_MS + 100));
@@ -76,10 +76,10 @@ describe("structuredContent matches outputSchema for every tool (sandbox)", () =
     const list = sc(await call("create_proxy_list", { proxy_id: prx, name: "la", country: "US", city: "Los Angeles" })).list.id;
     await call("update_proxy_list", { proxy_id: prx, list_id: list, rotation_period_seconds: -1 });
     await call("regenerate_proxy_password", { proxy_id: prx, list_id: list });
-    await call("list_proxy_lists", { proxy_id: prx });
+    await call("get_proxy_status", { proxy_id: prx });
     await call("delete_proxy_list", { proxy_id: prx, list_id: list });
     const dedPrx = sc(await call("purchase_proxy", { plan_id: "plan_DEDUSNY30D", max_price_cents: 6900 })).proxy.id;
-    await call("set_proxy_auto_renew", { proxy_id: dedPrx, enabled: true });
+    await call("toggle_auto_renew", { rental_id: dedPrx, auto_renew: true });
     await call("rotate_proxy_ip", { proxy_id: dedPrx });
     await call("get_geo", { country: "US" });
     await call("list_orders");
@@ -125,7 +125,7 @@ describe("owner controls (sandbox behaves like live)", () => {
   it("read-only: no tool that spends or changes anything is registered, and no buying prompts", async () => {
     const client = await sandbox({ readOnly: true });
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toHaveLength(13);
+    expect(names).toHaveLength(10);
     for (const w of WRITE_TOOLS) expect(names).not.toContain(w);
     expect(client.getServerCapabilities()?.prompts).toBeUndefined();
     expect(client.getInstructions()).toContain("read-only");
@@ -138,9 +138,9 @@ describe("owner controls (sandbox behaves like live)", () => {
     const counts: Array<[string, number, string[]]> = [
       ["sms", 10, ["get_verification_code"]],
       ["numbers", 7, []],
-      ["esim", 8, ["buy_travel_esim"]],
-      ["proxy", 15, ["setup_mobile_proxy"]],
-      ["sms,proxy", 22, ["get_verification_code", "setup_mobile_proxy"]],
+      ["esim", 7, ["buy_travel_esim"]],
+      ["proxy", 14, ["setup_mobile_proxy"]],
+      ["sms,proxy", 20, ["get_verification_code", "setup_mobile_proxy"]],
     ];
     for (const [sets, n, prompts] of counts) {
       const client = await sandbox(parseControls({ VOIDMOB_TOOLSETS: sets }));

@@ -12,16 +12,15 @@ import {
   cancelRentalHandler, reuseNumberHandler, reRentRentalHandler, toggleAutoRenewHandler,
 } from "../src/tools/sms.js";
 import {
-  searchDedicatedCountriesHandler, purchaseDedicatedNumberHandler, getDedicatedNumberHandler,
+  searchDedicatedCountriesHandler, purchaseDedicatedNumberHandler,
 } from "../src/tools/dedicated.js";
 import {
-  searchEsimPlansHandler, purchaseEsimHandler, getEsimStatusHandler,
-  topupEsimHandler, getEsimQrHandler,
+  searchEsimPlansHandler, purchaseEsimHandler, getEsimStatusHandler, topupEsimHandler,
 } from "../src/tools/esim.js";
 import {
   searchProxiesHandler, purchaseProxyHandler, getProxyStatusHandler, rotateProxyIpHandler,
   renewProxyHandler, topupProxyHandler, regenerateProxyPasswordHandler,
-  listProxyListsHandler, createProxyListHandler, deleteProxyListHandler, updateProxyListHandler,
+  createProxyListHandler, deleteProxyListHandler, updateProxyListHandler,
 } from "../src/tools/proxy.js";
 import { getGeoHandler } from "../src/tools/geo.js";
 import { listOrdersHandler } from "../src/tools/orders.js";
@@ -91,7 +90,8 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
     const id = sc(esim).esim.id as string;
     expect((esim.content[0] as { text: string }).text).toMatch(/LPA string: +LPA:1\$[^$]+\$K2-/);
     okResult(await getEsimStatusHandler(ctx)({ esim_id: id }));
-    okResult(await getEsimQrHandler(ctx)({ esim_id: id }));
+    const withQr = okResult(await getEsimStatusHandler(ctx)({ esim_id: id, include_qr: true }));
+    expect(withQr.content.map((c) => c.type)).toEqual(["text", "image"]);
     okResult(await topupEsimHandler(ctx)({ esim_id: id }));
     okResult(await topupEsimHandler(ctx)({ esim_id: id, topup_product_id: "prod_topup_5gb", max_price_cents: 1400 }));
     // After a top-up the status shows both packages and a total.
@@ -121,12 +121,15 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
     expect(sc(rotated).list.credentials.password).not.toBe(sc(list).list.credentials.password);
     const ipList = okResult(await createProxyListHandler(ctx)({ proxy_id: id, name: "vm", country: "US", network: "203.0.113.7" }));
     expect(sc(ipList).list).toMatchObject({ credentials: null, network: "203.0.113.7", entries: ["proxy.voidmob.com:10000"] });
-    okResult(await listProxyListsHandler(ctx)({ proxy_id: id }));
+    const withLists = okResult(await getProxyStatusHandler(ctx)({ proxy_id: id }));
+    expect((withLists.content[0] as { text: string }).text).toContain("Lists (2):");
     okResult(await deleteProxyListHandler(ctx)({ proxy_id: id, list_id: listId }));
 
-    // IP rotation is a dedicated-proxy action.
+    // IP rotation and auto-renew are dedicated-proxy actions.
     const ded = okResult(await purchaseProxyHandler(ctx)({ plan_id: "plan_DEDUSNY30D", max_price_cents: 6900 }));
     okResult(await rotateProxyIpHandler(ctx)({ proxy_id: sc(ded).proxy.id as string }));
+    const renewing = okResult(await toggleAutoRenewHandler(ctx)({ rental_id: sc(ded).proxy.id as string, auto_renew: true }));
+    expect(sc(renewing).proxy.auto_renew).toBe(true);
   }, 10_000);
 
   it("list_orders aggregates across kinds", async () => {
@@ -143,7 +146,7 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
 
     await waitUntilReady();
 
-    const got = okResult(await getDedicatedNumberHandler(ctx)({ number_id: id }));
+    const got = okResult(await getRentalHandler(ctx)({ rental_id: id }));
     const msgs = (got.structuredContent?.dedicated_number as { messages: unknown[] }).messages;
     expect(msgs.length).toBeGreaterThan(0);
 

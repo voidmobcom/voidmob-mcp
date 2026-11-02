@@ -215,7 +215,7 @@ export const listOrdersHandler = (ctx: ToolContext) =>
 export function registerOrdersTools(server: McpServer, ctx: ToolContext) {
   defineTool(server, ctx, "list_orders", {
     group: "core",
-    writes: false,
+    level: "view",
     title: "List orders",
     description:
       "List your orders: SMS verifications (ver_...), long-term rentals (ren_...), dedicated numbers (ded_...), eSIMs (esim_...) and proxies (prx_...), with status and price. " +

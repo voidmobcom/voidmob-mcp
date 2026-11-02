@@ -45,7 +45,7 @@
     },
     {
       "name": "get_rental",
-      "description": "Check or wait for SMS verification or rental"
+      "description": "Check a number or wait for an SMS code"
     },
     {
       "name": "rent_number",
@@ -65,7 +65,7 @@
     },
     {
       "name": "toggle_auto_renew",
-      "description": "Set rental or dedicated number auto-renew"
+      "description": "Set auto-renew on a rental, number or proxy"
     },
     {
       "name": "search_dedicated_countries",
@@ -74,10 +74,6 @@
     {
       "name": "purchase_dedicated_number",
       "description": "Buy a dedicated number"
-    },
-    {
-      "name": "get_dedicated_number",
-      "description": "Get dedicated number"
     },
     {
       "name": "search_esim_plans",
@@ -89,15 +85,11 @@
     },
     {
       "name": "get_esim_status",
-      "description": "eSIM status and usage"
+      "description": "eSIM status, usage and QR code"
     },
     {
       "name": "topup_esim",
       "description": "Browse or buy eSIM top-ups"
-    },
-    {
-      "name": "get_esim_qr",
-      "description": "eSIM QR code"
     },
     {
       "name": "search_proxies",
@@ -120,20 +112,12 @@
       "description": "Renew a proxy"
     },
     {
-      "name": "set_proxy_auto_renew",
-      "description": "Set proxy auto-renew"
-    },
-    {
       "name": "topup_proxy",
       "description": "Add data to a shared proxy"
     },
     {
       "name": "regenerate_proxy_password",
       "description": "Reset proxy gateway or list password"
-    },
-    {
-      "name": "list_proxy_lists",
-      "description": "List proxy lists"
     },
     {
       "name": "create_proxy_list",

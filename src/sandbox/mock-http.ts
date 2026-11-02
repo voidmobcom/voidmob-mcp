@@ -253,7 +253,7 @@ export function createSandboxHttpClient(): HttpClient {
   };
 
   // A dedicated number "receives" its first SMS once ready, so the poll flow
-  // get_dedicated_number describes is demonstrable.
+  // get_rental describes for ded_ ids is demonstrable.
   const settleDedicated = (d: DedicatedNumber): DedicatedNumber => {
     if ((d.messages?.length ?? 0) === 0 && isReady(d.id)) {
       const code = smsCode();

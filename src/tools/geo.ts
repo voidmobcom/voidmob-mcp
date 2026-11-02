@@ -72,7 +72,7 @@ export const getGeoHandler = (ctx: ToolContext) =>
 export function registerGeoTools(server: McpServer, ctx: ToolContext) {
   defineTool(server, ctx, "get_geo", {
     group: "core",
-    writes: false,
+    level: "view",
     title: "Proxy geo targets",
     description:
       "Cascading geo discovery for shared-proxy list targeting (create_proxy_list, update_proxy_list). No params -> countries; country=US -> regions; " +

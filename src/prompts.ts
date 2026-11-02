@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import type { ToolContext } from "./tools/context.js";
+import { levelAllows, type ToolContext } from "./tools/context.js";
 
 // Guided flows a host can offer as slash commands. Each one buys something,
 // so each spells out the confirm-the-price step before the purchase.
@@ -13,8 +13,8 @@ const CONFIRM =
 const user = (text: string) => ({ messages: [{ role: "user" as const, content: { type: "text" as const, text } }] });
 
 export function registerPrompts(server: McpServer, ctx: ToolContext): void {
-  // Every flow ends in a purchase, which a read-only server cannot make.
-  if (ctx.readOnly) return;
+  // Every flow ends in a purchase, which needs the buy level.
+  if (!levelAllows(ctx.level, "buy")) return;
 
   if (ctx.toolsets.has("sms")) {
     server.registerPrompt(
@@ -85,7 +85,7 @@ export function registerPrompts(server: McpServer, ctx: ToolContext): void {
               `${days ? ` with min_days=${days}` : ""}${data_gb ? ` and min_data_gb=${data_gb}` : ""}. Show 2-3 good options with coverage, data, validity and price.`,
             `2. Tell me it cannot be cancelled once issued and that my phone must support eSIM. ${CONFIRM}`,
             `3. Call purchase_esim with the prod_ id and max_price_cents. If it is processing, poll get_esim_status until completed.`,
-            `4. Give me the install details: the LPA string and the QR code from get_esim_qr.`,
+            `4. Give me the install details: the LPA string, and the QR code from get_esim_status with include_qr=true.`,
           ].join("\n"),
         ),
     );
