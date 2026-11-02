@@ -23,7 +23,7 @@ const Countries = z.array(DedicatedCountry);
 export const SearchDedicatedCountriesOutput = outputObject({ countries: Countries });
 
 export const searchDedicatedCountriesHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (): Promise<ToolResult> => {
     const raw = await callApi<unknown>(ctx.http, "GET", "/v1/dedicated/countries");
     const countries = Countries.parse(raw);
     if (countries.length === 0) {
@@ -66,7 +66,7 @@ function matchCountry(countries: DedicatedCountry[], input: string): DedicatedCo
 }
 
 export const purchaseDedicatedNumberHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { country: string; auto_renew?: boolean; max_price_cents: number }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { country: string; auto_renew?: boolean; max_price_cents: number }): Promise<ToolResult> => {
     const max = args.max_price_cents;
     // The renewals auto_renew schedules are charged later, outside a session
     // budget (the per-order limit is covered: a renewal costs the monthly

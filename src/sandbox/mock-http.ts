@@ -1,5 +1,6 @@
 import type { HttpClient, HttpResponse, HttpRequestOpts } from "../client/http.js";
 import type {
+  MeKey,
   MePayload,
   SmsService,
   Verification,
@@ -132,8 +133,10 @@ const GEO: Record<string, { name: string; available_nodes: number; code?: string
 
 // ── state ────────────────────────────────────────────────────────────────────
 
+const START_BALANCE_CENTS = 50000; // $500 play-money balance (sandbox has no deposit tool, so spend-only)
+
 class Store {
-  balanceCents = 50000; // $500 play-money balance (sandbox has no deposit tool, so spend-only)
+  balanceCents = START_BALANCE_CENTS;
   verifications = new Map<string, Verification>();
   messages = new Map<string, VerificationMessage[]>(); // verification id -> SMS, newest first
   rentals = new Map<string, Rental>();
@@ -192,7 +195,16 @@ function makeFlexGateway(): NonNullable<Proxy["gateway"]> {
   };
 }
 
-export function createSandboxHttpClient(): HttpClient {
+export interface SandboxOptions {
+  /**
+   * Overrides for the key block GET /v1/me reports (default: Buy, no limits,
+   * auto-mode off), so tests can try other levels. Informational only: the
+   * mock does not enforce the level or the limits.
+   */
+  key?: Partial<MeKey>;
+}
+
+export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClient {
   const db = new Store();
 
   // One expired long-term rental whose number is still held, so re-renting
@@ -283,6 +295,19 @@ export function createSandboxHttpClient(): HttpClient {
           proxies: { limit: 60, window_seconds: 60 },
           reads: { limit: 60, window_seconds: 60 },
         },
+        key: {
+          id: "key_sandbox",
+          kind: "key",
+          name: "Sandbox",
+          permission: "buy",
+          max_order_cents: null,
+          daily_limit_cents: null,
+          // Net spend: the sandbox only spends and refunds, and lives well under 24h.
+          spent_24h_cents: Math.max(0, START_BALANCE_CENTS - db.balanceCents),
+          auto_mode: false,
+          ...options.key,
+        },
+        deposit_url: "https://dashboard.voidmob.com/wallet",
         created_at: iso(-90 * DAY),
       };
       return ok(me);

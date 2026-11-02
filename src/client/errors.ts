@@ -1,8 +1,76 @@
 import { HttpError, NetworkError, isWriteMethod } from "./http.js";
 import { formatUsd } from "../utils/format.js";
+import { levelLabel } from "../connection.js";
 
 const SETUP_URL = "https://dashboard.voidmob.com/developers/api-keys";
 const WALLET_URL = "https://dashboard.voidmob.com/wallet";
+
+/** Per-server links an error message can point at. */
+export interface ErrorLinks {
+  /** Where the user adds funds (/v1/me deposit_url). */
+  depositUrl: string;
+}
+
+const DEFAULT_LINKS: ErrorLinks = { depositUrl: WALLET_URL };
+
+const centsDetail = (err: HttpError, name: string): number | undefined => {
+  const v = err.details?.[name];
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+};
+
+// The API's own (white-labeled) message. Without one, HttpError's message
+// starts with the code.
+const apiMessage = (err: HttpError): string | undefined =>
+  err.message && !err.message.startsWith(err.code) ? err.message : undefined;
+
+const stringDetail = (err: HttpError, name: string): string | undefined => {
+  const v = err.details?.[name];
+  return typeof v === "string" && v ? v : undefined;
+};
+
+// The API answers a limit refusal from its Idempotency-Key record on a
+// same-key retry; every tool call sends a new key, so calling again is fresh.
+const AFTER_RAISE = "Once the owner raises it, call this tool again: each call is a new request.";
+
+/**
+ * Copy for a purchase refused by the API key's or app connection's per-order
+ * or daily limit: the API's message, the largest order still possible, and
+ * where the owner raises the limit.
+ */
+function keyLimitText(err: HttpError, reqLine: string): string {
+  const limit = centsDetail(err, "limit_cents");
+  const remaining = centsDetail(err, "remaining_cents");
+  const settings = stringDetail(err, "settings_url");
+  const daily = err.code === "DAILY_SPEND_CAP_EXCEEDED";
+  const head = apiMessage(err) ??
+    `This order is over the ${daily ? "daily" : "per-order"} spending limit${limit !== undefined ? ` of ${formatUsd(limit)}` : ""}.`;
+  const parts = [head, "Nothing was charged."];
+  if (remaining !== undefined) {
+    parts.push(
+      remaining > 0
+        ? `The largest order allowed right now is ${formatUsd(remaining)}.`
+        : `No order is allowed right now${daily ? " until earlier purchases are more than 24 hours old" : ""}.`,
+    );
+  }
+  parts.push(
+    `Tell the user; only the account owner can raise the limit${settings ? `, at ${settings}` : ", in the dashboard"}. ${AFTER_RAISE}`,
+  );
+  return `${parts.join(" ")}${reqLine}`;
+}
+
+/** Copy for a call above the key's or connection's permission level. */
+function permissionDeniedText(err: HttpError, reqLine: string): string {
+  const have = levelLabel(err.details?.permission);
+  const need = levelLabel(err.details?.required_permission);
+  const settings = stringDetail(err, "settings_url");
+  const head = have && need
+    ? `This needs ${need} access, and the API key or app connection this server uses has ${have} access.`
+    : apiMessage(err) ?? "The permission level of the API key or app connection this server uses does not allow this action.";
+  return (
+    `${head} Nothing was charged or changed. ` +
+    `Tell the user; only the account owner can change the permission level${settings ? `, at ${settings}` : ", in the dashboard"}.${reqLine}`
+  );
+}
 
 // A write that got no verdict may still have been applied (and charged).
 const UNCERTAIN_WRITE =
@@ -32,7 +100,7 @@ function retryAfterSeconds(err: HttpError): number | undefined {
   return undefined;
 }
 
-export function mapApiError(err: unknown): string {
+export function mapApiError(err: unknown, links: ErrorLinks = DEFAULT_LINKS): string {
   if (err instanceof NetworkError) {
     return isWriteMethod(err.method)
       ? UNCERTAIN_WRITE
@@ -57,7 +125,12 @@ export function mapApiError(err: unknown): string {
       }
       return `Rate limit reached. ${wait ? `Wait ${wait}s before retrying` : "Wait a few seconds before retrying"}${reqLine}`;
     case "INSUFFICIENT_BALANCE":
-      return `Your VoidMob balance is too low for this purchase. Nothing was charged. Ask the account owner to top up at ${WALLET_URL}, then retry${reqLine}`;
+      return `Your VoidMob balance is too low for this purchase. Nothing was charged. Ask the user to add funds at ${links.depositUrl}, then retry${reqLine}`;
+    case "PERMISSION_DENIED":
+      return permissionDeniedText(err, reqLine);
+    case "ORDER_LIMIT_EXCEEDED":
+    case "DAILY_SPEND_CAP_EXCEEDED":
+      return keyLimitText(err, reqLine);
     case "PRICE_OVER_CAP": {
       const max = err.details?.max_price_cents;
       const avail = err.details?.available_price_cents;

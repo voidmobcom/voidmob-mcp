@@ -13,7 +13,8 @@ import { READ_ONLY, SPENDS } from "../utils/annotations.js";
 import { outputObject } from "../utils/output.js";
 import { ProxyId, ProxyListId, ProxyPlanId } from "../constants/ids.js";
 import { MaxPriceCents } from "../constants/price.js";
-import { defineTool, levelAllows, type ToolContext } from "./context.js";
+import { LEVEL_LABEL } from "../connection.js";
+import { defineTool, levelAllows, levelSetAt, type ToolContext } from "./context.js";
 
 /** One plan with the caller's live quote; null when the plan does not exist (or is not sold via the API). */
 async function fetchProxyPlan(ctx: ToolContext, planId: string): Promise<ProxyPlanT | null> {
@@ -119,7 +120,7 @@ const PLAN_TYPE_PARAM = { shared: "shared", dedicated: "dedicated_standard", all
 export const SearchProxiesOutput = outputObject({ proxy_plans: z.array(ProxyPlan), next_cursor: z.string().nullable() });
 
 export const searchProxiesHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: {
+  wrapToolErrors(ctx, async (args: {
     country?: string;
     min_data_gb?: number;
     type?: "shared" | "dedicated" | "all";
@@ -161,7 +162,7 @@ export const searchProxiesHandler = (ctx: ToolContext) =>
 export const ProxyOutput = outputObject({ proxy: Proxy });
 
 export const purchaseProxyHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { plan_id: string; max_price_cents: number }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { plan_id: string; max_price_cents: number }): Promise<ToolResult> => {
     const max = args.max_price_cents;
     const proxy = await withCurrentPrice(
       // The API enforces max_price_cents (PRICE_MISMATCH, nothing charged) and
@@ -198,7 +199,7 @@ export const ProxyStatusOutput = outputObject({
 });
 
 export const getProxyStatusHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { proxy_id: string }): Promise<ToolResult> => {
     // The core GET is the source of truth (and enforces auth/ownership). Usage,
     // the Flex gateway and the top-up estimate are best-effort enrichment:
     // degrade each to null on ANY API/network error so a transient secondary
@@ -311,7 +312,11 @@ export const getProxyStatusHandler = (ctx: ToolContext) =>
     } else if (proxy.type === "dedicated_premium") {
       lines.push(``, `  Gateway:       (Premium proxy credentials are shown in the dashboard)`);
     } else if (needsGateway && !canCreateGateway) {
-      lines.push(``, `  Gateway:       (not set up yet; this server is read-only, so it cannot create the login - use the dashboard or a server without VOIDMOB_READ_ONLY)`);
+      lines.push(
+        ``,
+        `  Gateway:       (not set up yet; creating the login needs Manage access and this server has ${LEVEL_LABEL[ctx.level]} access - ` +
+          `open the proxy in the dashboard, or the account owner can raise the access level ${levelSetAt(ctx)})`,
+      );
     } else {
       lines.push(``, `  Gateway:       (not yet provisioned)`);
     }
@@ -339,7 +344,7 @@ const RotateResult = z.object({ proxy_id: z.string(), rotated_at: z.string(), cu
 export const RotateProxyIpOutput = outputObject(RotateResult.shape);
 
 export const rotateProxyIpHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { proxy_id: string }): Promise<ToolResult> => {
     // No Idempotency-Key: the API does not honor one here (every call must
     // rotate), so this write is also never retried automatically.
     const out = RotateResult.parse(await callApi<unknown>(ctx.http, "POST", path`/v1/proxies/${args.proxy_id}/rotate_ip`));
@@ -352,7 +357,7 @@ export const rotateProxyIpHandler = (ctx: ToolContext) =>
 // ── renew_proxy ─────────────────────────────────────────────────────────────
 
 export const renewProxyHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string; max_price_cents: number }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { proxy_id: string; max_price_cents: number }): Promise<ToolResult> => {
     const max = args.max_price_cents;
     const renewed = await withCurrentPrice(
       // The API enforces max_price_cents (PRICE_MISMATCH, nothing charged).
@@ -405,7 +410,7 @@ export async function setProxyAutoRenew(ctx: ToolContext, proxyId: string, enabl
 // ── topup_proxy ─────────────────────────────────────────────────────────────
 
 export const topupProxyHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string; additional_gb: number; max_price_cents: number }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { proxy_id: string; additional_gb: number; max_price_cents: number }): Promise<ToolResult> => {
     const max = args.max_price_cents;
     const refreshed = await withCurrentPrice(
       // The API prices the top-up itself and enforces max_price_cents
@@ -444,7 +449,7 @@ export const topupProxyHandler = (ctx: ToolContext) =>
 export const RegeneratePasswordOutput = outputObject({ proxy: Proxy.optional(), list: ProxyList.optional() });
 
 export const regenerateProxyPasswordHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string; list_id?: string }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { proxy_id: string; list_id?: string }): Promise<ToolResult> => {
     if (args.list_id) {
       const out = await callApi<{ list: unknown }>(
         ctx.http,
@@ -514,7 +519,7 @@ function geoBody(args: GeoArgs): Record<string, unknown> {
 export const ProxyListOutput = outputObject({ list: ProxyList });
 
 export const createProxyListHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: GeoArgs & {
+  wrapToolErrors(ctx, async (args: GeoArgs & {
     proxy_id: string;
     name: string;
     rotation_period_seconds?: number;
@@ -551,7 +556,7 @@ export const createProxyListHandler = (ctx: ToolContext) =>
   });
 
 export const updateProxyListHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: GeoArgs & {
+  wrapToolErrors(ctx, async (args: GeoArgs & {
     proxy_id: string;
     list_id: string;
     name?: string;
@@ -586,7 +591,7 @@ export const updateProxyListHandler = (ctx: ToolContext) =>
 export const DeleteProxyListOutput = outputObject({ proxy_id: z.string(), list_id: z.string() });
 
 export const deleteProxyListHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string; list_id: string }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { proxy_id: string; list_id: string }): Promise<ToolResult> => {
     await callApi<unknown>(ctx.http, "DELETE", path`/v1/proxies/${args.proxy_id}/lists/${args.list_id}`, {
       idempotencyKey: newIdempotencyKey(),
     });
@@ -664,7 +669,7 @@ export function registerProxyTools(server: McpServer, ctx: ToolContext) {
     outputSchema: ProxyStatusOutput,
     // Not strictly read-only: for an active shared proxy without a gateway it
     // creates the gateway login once (get-or-create, free, idempotent), except
-    // in read-only mode. Hinted read-only so hosts can poll it without a
+    // below Manage access. Hinted read-only so hosts can poll it without a
     // confirmation prompt each time.
     annotations: READ_ONLY,
   }, getProxyStatusHandler(ctx));

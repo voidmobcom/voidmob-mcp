@@ -49,7 +49,7 @@ export const GetGeoOutput = outputObject({
 });
 
 export const getGeoHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { country?: string; region?: string; city?: string }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { country?: string; region?: string; city?: string }): Promise<ToolResult> => {
     const q = new URLSearchParams();
     if (args.country) q.set("country", args.country);
     if (args.region) q.set("region", args.region);

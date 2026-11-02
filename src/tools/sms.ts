@@ -74,7 +74,7 @@ export const SearchSmsServicesOutput = outputObject({
 });
 
 export const searchSmsServicesHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { query?: string }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { query?: string }): Promise<ToolResult> => {
     const query = args.query?.trim();
     const raw = await callApi<unknown>(ctx.http, "GET", query ? `/v1/services?${new URLSearchParams({ q: query })}` : "/v1/services");
     const parsed = ServicesResponse.parse(raw);
@@ -228,7 +228,7 @@ function waitSummary(v: VerificationT, waitedSeconds: number, outcome: WaitOutco
 }
 
 export const getRentalHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { rental_id: string; wait_seconds?: number }, extra?: ToolExtra): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { rental_id: string; wait_seconds?: number }, extra?: ToolExtra): Promise<ToolResult> => {
     const id = args.rental_id;
     const waitSeconds = Math.max(0, Math.min(MAX_WAIT_SECONDS, Math.floor(args.wait_seconds ?? 0)));
     if (isVerificationId(id)) {
@@ -276,7 +276,7 @@ export const getRentalHandler = (ctx: ToolContext) =>
 export const RentNumberOutput = outputObject({ verification: Verification.optional(), rental: Rental.optional() });
 
 export const rentNumberHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: {
+  wrapToolErrors(ctx, async (args: {
     service_id: string;
     kind?: "verification" | "rental";
     duration?: "3d" | "7d" | "14d" | "30d";
@@ -325,7 +325,7 @@ export const rentNumberHandler = (ctx: ToolContext) =>
 export const CancelRentalOutput = outputObject({ verification: VerificationCancelResult.optional(), rental: Rental.optional() });
 
 export const cancelRentalHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { rental_id: string }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { rental_id: string }): Promise<ToolResult> => {
     const id = args.rental_id;
     if (isVerificationId(id)) {
       const out = await callApi<{ verification: unknown }>(ctx.http, "POST", path`/v1/verifications/${id}/cancel`, {
@@ -353,7 +353,7 @@ export const cancelRentalHandler = (ctx: ToolContext) =>
 export const ReuseNumberOutput = outputObject({ verification: Verification });
 
 export const reuseNumberHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { rental_id: string; paid?: boolean; max_price_cents?: number }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { rental_id: string; paid?: boolean; max_price_cents?: number }): Promise<ToolResult> => {
     const id = args.rental_id;
     if (!isVerificationId(id)) {
       return toolError(`reuse_number requires a verification id (${VER_PREFIX}xxx). Got '${id}'.`);
@@ -398,7 +398,7 @@ export const reuseNumberHandler = (ctx: ToolContext) =>
 export const ReRentRentalOutput = outputObject({ rental: Rental });
 
 export const reRentRentalHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { rental_id: string; max_price_cents: number }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { rental_id: string; max_price_cents: number }): Promise<ToolResult> => {
     const id = args.rental_id;
     if (!isRentalId(id)) {
       return toolError(`re_rent_rental requires ${REN_PREFIX}xxx. Got '${id}'.`);
@@ -437,7 +437,7 @@ export const ToggleAutoRenewOutput = outputObject({
 });
 
 export const toggleAutoRenewHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { rental_id: string; auto_renew: boolean }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { rental_id: string; auto_renew: boolean }): Promise<ToolResult> => {
     const id = args.rental_id;
     if (isProxyId(id)) return setProxyAutoRenew(ctx, id, args.auto_renew);
     if (!isDedicatedId(id) && !isRentalId(id)) {
@@ -654,7 +654,8 @@ export function registerSmsTools(server: McpServer, ctx: ToolContext) {
       "Turn auto-renewal on or off for a long-term rental (ren_...), a dedicated number (ded_...) or a Standard dedicated proxy (prx_...). " +
       "When on, each new period is charged to your balance at next_renewal_price_cents; for a number, if that charge fails, auto-renew switches off and the number expires at the end of its period. " +
       "A proxy renews about 12 hours before expiry and expires if it cannot be renewed by then. " +
-      "Turning it off needs Manage permission; turning it on needs Buy permission and is otherwise refused with PERMISSION_DENIED. Ask the user before turning it on.",
+      "Turning it off needs Manage access. Turning it on needs Buy access and is otherwise refused with PERMISSION_DENIED; " +
+      "an app connection can never turn it on (the account owner does that in the dashboard). Ask the user before turning it on.",
     inputSchema: {
       rental_id: AutoRenewId.describe("ren_..., ded_... or prx_... id"),
       auto_renew: z.boolean(),

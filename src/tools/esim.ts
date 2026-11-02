@@ -19,7 +19,7 @@ import { defineTool, type ToolContext } from "./context.js";
 export const SearchEsimPlansOutput = outputObject({ esim_plans: z.array(EsimProduct), next_cursor: z.string().nullable() });
 
 export const searchEsimPlansHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: {
+  wrapToolErrors(ctx, async (args: {
     country?: string;
     min_data_gb?: number;
     min_days?: number;
@@ -99,7 +99,7 @@ function installLines(esim: EsimT): string[] {
 export const EsimOrderOutput = outputObject({ esim: Esim });
 
 export const purchaseEsimHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { plan_id: string; max_price_cents: number }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { plan_id: string; max_price_cents: number }): Promise<ToolResult> => {
     const max = args.max_price_cents;
     // The API enforces max_price_cents: above it, PRICE_OVER_CAP and no charge.
     const esim = await ctx.guard.run(max, async () => {
@@ -174,7 +174,7 @@ async function readQr(ctx: ToolContext, esim: EsimT): Promise<{ base64: string }
 }
 
 export const getEsimStatusHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { esim_id: string; include_qr?: boolean }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { esim_id: string; include_qr?: boolean }): Promise<ToolResult> => {
     // Usage is best-effort enrichment on a read path: degrade to null on ANY
     // API/network error so a transient usage-subservice failure never sinks the
     // core eSIM status read. Non-API throws (bugs) still propagate.
@@ -212,7 +212,7 @@ export const getEsimStatusHandler = (ctx: ToolContext) =>
 export const TopupEsimOutput = outputObject({ topups: z.array(EsimProduct).optional(), esim: Esim.optional() });
 
 export const topupEsimHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { esim_id: string; topup_product_id?: string; max_price_cents?: number }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { esim_id: string; topup_product_id?: string; max_price_cents?: number }): Promise<ToolResult> => {
     if (!args.topup_product_id) {
       // Browse path
       const out = await callApi<{ supports_topup: boolean; topups: unknown[] }>(

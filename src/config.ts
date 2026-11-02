@@ -17,6 +17,11 @@ export interface OwnerControls {
   maxOrderCents: number | null;
   /** Running spend cap for this server process (cents). */
   budgetCents: number | null;
+  /**
+   * Auto-mode: the instructions let the agent buy without asking, within the
+   * limits. Needs VOIDMOB_BUDGET_CENTS or a daily limit on the API key.
+   */
+  autonomous: boolean;
   /** Tool groups to register. */
   toolsets: ReadonlySet<Toolset>;
 }
@@ -25,6 +30,7 @@ export const DEFAULT_CONTROLS: OwnerControls = {
   readOnly: false,
   maxOrderCents: null,
   budgetCents: null,
+  autonomous: false,
   toolsets: new Set(TOOLSETS),
 };
 
@@ -111,8 +117,23 @@ export function parseControls(env: Record<string, string | undefined>): OwnerCon
     readOnly: parseFlag(env, "VOIDMOB_READ_ONLY"),
     maxOrderCents: parseCents(env, "VOIDMOB_MAX_ORDER_CENTS"),
     budgetCents: parseCents(env, "VOIDMOB_BUDGET_CENTS"),
+    autonomous: parseFlag(env, "VOIDMOB_AUTONOMOUS"),
     toolsets: parseToolsets(env),
   };
+}
+
+/**
+ * VOIDMOB_AUTONOMOUS=1 lets the agent buy without asking, so it needs a
+ * spending limit: VOIDMOB_BUDGET_CENTS, or a daily limit on the API key
+ * (`keyDailyLimitCents`, from /v1/me; null when the key has none or there is
+ * no key).
+ */
+export function assertAutonomousLimit(controls: OwnerControls, keyDailyLimitCents: number | null, hasKey: boolean): void {
+  if (!controls.autonomous || controls.budgetCents !== null || keyDailyLimitCents !== null) return;
+  throw new ConfigError(
+    `VOIDMOB_AUTONOMOUS=1 needs a spending limit: set VOIDMOB_BUDGET_CENTS (e.g. 5000 for $50.00)` +
+    (hasKey ? `, or give this API key a daily limit at ${SETUP_URL}` : ``) + `.`,
+  );
 }
 
 export function parseEnv(env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env): Config {
@@ -123,6 +144,8 @@ export function parseEnv(env: NodeJS.ProcessEnv | Record<string, string | undefi
   const controls = parseControls(env);
 
   if (sandbox) {
+    // The sandbox key has no daily limit.
+    assertAutonomousLimit(controls, null, false);
     return { sandbox: true, apiKey: null, baseUrl, debug, controls };
   }
 
@@ -130,6 +153,7 @@ export function parseEnv(env: NodeJS.ProcessEnv | Record<string, string | undefi
   // "unconfigured" mode (tools listed, every call returns setup instructions)
   // so MCP clients and registry crawlers can enumerate the tool surface.
   if (!rawKey) {
+    assertAutonomousLimit(controls, null, false);
     return { sandbox: false, apiKey: null, baseUrl, debug, controls };
   }
 

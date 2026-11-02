@@ -1,7 +1,7 @@
 import { ZodError } from "zod";
 import type { ServerContext } from "@modelcontextprotocol/server";
 import { HttpError, NetworkError } from "../client/http.js";
-import { mapApiError } from "../client/errors.js";
+import { mapApiError, type ErrorLinks } from "../client/errors.js";
 import { ToolRefusal } from "../controls/spend-guard.js";
 
 /** The per-request context the SDK hands a tool (ctx.mcpReq: abort signal, progress token, notifications). */
@@ -83,7 +83,8 @@ export function renderMessages(messages: SmsLike[]): string[] {
  * Wrap a tool handler so error surfaces become clean, white-labeled tool
  * results instead of opaque protocol crashes:
  *  - ToolRefusal (a limit or price check this server applied) -> its text.
- *  - HttpError / NetworkError -> agent-readable text via mapApiError.
+ *  - HttpError / NetworkError -> agent-readable text via mapApiError, with
+ *    this server's links (the deposit page).
  *  - ZodError (response shape we can't parse) -> a generic message that leaks
  *    no schema internals. The detail is logged to stderr only. We deliberately
  *    do NOT tell the caller to blindly retry: a money operation may have
@@ -92,6 +93,7 @@ export function renderMessages(messages: SmsLike[]): string[] {
  *  - Anything else still propagates.
  */
 export function wrapToolErrors<A, R extends ToolResult>(
+  links: ErrorLinks,
   fn: (args: A, extra?: ToolExtra) => Promise<R>,
 ): (args: A, extra?: ToolExtra) => Promise<R | ToolResult> {
   return async (args: A, extra?: ToolExtra) => {
@@ -100,7 +102,7 @@ export function wrapToolErrors<A, R extends ToolResult>(
     } catch (e) {
       if (e instanceof ToolRefusal) return toolError(e.message);
       if (e instanceof HttpError || e instanceof NetworkError) {
-        return toolError(mapApiError(e));
+        return toolError(mapApiError(e, links));
       }
       if (e instanceof ZodError) {
         process.stderr.write(`[voidmob-mcp] response schema mismatch: ${e.message}\n`);

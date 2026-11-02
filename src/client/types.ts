@@ -7,6 +7,20 @@ export const SuccessEnvelope = <T extends z.ZodTypeAny>(inner: T) =>
 
 // ── /v1/me ──────────────────────────────────────────────────────────────────
 
+// The API key or app connection that made the request: its permission level,
+// spending limits (null = no limit), spend in the last 24h and auto-mode.
+export const MeKey = z.object({
+  id: z.string(),
+  kind: z.enum(["key", "oauth"]),
+  name: z.string(),
+  permission: z.enum(["view", "manage", "buy"]),
+  max_order_cents: z.number().int().nullable(),
+  daily_limit_cents: z.number().int().nullable(),
+  spent_24h_cents: z.number().int(),
+  auto_mode: z.boolean(),
+});
+export type MeKey = z.infer<typeof MeKey>;
+
 export const MePayload = z.object({
   id: z.string(),
   balance: z.object({
@@ -18,6 +32,10 @@ export const MePayload = z.object({
     z.string(),
     z.object({ limit: z.number(), window_seconds: z.number() }),
   ),
+  // Optional so an API without them still parses: the server then falls back
+  // to the local controls.
+  key: MeKey.optional(),
+  deposit_url: z.string().optional(),
   created_at: z.string(),
 });
 export type MePayload = z.infer<typeof MePayload>;

@@ -393,7 +393,11 @@ describe("get_proxy_status", () => {
     expect(res.structuredContent?.topup_estimate_per_gb_cents).toBeNull();
   });
 
-  it("read-only mode never creates the gateway login (no POST) and says why", async () => {
+  it.each([
+    ["VOIDMOB_READ_ONLY", { readOnly: true }, null, "in this MCP server's configuration (VOIDMOB_READ_ONLY)"],
+    ["a View key", {}, { permission: "view" as const, autoMode: false, maxOrderCents: null, dailyLimitCents: null },
+      "at https://dashboard.voidmob.com/developers/api-keys"],
+  ])("below Manage (%s) it never creates the gateway login (no POST) and says why", async (_why, controls, connection, where) => {
     const http = createMockHttpClient();
     http.expect("GET", "/v1/proxies/proxy_xyz", {
       status: 200,
@@ -402,10 +406,11 @@ describe("get_proxy_status", () => {
     });
     http.expect("GET", "/v1/proxies/proxy_xyz/usage", usageOk);
     http.expect("GET", "/v1/proxy_plans/proxy_plan_us_shared_5gb", planOk());
-    const res = await getProxyStatusHandler(toolContext(http, { readOnly: true }))({ proxy_id: "proxy_xyz" });
+    const res = await getProxyStatusHandler(toolContext(http, controls, connection))({ proxy_id: "proxy_xyz" });
     expect(res.isError).toBeFalsy();
     expect(http.history.every((h) => h.method === "GET")).toBe(true);
-    expect(textOf(res)).toContain("read-only");
+    expect(textOf(res)).toContain("creating the login needs Manage access and this server has View access");
+    expect(textOf(res)).toContain(where);
   });
 });
 

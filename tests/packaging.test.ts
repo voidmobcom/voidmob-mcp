@@ -17,7 +17,7 @@ const pkg = json("package.json");
 // Every env var src/config.ts reads.
 const ENV_VARS = [
   "VOIDMOB_API_KEY", "VOIDMOB_SANDBOX", "VOIDMOB_READ_ONLY", "VOIDMOB_MAX_ORDER_CENTS",
-  "VOIDMOB_BUDGET_CENTS", "VOIDMOB_TOOLSETS", "VOIDMOB_BASE_URL", "VOIDMOB_DEBUG",
+  "VOIDMOB_BUDGET_CENTS", "VOIDMOB_AUTONOMOUS", "VOIDMOB_TOOLSETS", "VOIDMOB_BASE_URL", "VOIDMOB_DEBUG",
 ];
 
 describe("manifest.json (Claude Desktop bundle)", () => {

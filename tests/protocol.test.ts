@@ -128,10 +128,11 @@ describe("owner controls (sandbox behaves like live)", () => {
     expect(names).toHaveLength(10);
     for (const w of WRITE_TOOLS) expect(names).not.toContain(w);
     expect(client.getServerCapabilities()?.prompts).toBeUndefined();
-    expect(client.getInstructions()).toContain("read-only");
+    expect(client.getInstructions()).toContain("This server has View access");
+    expect(client.getInstructions()).toContain("VOIDMOB_READ_ONLY");
     const acct = await client.callTool({ name: "get_account", arguments: {} });
-    expect(sc(acct).owner_limits).toMatchObject({ read_only: true });
-    expect(text(acct)).toContain("Read-only:");
+    expect(sc(acct).access).toMatchObject({ permission: "view", auto_mode: false });
+    expect(text(acct)).toContain("Access:          View (VOIDMOB_READ_ONLY");
   });
 
   it("toolsets: only the chosen groups plus account, orders and geo", async () => {

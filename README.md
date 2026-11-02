@@ -199,6 +199,7 @@ Optional safety settings for the person who installs the server. They apply in l
 | `VOIDMOB_READ_ONLY=1` | Tools that spend money or change anything are not registered at all. The agent can search prices and read orders, nothing else. |
 | `VOIDMOB_MAX_ORDER_CENTS=2500` | Refuses, before any request, a purchase, renewal, top-up or paid reuse whose `max_price_cents` is above this (here $25). Turning auto-renew on is refused when one renewal would cost more. |
 | `VOIDMOB_BUDGET_CENTS=5000` | Running spend cap for this server process (here $50). The server counts what each purchase charged; when an outcome is unclear (a dropped connection, a purchase still in flight) it counts the full `max_price_cents`. A purchase that could go over is refused, and auto-renew cannot be turned on (renewals are charged later, outside the session). **This is a per-session safety net, not an account limit:** it resets when the server restarts and does not see purchases made elsewhere. |
+| `VOIDMOB_AUTONOMOUS=1` | Auto-mode: the server instructions let the agent buy without asking first, within the limits, and tell it to report every purchase. It needs `VOIDMOB_BUDGET_CENTS` or a daily limit on the API key; without either the server stops with a config error. It changes only the instructions: every limit still applies. |
 | `VOIDMOB_TOOLSETS=sms,esim` | Loads only these tool groups, so the agent carries less context: `sms`, `numbers` (dedicated numbers), `esim`, `proxy`. Account, order and geo tools are always on. |
 
 `get_account` shows the limits in force and how much of the budget is left. A malformed value stops the server with an error instead of being ignored.
@@ -217,7 +218,7 @@ Prompts (slash commands in clients that support them), each with a confirm-the-p
 - `setup_mobile_proxy` (country, usage): pick and buy a mobile proxy and get connection details.
 - `buy_travel_esim` (destination, days, data_gb): find, buy and install a travel eSIM.
 
-Read-only servers offer no prompts, and `VOIDMOB_TOOLSETS` keeps only the prompts of the loaded groups.
+Servers below Buy access (`VOIDMOB_READ_ONLY`, or an API key set to View or Manage) offer no prompts, and `VOIDMOB_TOOLSETS` keeps only the prompts of the loaded groups.
 
 ## Try without a key (sandbox)
 
@@ -263,6 +264,7 @@ On Hermes, also list the key under `terminal.env_passthrough` in `~/.hermes/conf
 | `VOIDMOB_READ_ONLY` | `1` = no tools that spend or change anything ([owner controls](#owner-controls)) | No |
 | `VOIDMOB_MAX_ORDER_CENTS` | Per-order limit in US cents | No |
 | `VOIDMOB_BUDGET_CENTS` | Per-session spend cap in US cents | No |
+| `VOIDMOB_AUTONOMOUS` | `1` = the agent may buy without asking, within the limits; needs `VOIDMOB_BUDGET_CENTS` or a daily limit on the key ([owner controls](#owner-controls)) | No |
 | `VOIDMOB_TOOLSETS` | Tool groups to load: `sms`, `numbers`, `esim`, `proxy` (default: all) | No |
 | `VOIDMOB_DEBUG` | Set to `1` to log requests to stderr | No |
 | `VOIDMOB_BASE_URL` | Override API host (advanced; must be `https://`, plain `http://` only for localhost) | No |

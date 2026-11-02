@@ -2,14 +2,11 @@ import type { McpServer, ToolAnnotations } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { HttpClient } from "../client/http.js";
 import { DEFAULT_CONTROLS, type OwnerControls, type Toolset } from "../config.js";
+import { depositUrlFor, settingsUrlFor, type Connection, type PermissionLevel } from "../connection.js";
 import { SpendGuard } from "../controls/spend-guard.js";
 import type { ToolExtra, ToolResult } from "../utils/render.js";
 
-/**
- * What an action needs on the API key: view (reads), manage (changes that do
- * not spend) or buy (every charge). The API enforces the same levels.
- */
-export type PermissionLevel = "view" | "manage" | "buy";
+export type { PermissionLevel } from "../connection.js";
 
 const RANK: Record<PermissionLevel, number> = { view: 0, manage: 1, buy: 2 };
 
@@ -18,27 +15,62 @@ export function levelAllows(have: PermissionLevel, need: PermissionLevel): boole
   return RANK[have] >= RANK[need];
 }
 
-/** Everything a tool needs: the API client plus the owner's controls. */
+/** Everything a tool needs: the API client, the owner's controls and the key's settings. */
 export interface ToolContext {
   http: HttpClient;
   guard: SpendGuard;
-  /** The highest level this server acts at; VOIDMOB_READ_ONLY=1 means view. */
+  /**
+   * The highest level this server acts at: the lower of the API key's or app
+   * connection's permission and the local controls (VOIDMOB_READ_ONLY=1 means view).
+   */
   level: PermissionLevel;
   toolsets: ReadonlySet<Toolset>;
+  /** The key's or app connection's settings from /v1/me, or null when unknown. */
+  connection: Connection | null;
+  /** VOIDMOB_READ_ONLY=1: the owner lowered this server to View in its configuration. */
+  localReadOnly: boolean;
+  /** VOIDMOB_AUTONOMOUS=1, accepted because a limit is set (session budget or the key's daily limit). */
+  localAutoMode: boolean;
+  /** Auto-mode in force (the key's or connection's, or the local flag): only the instructions change. */
+  autoMode: boolean;
+  /** Where the user adds funds. */
+  depositUrl: string;
+  /** Where the account owner changes the key's or connection's permission and limits. */
+  settingsUrl: string;
 }
 
-export function createToolContext(http: HttpClient, controls: OwnerControls = DEFAULT_CONTROLS): ToolContext {
+export function createToolContext(
+  http: HttpClient,
+  controls: OwnerControls = DEFAULT_CONTROLS,
+  connection: Connection | null = null,
+): ToolContext {
+  const keyDailyLimit = connection?.dailyLimitCents ?? null;
+  const localAutoMode = controls.autonomous && (controls.budgetCents !== null || keyDailyLimit !== null);
   return {
     http,
     guard: new SpendGuard({ maxOrderCents: controls.maxOrderCents, budgetCents: controls.budgetCents }),
-    level: controls.readOnly ? "view" : "buy",
+    // VOIDMOB_READ_ONLY is View, the lowest level, so it always wins.
+    level: controls.readOnly ? "view" : connection?.permission ?? "buy",
     toolsets: controls.toolsets,
+    connection,
+    localReadOnly: controls.readOnly,
+    localAutoMode,
+    autoMode: connection?.autoMode === true || localAutoMode,
+    depositUrl: depositUrlFor(connection),
+    settingsUrl: settingsUrlFor(connection),
   };
 }
 
 /** A context with no limits, for handler-level tests and callers that do not need controls. */
-export function toolContext(http: HttpClient, controls: Partial<OwnerControls> = {}): ToolContext {
-  return createToolContext(http, { ...DEFAULT_CONTROLS, ...controls });
+export function toolContext(http: HttpClient, controls: Partial<OwnerControls> = {}, connection: Connection | null = null): ToolContext {
+  return createToolContext(http, { ...DEFAULT_CONTROLS, ...controls }, connection);
+}
+
+/** Where the server's level is set: this server's configuration, or the key's settings page. */
+export function levelSetAt(ctx: ToolContext): string {
+  return ctx.localReadOnly
+    ? "in this MCP server's configuration (VOIDMOB_READ_ONLY)"
+    : `at ${ctx.settingsUrl}`;
 }
 
 export interface ToolSpec {
