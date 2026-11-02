@@ -7,12 +7,18 @@
     "url": "https://github.com/voidmobcom/voidmob-mcp",
     "source": "github"
   },
-  "version": "1.2.1",
+  "version": "2.0.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.voidmob.com/mcp"
+    }
+  ],
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@voidmob/mcp",
-      "version": "1.2.1",
+      "version": "2.0.0",
       "transport": {
         "type": "stdio"
       },
@@ -51,11 +57,19 @@
         },
         {
           "name": "VOIDMOB_BUDGET_CENTS",
-          "description": "Spend cap in US cents for this server process (a per-session safety net, not an account limit); purchases that would exceed it, and turning on auto-renew, are refused.",
+          "description": "Spending limit in US cents for this server process (a per-session safety net, not an account limit); purchases that would exceed it, and turning on auto-renew, are refused.",
           "isRequired": false,
           "isSecret": false,
           "format": "number",
           "placeholder": "5000"
+        },
+        {
+          "name": "VOIDMOB_AUTONOMOUS",
+          "description": "Set to 1 to let the agent buy without asking first, within the limits. Needs VOIDMOB_BUDGET_CENTS or a daily limit on the API key; every limit still applies.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "boolean",
+          "placeholder": "1"
         },
         {
           "name": "VOIDMOB_TOOLSETS",

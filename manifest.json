@@ -3,9 +3,9 @@
   "manifest_version": "0.3",
   "name": "voidmob-mcp",
   "display_name": "VoidMob",
-  "version": "1.2.1",
+  "version": "2.0.0",
   "description": "Non-VoIP SMS verification numbers, dedicated numbers, travel eSIMs and 4G/5G mobile proxies, paid from a prepaid VoidMob balance.",
-  "long_description": "Lets Claude search, price and buy VoidMob services from your prepaid USD balance: US non-VoIP numbers for SMS verification codes (refunded automatically when no SMS arrives), long-term rentals and private dedicated numbers, eSIM data plans for travel, and shared or dedicated 4G/5G mobile proxies with HTTP and SOCKS5 access.\n\nEvery purchase needs the price Claude showed you (max_price_cents), so nothing is bought at a price you did not see. Optional safety settings: read-only mode, a per-order limit and a spending budget for each session. Turn on sandbox mode to try every flow with mock data and no key.\n\nCreate an API key at https://dashboard.voidmob.com/developers/api-keys and fund the balance with crypto in the dashboard.",
+  "long_description": "Lets Claude search, price and buy VoidMob services from your prepaid USD balance: US non-VoIP numbers for SMS verification codes (refunded automatically when no SMS arrives), long-term rentals and private dedicated numbers, eSIM data plans for travel, and shared or dedicated 4G/5G mobile proxies with HTTP and SOCKS5 access.\n\nEvery purchase needs the price Claude showed you (max_price_cents), so nothing is bought at a price you did not see. Optional safety settings: read-only mode, a per-order limit, a spending budget for each session and a \"buy without asking\" mode (which needs a limit). Turn on sandbox mode to try every flow with mock data and no key.\n\nCreate an API key at https://dashboard.voidmob.com/developers/api-keys and fund the balance with crypto in the dashboard.",
   "author": {
     "name": "VoidMob",
     "url": "https://voidmob.com"
@@ -30,7 +30,8 @@
         "VOIDMOB_SANDBOX": "${user_config.sandbox}",
         "VOIDMOB_READ_ONLY": "${user_config.read_only}",
         "VOIDMOB_MAX_ORDER_CENTS": "${user_config.max_order_cents}",
-        "VOIDMOB_BUDGET_CENTS": "${user_config.budget_cents}"
+        "VOIDMOB_BUDGET_CENTS": "${user_config.budget_cents}",
+        "VOIDMOB_AUTONOMOUS": "${user_config.autonomous}"
       }
     }
   },
@@ -204,6 +205,13 @@
       "description": "Stop buying once this much was spent since Claude started the server, in whole US cents (5000 = $50.00). Also keeps auto-renew off. A safety net, not an account limit. Leave empty for no budget.",
       "required": false,
       "min": 0
+    },
+    "autonomous": {
+      "type": "boolean",
+      "title": "Buy without asking",
+      "description": "Let Claude buy without asking first, within your limits; it still tells you about every purchase. Needs a session budget above or a daily limit on the API key, otherwise the server will not start.",
+      "required": false,
+      "default": false
     }
   }
 }

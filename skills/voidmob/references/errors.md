@@ -12,12 +12,14 @@ Every error is `{"success": false, "error": {"code", "message", "request_id", "d
 
 | Code | HTTP | Meaning | Next step |
 |---|---|---|---|
-| `UNAUTHENTICATED` | 401 | Key missing, malformed, unknown or revoked | Stop. Ask the user to check `VOIDMOB_API_KEY`. Retrying the same key never helps. |
+| `UNAUTHENTICATED` | 401 | Key missing, malformed, unknown or revoked, or an app connection that was disconnected | Stop. Ask the user to check `VOIDMOB_API_KEY`, or to reconnect the app. Retrying the same credential never helps. |
+| `PERMISSION_DENIED` | 403 | Key or app connection is below the permission level the call needs (`details.permission`, `details.required_permission`), or an app connection tried something connections can never do (`details.reason` `connection_not_allowed`) | Nothing was charged or changed. Tell the user; only the owner raises the level, at `details.settings_url`. For `connection_not_allowed`, use the dashboard or an API key. |
 | `IP_NOT_ALLOWED` | 403 | Key is limited to other source IPs | Call from an allowed IP, or the user asks support to change the allowlist. |
 | `FORBIDDEN` | 403 | Account restricted, or too many open verifications | If the message is about open verifications, wait for one to finish or complete it. Otherwise the user contacts support. |
 | `RATE_LIMITED` | 429 | Per-minute limit hit, or a rotate_ip cooldown | Wait `Retry-After` seconds plus a little jitter. Ignoring 429s pauses the whole account for 10-60 minutes. |
 | `VALIDATION_ERROR` | 400 | Bad body or header (often a missing `Idempotency-Key`) | Fix what `message` names and resend. |
 | `INSUFFICIENT_BALANCE` | 402 | Balance below the price | Stop. Tell the user the price and balance; they top up at https://dashboard.voidmob.com/wallet. Then a new key. |
+| `ORDER_LIMIT_EXCEEDED`, `DAILY_SPEND_CAP_EXCEEDED` | 402 | Over the owner's per-order limit, or the daily limit over a rolling 24 hours, net of refunds | Nothing was charged. `details.limit_cents` and `details.remaining_cents` say how much is allowed; `details.settings_url` is where the owner raises it. Retry only after a raise, with a new key. |
 | `PRICE_OVER_CAP` | 409 | Live price above `max_price_cents` (SMS, rentals, numbers, eSIM) | `details.available_price_cents` is the current price. Show it, ask again, retry with a new key. Nothing was charged. |
 | `PRICE_MISMATCH` | 409 | Proxy price above `max_price_cents` | Re-read the plan or `next_renewal_price_cents`, ask again, new key. Nothing was charged. |
 | `SERVICE_OUT_OF_STOCK` | 503 | No stock | `details.reason`: `no_stock` = try in a minute or two, or another option; `throttled` = wait `details.retry_after_seconds`. Dedicated proxy or number: pick another plan or country. |
