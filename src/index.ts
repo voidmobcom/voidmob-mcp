@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { parseEnv, ConfigError } from "./config.js";
 import { buildLiveServer } from "./modes/live.js";
 import { buildSandboxServer } from "./modes/sandbox.js";
@@ -17,20 +17,21 @@ async function main() {
     throw e;
   }
 
-  let server;
+  let build;
   if (cfg.sandbox) {
-    server = buildSandboxServer(cfg.controls);
+    build = () => buildSandboxServer(cfg.controls);
   } else if (cfg.apiKey) {
-    server = buildLiveServer(cfg);
+    build = () => buildLiveServer(cfg);
   } else {
     process.stderr.write(
       `[voidmob-mcp] no VOIDMOB_API_KEY set - tools are listed but every call will fail. ` +
       `Set VOIDMOB_API_KEY=vmk_live_... or VOIDMOB_SANDBOX=1 for mock data.\n`,
     );
-    server = buildUnconfiguredServer(cfg.controls);
+    build = () => buildUnconfiguredServer(cfg.controls);
   }
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // serveStdio builds the server on the connection's first message and serves
+  // both 2025-era (initialize) and 2026-07-28 (server/discover) clients.
+  serveStdio(build);
 }
 
 main().catch((err) => {

@@ -1,6 +1,5 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
-import type { z } from "zod";
+import type { McpServer, ToolAnnotations } from "@modelcontextprotocol/server";
+import { z } from "zod";
 import type { HttpClient } from "../client/http.js";
 import { DEFAULT_CONTROLS, type OwnerControls, type Toolset } from "../config.js";
 import { SpendGuard } from "../controls/spend-guard.js";
@@ -56,7 +55,7 @@ export function defineTool(server: McpServer, ctx: ToolContext, name: string, sp
     {
       title: spec.title,
       description: spec.description,
-      inputSchema: spec.inputSchema,
+      inputSchema: z.object(spec.inputSchema),
       // The SDK types outputSchema as an object schema; every VoidMob output
       // schema is a loose zod object (see utils/output.ts).
       outputSchema: spec.outputSchema as never,

@@ -8,12 +8,11 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { HttpClient } from "../src/client/http.js";
 import { createSandboxHttpClient, READY_AFTER_MS } from "../src/sandbox/mock-http.js";
 import { createVoidmobServer } from "../src/server.js";
 import { LIST_FORMATS } from "../src/tools/proxy.js";
+import { connect } from "./connect.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -118,9 +117,7 @@ describe("contract: every request the tools make", () => {
         return sandbox.request(method, path, opts);
       },
     };
-    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: "contract", version: "0" });
-    await Promise.all([createVoidmobServer(http).connect(serverSide), client.connect(clientSide)]);
+    const client = await connect(createVoidmobServer(http), "contract");
     const call = async (name: string, args: Record<string, unknown> = {}) =>
       (await client.callTool({ name, arguments: args })).structuredContent as Record<string, any>;
 

@@ -1,4 +1,4 @@
-import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import type { ToolAnnotations } from "@modelcontextprotocol/server";
 
 // Explicit hint booleans on every tool so hosts can auto-approve reads and ask
 // for confirmation on anything that spends or releases something.

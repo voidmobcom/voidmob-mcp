@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { HttpError, type HttpClient } from "../client/http.js";
 import { DEFAULT_CONTROLS, type OwnerControls } from "../config.js";
 import { createVoidmobServer } from "../server.js";

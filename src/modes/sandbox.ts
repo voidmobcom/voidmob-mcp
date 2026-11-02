@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { DEFAULT_CONTROLS, type OwnerControls } from "../config.js";
 import { createSandboxHttpClient } from "../sandbox/mock-http.js";
 import { createVoidmobServer } from "../server.js";

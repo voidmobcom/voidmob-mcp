@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { HttpError, NetworkError } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
@@ -149,7 +149,7 @@ async function waitForSms(
 ): Promise<{ v: VerificationT; waitedSeconds: number; outcome: WaitOutcome }> {
   const started = Date.now();
   const deadline = started + waitSeconds * 1000;
-  const progressToken = extra?._meta?.progressToken;
+  const progressToken = extra?.mcpReq._meta?.progressToken;
   let v = first;
   let step = 0;
   let outcome: WaitOutcome = "wait_ended";
@@ -166,8 +166,8 @@ async function waitForSms(
     if (progressToken !== undefined && extra) {
       // Unrounded, so it strictly increases even when a sleep is shortened.
       const waited = (now - started) / 1000;
-      await extra
-        .sendNotification({
+      await extra.mcpReq
+        .notify({
           method: "notifications/progress",
           params: {
             progressToken,
@@ -178,7 +178,7 @@ async function waitForSms(
         })
         .catch(() => undefined);
     }
-    if (!(await sleep(delay, extra?.signal))) {
+    if (!(await sleep(delay, extra?.mcpReq.signal))) {
       outcome = "cancelled_by_client";
       break;
     }

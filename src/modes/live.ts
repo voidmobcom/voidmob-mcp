@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { Config } from "../config.js";
 import { createHttpClient } from "../client/http.js";
 import { createVoidmobServer, VERSION } from "../server.js";

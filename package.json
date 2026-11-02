@@ -53,11 +53,12 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/server": "^2.4.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@anthropic-ai/mcpb": "2.1.2",
+    "@modelcontextprotocol/client": "^2.4.0",
     "@types/node": "^25.9.5",
     "typescript": "^6.0.2",
     "vitest": "^4.1.11"

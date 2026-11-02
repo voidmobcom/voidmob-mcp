@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { ToolContext } from "./tools/context.js";
 
@@ -22,7 +22,7 @@ export function registerPrompts(server: McpServer, ctx: ToolContext): void {
       {
         title: "Get an SMS verification code",
         description: "Rent a US non-VoIP number for one service and wait for the SMS code.",
-        argsSchema: { service: z.string().describe("The app or site that sends the code, e.g. Telegram") },
+        argsSchema: z.object({ service: z.string().describe("The app or site that sends the code, e.g. Telegram") }),
       },
       ({ service }) =>
         user(
@@ -45,10 +45,10 @@ export function registerPrompts(server: McpServer, ctx: ToolContext): void {
       {
         title: "Set up a mobile proxy in a country",
         description: "Pick and buy a 4G/5G mobile proxy plan for a country and get ready-to-use connection details.",
-        argsSchema: {
+        argsSchema: z.object({
           country: z.string().describe("Exit country, 2-letter ISO code (e.g. US, GB, DE)"),
           usage: z.string().optional().describe("What it is for, e.g. 'rotating IP per request' or 'sticky IP for 10 minutes'"),
-        },
+        }),
       },
       ({ country, usage }) =>
         user(
@@ -71,11 +71,11 @@ export function registerPrompts(server: McpServer, ctx: ToolContext): void {
       {
         title: "Buy a travel eSIM",
         description: "Find and buy an eSIM data plan for a destination and get the install details.",
-        argsSchema: {
+        argsSchema: z.object({
           destination: z.string().describe("Country (2-letter ISO code such as JP) or region (e.g. Europe)"),
           days: z.string().optional().describe("Trip length in days"),
           data_gb: z.string().optional().describe("Data needed in GB"),
-        },
+        }),
       },
       ({ destination, days, data_gb }) =>
         user(

@@ -3,21 +3,13 @@
 // owner controls shape the tool list and refuse spending, and the guides and
 // prompts are served.
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Client } from "@modelcontextprotocol/client";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
 import { buildSandboxServer } from "../src/modes/sandbox.js";
 import { buildLiveServer } from "../src/modes/live.js";
 import { DEFAULT_CONTROLS, parseControls, type OwnerControls } from "../src/config.js";
 import { READY_AFTER_MS } from "../src/sandbox/mock-http.js";
-
-async function connect(server: McpServer) {
-  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test", version: "0.0.0" });
-  await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
-  return client;
-}
+import { connect } from "./connect.js";
 
 const sandbox = (controls: Partial<OwnerControls> = {}) => connect(buildSandboxServer({ ...DEFAULT_CONTROLS, ...controls }));
 type Result = Awaited<ReturnType<Client["callTool"]>>;

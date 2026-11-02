@@ -4,23 +4,15 @@
 // "provider". Runs against live (fetch stubbed to throw), sandbox and
 // unconfigured servers so all three stay consistent.
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { buildLiveServer } from "../src/modes/live.js";
 import { buildSandboxServer } from "../src/modes/sandbox.js";
 import { buildUnconfiguredServer } from "../src/modes/unconfigured.js";
 import { DEFAULT_CONTROLS } from "../src/config.js";
+import { connect } from "./connect.js";
 
 const FORBIDDEN =
   /provider|coronium|cyber ?yozh|infatica|pva ?deals|hero-?sms|sms-?man|text ?verified|quackr|mobimatter|esim ?go|plisio/i;
-
-async function connect(server: McpServer) {
-  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test", version: "0.0.0" });
-  await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
-  return client;
-}
 
 const modes: Array<[string, () => McpServer]> = [
   ["live", () => buildLiveServer({ sandbox: false, apiKey: "vmk_live_" + "a".repeat(32), baseUrl: "https://x", debug: false, controls: DEFAULT_CONTROLS })],

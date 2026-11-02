@@ -1,12 +1,11 @@
 import { ZodError } from "zod";
-import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
+import type { ServerContext } from "@modelcontextprotocol/server";
 import { HttpError, NetworkError } from "../client/http.js";
 import { mapApiError } from "../client/errors.js";
 import { ToolRefusal } from "../controls/spend-guard.js";
 
-/** The per-request context the SDK hands a tool (abort signal, progress token, notifications). */
-export type ToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
+/** The per-request context the SDK hands a tool (ctx.mcpReq: abort signal, progress token, notifications). */
+export type ToolExtra = ServerContext;
 
 export interface ToolResult {
   // SDK CallToolResult includes a string index signature; mirroring it here lets

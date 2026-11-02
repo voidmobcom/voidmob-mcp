@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSandboxServer } from "../src/modes/sandbox.js";
+import { toolNames } from "./connect.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const json = (file: string) => JSON.parse(readFileSync(join(root, file), "utf8"));
@@ -20,9 +21,8 @@ const ENV_VARS = [
 ];
 
 describe("manifest.json (Claude Desktop bundle)", () => {
-  it("lists exactly the registered tools, at the package version", () => {
-    // @ts-expect-error - reach into internal map for the registered tool set
-    const registered = Object.keys(buildSandboxServer()._registeredTools).sort();
+  it("lists exactly the registered tools, at the package version", async () => {
+    const registered = await toolNames(buildSandboxServer());
     expect(manifest.tools.map((t: { name: string }) => t.name).sort()).toEqual(registered);
     expect(manifest.version).toBe(pkg.version);
     expect(manifest.server.entry_point).toBe(pkg.main.replace(/^\.\//, ""));
