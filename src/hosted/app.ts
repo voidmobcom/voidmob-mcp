@@ -31,8 +31,20 @@ const SANDBOX_PATH = /^\/sandbox(?:\/([A-Za-z0-9_-]{16,128}))?$/;
 
 /** JSON-RPC messages per minute for one sandbox path token. */
 export const SANDBOX_MESSAGES_PER_MINUTE = 60;
-/** JSON-RPC messages per minute from one IP, on /mcp and (separately) on /sandbox. */
+/**
+ * JSON-RPC messages per minute from one IP: on /sandbox, and on /mcp for a
+ * credential not known to be good (unknown, refused or missing).
+ */
 export const IP_MESSAGES_PER_MINUTE = 600;
+/**
+ * JSON-RPC messages per minute for one credential the API accepted within
+ * the last minute: counted per credential, not per IP, so apps whose users
+ * share an egress address are not throttled together. The API's per-account
+ * limits still apply behind it.
+ */
+export const CREDENTIAL_MESSAGES_PER_MINUTE = 600;
+/** How long a good /v1/me read marks a credential as known (the connection cache's age). */
+const KNOWN_GOOD_TTL_MS = 60_000;
 /** Open subscriptions/listen streams per credential on /mcp and per IP on /sandbox. */
 export const LISTEN_STREAMS_PER_CALLER = 4;
 /** How long a credential the API refused is answered 401 without asking the API again. */
@@ -65,8 +77,10 @@ export interface HostedDeps {
   sandboxLimiter?: RateLimiter;
   /** Per IP across /sandbox. */
   sandboxIpLimiter?: RateLimiter;
-  /** Per IP across /mcp. */
+  /** Per IP across /mcp, for credentials not known to be good. */
   mcpIpLimiter?: RateLimiter;
+  /** Per credential on /mcp, once the API has accepted it. */
+  mcpCredentialLimiter?: RateLimiter;
   /** Credential hashes the API refused, answered 401 without another /v1/me. */
   refusedCredentials?: ExpiringSet;
 }
@@ -247,7 +261,11 @@ type McpAuth = HostedAuth & { connection: Connection | null };
  * an access token falls back to its claims and an API key to the defaults:
  * the API enforces the real settings on every call either way.
  */
-async function hostedConnection(http: HttpClient, token: string, auth: HostedAuth): Promise<Connection | null | "revoked"> {
+async function hostedConnection(
+  http: HttpClient,
+  token: string,
+  auth: HostedAuth,
+): Promise<{ connection: Connection | null; accepted: boolean } | "revoked"> {
   const fallback: Connection | null = auth.kind === "oauth"
     ? { permission: auth.permission, autoMode: auth.autoMode, maxOrderCents: null, dailyLimitCents: null, kind: "oauth" }
     : null;
@@ -256,12 +274,12 @@ async function hostedConnection(http: HttpClient, token: string, auth: HostedAut
     timer = setTimeout(() => reject(new Error("timeout")), CONNECTION_WAIT_MS);
   });
   try {
-    return (await Promise.race([loadConnection(http, token), timeout])) ?? fallback;
+    return { connection: (await Promise.race([loadConnection(http, token), timeout])) ?? fallback, accepted: true };
   } catch (e) {
     // Disconnected, expired or revoked: the app should sign in again now
     // (the caller remembers the refusal for a short while).
     if (e instanceof HttpError && e.status === 401 && e.code === "UNAUTHENTICATED") return "revoked";
-    return fallback;
+    return { connection: fallback, accepted: false };
   } finally {
     clearTimeout(timer);
   }
@@ -278,6 +296,8 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
   const sandboxLimiter = deps.sandboxLimiter ?? new RateLimiter(SANDBOX_MESSAGES_PER_MINUTE);
   const sandboxIpLimiter = deps.sandboxIpLimiter ?? new RateLimiter(IP_MESSAGES_PER_MINUTE);
   const mcpIpLimiter = deps.mcpIpLimiter ?? new RateLimiter(IP_MESSAGES_PER_MINUTE);
+  const mcpCredentialLimiter = deps.mcpCredentialLimiter ?? new RateLimiter(CREDENTIAL_MESSAGES_PER_MINUTE);
+  const knownGood = new ExpiringSet(KNOWN_GOOD_TTL_MS);
   const refused = deps.refusedCredentials ?? new ExpiringSet(REFUSED_CREDENTIAL_TTL_MS);
   const mcpListens = new Slots(LISTEN_STREAMS_PER_CALLER);
   const sandboxListens = new Slots(LISTEN_STREAMS_PER_CALLER);
@@ -400,10 +420,16 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
       note.route = mcpPath;
       const badOrigin = originValidationResponse(request, cfg.allowedOrigins);
       if (badOrigin) return badOrigin;
-      // Counted per JSON-RPC message, before any token check, so a flood of
-      // made-up keys cannot reach the API.
+      // Counted per JSON-RPC message, before any token check: a credential
+      // the API accepted within the last minute per credential, anything
+      // else (unknown, refused, missing) per IP, so a flood of made-up keys
+      // cannot reach the API.
       const shape = await bodyShape(request);
-      const wait = mcpIpLimiter.hit(clientIp(request), shape.messages);
+      const presented = /^Bearer\s+(\S+)/i.exec(request.headers.get("authorization") ?? "")?.[1];
+      const presentedHash = presented ? credentialHash(presented) : undefined;
+      const wait = presentedHash && knownGood.has(presentedHash)
+        ? mcpCredentialLimiter.hit(presentedHash, shape.messages)
+        : mcpIpLimiter.hit(clientIp(request), shape.messages);
       if (wait > 0) return tooManyRequests(wait);
       const auth = await gate(request);
       if (auth instanceof Response) {
@@ -414,15 +440,18 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
       note.auth = hosted.kind;
       const credential = credentialHash(auth.token);
       if (refused.has(credential)) return refusedChallenge();
-      const connection = await hostedConnection(
+      const settings = await hostedConnection(
         createHttpClient({ apiKey: auth.token, baseUrl: cfg.apiBaseUrl, debug: false, userAgent: remoteUserAgent() }),
         auth.token,
         hosted,
       );
-      if (connection === "revoked") {
+      if (settings === "revoked") {
+        knownGood.delete(credential);
         refused.add(credential);
         return refusedChallenge();
       }
+      if (settings.accepted) knownGood.add(credential);
+      const { connection } = settings;
       const release = shape.listenId !== undefined ? mcpListens.take(credential) : undefined;
       if (release === null) return listenRefused(shape.listenId!);
       const extra: McpAuth = { ...hosted, connection };

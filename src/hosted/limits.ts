@@ -53,6 +53,10 @@ export class ExpiringSet {
     this.expires.set(key, t + this.ttlMs);
   }
 
+  delete(key: string): void {
+    this.expires.delete(key);
+  }
+
   has(key: string): boolean {
     const at = this.expires.get(key);
     if (at === undefined) return false;

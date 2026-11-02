@@ -443,6 +443,46 @@ describe("rate limits", () => {
   });
 });
 
+describe("/mcp limits for known credentials", () => {
+  const post = (app: { fetch(r: Request): Promise<Response> }, credential?: string) =>
+    app.fetch(req("/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json", accept: "application/json, text/event-stream", "cf-connecting-ip": "198.51.100.30",
+        ...(credential ? { authorization: `Bearer ${credential}` } : {}),
+      },
+      body: initialize,
+    }));
+
+  it("a credential the API accepted is limited per credential, not by its IP's ceiling", async () => {
+    stubUpstream({ me: {} });
+    const { app } = makeApp({}, { mcpIpLimiter: new RateLimiter(2), mcpCredentialLimiter: new RateLimiter(3) });
+    const good = freshKey();
+    expect((await post(app, good)).status).toBe(200); // not yet known: the IP's 1 of 2
+    for (let i = 0; i < 3; i++) expect((await post(app, good)).status).toBe(200); // known: its own 3
+    expect((await post(app, good)).status).toBe(429); // its own limit
+    expect((await post(app, freshKey())).status).toBe(200); // unknown: the IP's 2 of 2
+    expect((await post(app, freshKey())).status).toBe(429); // the IP ceiling
+    expect((await post(app)).status).toBe(429); // no credential: the IP ceiling
+  });
+
+  it("a credential whose /v1/me read failed, or that the API refused, stays under the IP ceiling", async () => {
+    stubUpstream({ meStatus: 500 });
+    const { app } = makeApp({}, { mcpIpLimiter: new RateLimiter(2), mcpCredentialLimiter: new RateLimiter(100) });
+    const key = freshKey();
+    expect((await post(app, key)).status).toBe(200);
+    expect((await post(app, key)).status).toBe(200);
+    expect((await post(app, key)).status).toBe(429);
+
+    stubUpstream({ meStatus: 401 });
+    const { app: second } = makeApp({}, { mcpIpLimiter: new RateLimiter(2), mcpCredentialLimiter: new RateLimiter(100) });
+    const refusedKey = freshKey();
+    expect((await post(second, refusedKey)).status).toBe(401); // the IP's 1 of 2
+    expect((await post(second, refusedKey)).status).toBe(401); // refused and remembered: the IP's 2 of 2
+    expect((await post(second, refusedKey)).status).toBe(429);
+  });
+});
+
 describe("listen streams (2026-07-28)", () => {
   it(`at most ${LISTEN_STREAMS_PER_CALLER} open per credential on /mcp and per IP on /sandbox; closing one frees its slot`, async () => {
     stubUpstream({ me: {} });
