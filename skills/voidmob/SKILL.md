@@ -73,7 +73,7 @@ Every MCP buy, renewal, top-up and paid reuse takes the approved price as `max_p
 
 **Auto-mode ("buy without asking").** When the server instructions say auto-mode is on, the owner lets you buy without asking first, within the limits. The rest still applies: look up the price with the matching search tool, pass it as `max_price_cents`, never buy in a loop, and tell the user about every purchase right away (what, price, id). Enabling auto-renew still needs the user's explicit yes. Without that instruction, ask before every purchase as in the money rules below.
 
-To try the flows without spending: use the hosted sandbox `https://mcp.voidmob.com/sandbox/<any random id of 16+ letters or digits>` (mock data, $500 play balance, no sign-in; the id keeps your playground's state, and bare `/sandbox` keeps none), or run the local server with `VOIDMOB_SANDBOX=1`. The REST API has no test mode: every call is live.
+To try the flows without spending: use the hosted sandbox `https://mcp.voidmob.com/sandbox/<any random id of 16 or more letters, digits, - or _>` (mock data, $500 play balance, no sign-in; the id keeps your playground's state, and bare `/sandbox` keeps none), or run the local server with `VOIDMOB_SANDBOX=1`. The REST API has no test mode: every call is live.
 
 **REST with curl** otherwise. Shell variables may not persist between commands, so start each command with:
 
