@@ -45,7 +45,8 @@ export interface Config {
 const DEFAULT_BASE_URL = "https://dashboard.voidmob.com/api";
 const SETUP_URL = "https://dashboard.voidmob.com/developers/api-keys";
 
-const KEY_RE = /^vmk_live_[A-Za-z0-9]{32}$/;
+/** A live API key: vmk_live_ and 32 letters or digits. */
+export const KEY_RE = /^vmk_live_[A-Za-z0-9]{32}$/;
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
 
 // The API key is sent to this URL, so it must be https (plain http only for a

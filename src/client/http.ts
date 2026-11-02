@@ -64,7 +64,8 @@ interface ClientOpts {
   apiKey: string;
   baseUrl: string;
   debug: boolean;
-  userAgent: string;
+  /** A function is read on every request (the hosted server adds the MCP client's name once it is known). */
+  userAgent: string | (() => string);
 }
 
 function jitter(): number {
@@ -91,7 +92,7 @@ export function createHttpClient(opts: ClientOpts): HttpClient {
     try {
       const headers = new Headers({
         Authorization: `Bearer ${opts.apiKey}`,
-        "User-Agent": opts.userAgent,
+        "User-Agent": typeof opts.userAgent === "function" ? opts.userAgent() : opts.userAgent,
         "Content-Type": "application/json",
         ...(ropts.headers ?? {}),
       });

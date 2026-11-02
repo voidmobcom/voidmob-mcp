@@ -6,7 +6,7 @@ import type { HttpClient } from "./client/http.js";
 import { DEFAULT_CONTROLS, type OwnerControls } from "./config.js";
 import { LEVEL_LABEL, type Connection, type PermissionLevel } from "./connection.js";
 import { formatUsd } from "./utils/format.js";
-import { createToolContext, levelAllows, levelSetAt, type ToolContext } from "./tools/context.js";
+import { createToolContext, levelAllows, levelSetAt, type ServeOptions, type ToolContext } from "./tools/context.js";
 import { registerAccountTools } from "./tools/account.js";
 import { registerSmsTools } from "./tools/sms.js";
 import { registerEsimTools } from "./tools/esim.js";
@@ -19,6 +19,9 @@ import { registerPrompts } from "./prompts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const VERSION = (JSON.parse(readFileSync(join(__dirname, "../package.json"), "utf8")) as { version: string }).version;
+
+/** Most array elements plus object members one hosted tools/call may carry. */
+export const HOSTED_MAX_TOOL_INPUT_ELEMENTS = 64;
 
 const ABOUT = [
   "VoidMob sells US non-VoIP SMS verifications and rentals, dedicated numbers, eSIM data plans and mobile proxies from a prepaid USD balance the owner tops up with crypto in the dashboard.",
@@ -91,11 +94,17 @@ export function createVoidmobServer(
   http: HttpClient,
   controls: OwnerControls = DEFAULT_CONTROLS,
   connection: Connection | null = null,
+  options: ServeOptions = {},
 ): McpServer {
-  const ctx = createToolContext(http, controls, connection);
+  const ctx = createToolContext(http, controls, connection, options);
   const server = new McpServer(
     { name: "@voidmob/mcp", version: VERSION },
-    { instructions: serverInstructions(ctx) },
+    {
+      instructions: serverInstructions(ctx),
+      // No tool takes an array, and the widest takes a handful of fields:
+      // anything bigger on the public endpoint is refused before validation.
+      ...(ctx.hosted ? { maxToolInputElements: HOSTED_MAX_TOOL_INPUT_ELEMENTS } : {}),
+    },
   );
 
   registerAccountTools(server, ctx);

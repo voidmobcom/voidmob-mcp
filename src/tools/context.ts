@@ -37,12 +37,21 @@ export interface ToolContext {
   depositUrl: string;
   /** Where the account owner changes the key's or connection's permission and limits. */
   settingsUrl: string;
+  /** Served over HTTP at mcp.voidmob.com rather than run locally over stdio. */
+  hosted: boolean;
+}
+
+/** How the server is run. */
+export interface ServeOptions {
+  /** Served over HTTP at mcp.voidmob.com: shorter SMS waits, and error texts that speak of the app's connection. */
+  hosted?: boolean;
 }
 
 export function createToolContext(
   http: HttpClient,
   controls: OwnerControls = DEFAULT_CONTROLS,
   connection: Connection | null = null,
+  options: ServeOptions = {},
 ): ToolContext {
   const keyDailyLimit = connection?.dailyLimitCents ?? null;
   const localAutoMode = controls.autonomous && (controls.budgetCents !== null || keyDailyLimit !== null);
@@ -58,6 +67,7 @@ export function createToolContext(
     autoMode: connection?.autoMode === true || localAutoMode,
     depositUrl: depositUrlFor(connection),
     settingsUrl: settingsUrlFor(connection),
+    hosted: options.hosted === true,
   };
 }
 

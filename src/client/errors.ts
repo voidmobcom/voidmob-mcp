@@ -1,14 +1,18 @@
 import { HttpError, NetworkError, isWriteMethod } from "./http.js";
 import { formatUsd } from "../utils/format.js";
-import { levelLabel } from "../connection.js";
+import { levelLabel, type Connection } from "../connection.js";
 
 const SETUP_URL = "https://dashboard.voidmob.com/developers/api-keys";
 const WALLET_URL = "https://dashboard.voidmob.com/wallet";
 
-/** Per-server links an error message can point at. */
+/** Per-server links and context an error message can point at. */
 export interface ErrorLinks {
   /** Where the user adds funds (/v1/me deposit_url). */
   depositUrl: string;
+  /** Served over HTTP: a refused credential is fixed in the app, not in VOIDMOB_API_KEY. */
+  hosted?: boolean;
+  /** The key's or app connection's settings; `kind` picks the wording. */
+  connection?: Connection | null;
 }
 
 const DEFAULT_LINKS: ErrorLinks = { depositUrl: WALLET_URL };
@@ -56,6 +60,21 @@ function keyLimitText(err: HttpError, reqLine: string): string {
     `Tell the user; only the account owner can raise the limit${settings ? `, at ${settings}` : ", in the dashboard"}. ${AFTER_RAISE}`,
   );
   return `${parts.join(" ")}${reqLine}`;
+}
+
+/** Copy for a credential the API no longer accepts. */
+function unauthenticatedText(links: ErrorLinks, reqLine: string): string {
+  if (!links.hosted) return `Your VOIDMOB_API_KEY is invalid or revoked. Generate a new key at ${SETUP_URL}${reqLine}`;
+  if (links.connection?.kind === "oauth") {
+    return (
+      `VoidMob no longer accepts this app's connection: it was disconnected or its sign-in expired. Nothing was charged or changed. ` +
+      `Ask the user to reconnect VoidMob in this app and sign in again${reqLine}`
+    );
+  }
+  return (
+    `VoidMob no longer accepts the API key this app connects with: it is invalid or revoked. Nothing was charged or changed. ` +
+    `Ask the user to generate a new key at ${SETUP_URL} and update it in this app's VoidMob connection${reqLine}`
+  );
 }
 
 /** Copy for a call above the key's or connection's permission level. */
@@ -116,7 +135,7 @@ export function mapApiError(err: unknown, links: ErrorLinks = DEFAULT_LINKS): st
 
   switch (err.code) {
     case "UNAUTHENTICATED":
-      return `Your VOIDMOB_API_KEY is invalid or revoked. Generate a new key at ${SETUP_URL}${reqLine}`;
+      return unauthenticatedText(links, reqLine);
     case "IP_NOT_ALLOWED":
       return `This API key only accepts requests from allowlisted IP addresses, and this machine's IP is not on the list. Contact VoidMob support to change the allowlist${reqLine}`;
     case "RATE_LIMITED":
