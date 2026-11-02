@@ -79,6 +79,8 @@ interface Upstream {
 function stubUpstream(opts: {
   me?: Record<string, unknown>;
   meStatus?: number;
+  /** Answer /v1/me without the API's error envelope (a gateway, not the API). */
+  meBare?: boolean;
   oauth?: (url: string) => Response | Promise<Response>;
 } = {}): Upstream {
   const up: Upstream = { calls: [] };
@@ -89,7 +91,9 @@ function stubUpstream(opts: {
     up.calls.push({ url, method: init?.method ?? "GET", auth: headers.get("authorization"), ua: headers.get("user-agent"), contentType: headers.get("content-type"), body });
     if (url.startsWith(`${API}/v1/me`)) {
       if (opts.meStatus) {
-        return Response.json({ success: false, error: { code: "INTERNAL_ERROR", message: "x", request_id: "req_1" } }, { status: opts.meStatus });
+        if (opts.meBare) return new Response("<html>gateway</html>", { status: opts.meStatus });
+        const code = opts.meStatus === 401 ? "UNAUTHENTICATED" : "INTERNAL_ERROR";
+        return Response.json({ success: false, error: { code, message: "x", request_id: "req_1" } }, { status: opts.meStatus });
       }
       return Response.json({
         success: true,
@@ -226,6 +230,28 @@ describe("POST /mcp authentication", () => {
       expect(res.status, name).toBe(401);
       expect(res.headers.get("www-authenticate"), name).toContain(`resource_metadata="${PRM_URL}"`);
     }
+  });
+
+  it("a credential the API no longer accepts gets a 401 challenge at once, and the refusal is not cached", async () => {
+    stubUpstream({ meStatus: 401 });
+    const { app, lines } = makeApp();
+    const token = await accessToken();
+    const key = freshKey();
+    for (const credential of [token, key]) {
+      const res = await app.fetch(mcpPost(credential));
+      expect(res.status).toBe(401);
+      expect(res.headers.get("www-authenticate")).toContain(`resource_metadata="${PRM_URL}"`);
+    }
+    expect(lines.filter((l) => /POST \/mcp 401 .* auth=(oauth|key)/.test(l))).toHaveLength(2);
+
+    stubUpstream({ me: { kind: "oauth" } });
+    expect((await app.fetch(mcpPost(token))).status).toBe(200);
+  });
+
+  it("a 401 without the API's envelope (a gateway) falls back to the claims", async () => {
+    stubUpstream({ meStatus: 401, meBare: true });
+    const { app } = makeApp();
+    expect((await app.fetch(mcpPost(await accessToken()))).status).toBe(200);
   });
 
   it("answers 500, not 401, when the signing keys cannot be read", async () => {

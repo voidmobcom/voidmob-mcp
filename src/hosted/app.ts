@@ -1,15 +1,18 @@
 import {
+  bearerAuthChallengeResponse,
   buildOAuthProtectedResourceMetadata,
   createMcpHandler,
   getOAuthProtectedResourceMetadataUrl,
   hostHeaderValidationResponse,
+  OAuthError,
+  OAuthErrorCode,
   originValidationResponse,
   requireBearerAuth,
   type McpServer,
   type McpServerFactory,
 } from "@modelcontextprotocol/server";
 import type { JWTVerifyGetKey } from "jose";
-import { createHttpClient, type HttpClient } from "../client/http.js";
+import { createHttpClient, HttpError, type HttpClient } from "../client/http.js";
 import { DEFAULT_CONTROLS } from "../config.js";
 import { loadConnection, type Connection } from "../connection.js";
 import { createVoidmobServer, VERSION } from "../server.js";
@@ -131,13 +134,17 @@ async function forward(request: Request, target: string, cors = false): Promise<
   return new Response(NO_BODY_STATUS.has(upstream.status) ? null : payload, { status: upstream.status, headers: out });
 }
 
+/** The verified credential plus its settings, as the MCP factory receives them in AuthInfo.extra. */
+type McpAuth = HostedAuth & { connection: Connection | null };
+
 /**
  * The credential's settings from /v1/me (fresher than the token's claims, and
- * they carry the limits). When /v1/me fails or is slow, an access token falls
- * back to its claims and an API key to the defaults: the API enforces the
- * real settings on every call either way.
+ * they carry the limits), or "revoked" when the API no longer accepts the
+ * credential. When /v1/me fails otherwise (network, timeout, 5xx) or is slow,
+ * an access token falls back to its claims and an API key to the defaults:
+ * the API enforces the real settings on every call either way.
  */
-async function hostedConnection(http: HttpClient, token: string, auth: HostedAuth): Promise<Connection | null> {
+async function hostedConnection(http: HttpClient, token: string, auth: HostedAuth): Promise<Connection | null | "revoked"> {
   const fallback: Connection | null = auth.kind === "oauth"
     ? { permission: auth.permission, autoMode: auth.autoMode, maxOrderCents: null, dailyLimitCents: null, kind: "oauth" }
     : null;
@@ -147,7 +154,10 @@ async function hostedConnection(http: HttpClient, token: string, auth: HostedAut
   });
   try {
     return (await Promise.race([loadConnection(http, token), timeout])) ?? fallback;
-  } catch {
+  } catch (e) {
+    // Disconnected, expired or revoked: the app should sign in again now.
+    // loadConnection never caches a failure, so a new token is read fresh.
+    if (e instanceof HttpError && e.status === 401 && e.code === "UNAUTHENTICATED") return "revoked";
     return fallback;
   } finally {
     clearTimeout(timer);
@@ -202,7 +212,7 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
         // Filled from initialize (2025) or the request's envelope (2026-07-28).
         userAgent: () => remoteUserAgent(server?.server.getClientVersion()?.name),
       });
-      const connection = await hostedConnection(http, authInfo.token, hostedAuthOf(authInfo));
+      const { connection } = authInfo.extra as unknown as McpAuth;
       server = createVoidmobServer(http, DEFAULT_CONTROLS, connection, { hosted: true });
       return server;
     } catch (e) {
@@ -275,8 +285,21 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
         note.auth = "none";
         return auth;
       }
-      note.auth = hostedAuthOf(auth).kind;
-      return mcp.fetch(request, { authInfo: auth });
+      const hosted = hostedAuthOf(auth);
+      note.auth = hosted.kind;
+      const connection = await hostedConnection(
+        createHttpClient({ apiKey: auth.token, baseUrl: cfg.apiBaseUrl, debug: false, userAgent: remoteUserAgent() }),
+        auth.token,
+        hosted,
+      );
+      if (connection === "revoked") {
+        return bearerAuthChallengeResponse(
+          new OAuthError(OAuthErrorCode.InvalidToken, "This token is no longer accepted; sign in again"),
+          { resourceMetadataUrl: prmUrl },
+        );
+      }
+      const extra: McpAuth = { ...hosted, connection };
+      return mcp.fetch(request, { authInfo: { ...auth, extra: extra as unknown as Record<string, unknown> } });
     }
 
     const sandboxMatch = SANDBOX_PATH.exec(path);
