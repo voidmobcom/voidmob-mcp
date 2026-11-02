@@ -41,7 +41,11 @@ function describeKey(key: MeKey, settingsUrl: string): string[] {
     `    Permission:      ${LEVEL_LABEL[key.permission]}`,
     `    Max per order:   ${limitText(key.max_order_cents)}`,
     `    Daily limit:     ${daily}`,
-    `    Auto-mode:       ${key.auto_mode ? "on (may buy without asking, within the limits)" : "off (asks before buying)"}`,
+    `    Auto-mode:       ${
+      !key.auto_mode ? "off (asks before buying)"
+      : key.daily_limit_cents !== null ? "on (may buy without asking, within the limits)"
+      : "off until a daily limit is set (asks before buying)"
+    }`,
     `    Settings:        ${settingsUrl}`,
   ];
 }

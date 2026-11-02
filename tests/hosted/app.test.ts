@@ -4,14 +4,13 @@
 // on both protocol eras: a 2025 client (served by the stateless legacy leg)
 // and a 2026-07-28 client negotiating in auto mode.
 import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
-import { createServer, request as httpRequest, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { request as httpRequest } from "node:http";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createLocalJWKSet, errors, exportJWK, generateKeyPair, SignJWT, type CryptoKey, type JWTVerifyGetKey } from "jose";
-import { createHostedApp, remoteUserAgent, type HostedDeps } from "../../src/hosted/app.js";
+import { createHostedApp, LISTEN_STREAMS_PER_CALLER, remoteUserAgent, type HostedDeps } from "../../src/hosted/app.js";
 import { MAX_BODY_BYTES, parseHostedEnv } from "../../src/hosted/config.js";
-import { RateLimiter, SandboxStore } from "../../src/hosted/sandbox.js";
+import { RateLimiter } from "../../src/hosted/limits.js";
+import { serveHosted, SHUTDOWN_GRACE_MS, type RunningServer } from "../../src/hosted/serve.js";
 import { HOSTED_MAX_TOOL_INPUT_ELEMENTS, VERSION } from "../../src/server.js";
 
 const ORIGIN = "https://mcp.voidmob.com";
@@ -232,8 +231,8 @@ describe("POST /mcp authentication", () => {
     }
   });
 
-  it("a credential the API no longer accepts gets a 401 challenge at once, and the refusal is not cached", async () => {
-    stubUpstream({ meStatus: 401 });
+  it("a credential the API no longer accepts gets a 401 challenge at once, and the refusal is remembered", async () => {
+    const up = stubUpstream({ meStatus: 401 });
     const { app, lines } = makeApp();
     const token = await accessToken();
     const key = freshKey();
@@ -244,8 +243,15 @@ describe("POST /mcp authentication", () => {
     }
     expect(lines.filter((l) => /POST \/mcp 401 .* auth=(oauth|key)/.test(l))).toHaveLength(2);
 
+    // The same credentials again: refused without asking the API.
+    const meCalls = () => up.calls.filter((c) => c.url === `${API}/v1/me`).length;
+    const asked = meCalls();
+    for (const credential of [token, key]) expect((await app.fetch(mcpPost(credential))).status).toBe(401);
+    expect(meCalls()).toBe(asked);
+
+    // A new token, after signing in again, is read fresh.
     stubUpstream({ me: { kind: "oauth" } });
-    expect((await app.fetch(mcpPost(token))).status).toBe(200);
+    expect((await app.fetch(mcpPost(await accessToken()))).status).toBe(200);
   });
 
   it("a 401 without the API's envelope (a gateway) falls back to the claims", async () => {
@@ -311,7 +317,7 @@ describe.each<Era>(["legacy", "modern"])("MCP over HTTP (%s era)", (era) => {
     stubUpstream({ me: { kind: "oauth", permission: "manage" } });
     const { app } = makeApp();
     const client = await connectClient(app, era, "/mcp", await accessToken({ perm: "buy" }));
-    expect(await toolCount(client)).toBe(17);
+    expect(await toolCount(client)).toBe(18);
     expect(client.getInstructions()).toContain("/account/connected-apps");
     await client.close();
   });
@@ -322,6 +328,15 @@ describe.each<Era>(["legacy", "modern"])("MCP over HTTP (%s era)", (era) => {
     const client = await connectClient(app, era, "/mcp", await accessToken({ perm: "view" }));
     expect(await toolCount(client)).toBe(10);
     expect(client.getInstructions()).toContain("View access");
+    await client.close();
+  });
+
+  it("an access token's auto claim alone (no daily limit known) does not turn auto-mode on", async () => {
+    stubUpstream({ meStatus: 500 });
+    const { app } = makeApp();
+    const client = await connectClient(app, era, "/mcp", await accessToken({ perm: "buy", auto: true }));
+    expect(client.getInstructions()).not.toContain("Auto-mode is on");
+    expect(client.getInstructions()).toContain("get their go-ahead");
     await client.close();
   });
 
@@ -356,30 +371,76 @@ describe.each<Era>(["legacy", "modern"])("MCP over HTTP (%s era)", (era) => {
     expect(await balance(again)).toBe(50_000 - 150);
     await again.close();
 
-    const own = await connectClient(app, era, `/sandbox/demo-${era}`);
+    const own = await connectClient(app, era, `/sandbox/demo-${era}-0123456789`);
     expect(await balance(own)).toBe(50_000);
     await own.close();
     expect(up.calls).toHaveLength(0);
   });
 });
 
-describe("sandbox limits", () => {
-  it("rate-limits per client IP, path token or not", async () => {
-    const { app, lines } = makeApp({}, { sandboxLimiter: new RateLimiter(2), sandboxes: new SandboxStore() });
-    const post = (path: string) =>
-      app.fetch(req(path, {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "cf-connecting-ip": "198.51.100.9" },
-        body: initialize,
-      }));
-    expect((await post("/sandbox")).status).toBe(200);
-    expect((await post("/sandbox/abc")).status).toBe(200);
-    const limited = await post("/sandbox/def");
-    expect(limited.status).toBe(429);
-    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
-    // The path token never reaches the log.
-    expect(lines.join("\n")).not.toContain("abc");
+const pings = (n: number) => JSON.stringify(Array.from({ length: n }, (_, i) => ({ jsonrpc: "2.0", id: i + 1, method: "ping" })));
+
+describe("rate limits", () => {
+  const post = (app: { fetch(r: Request): Promise<Response> }, path: string, body = initialize, ip = "198.51.100.9", extra: Record<string, string> = {}) =>
+    app.fetch(req(path, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "cf-connecting-ip": ip, ...extra },
+      body,
+    }));
+
+  it("sandbox: every message of a batch counts, per path token (or IP on bare /sandbox), under a per-IP ceiling", async () => {
+    const { app, lines } = makeApp({}, { sandboxLimiter: new RateLimiter(3), sandboxIpLimiter: new RateLimiter(5) });
+    const [a, b, c] = ["a", "b", "c"].map((x) => x.repeat(16));
+    expect((await post(app, `/sandbox/${a}`, pings(4))).status).toBe(429); // 4 messages, 3 per token
+    expect((await post(app, `/sandbox/${a}`, pings(3))).status).not.toBe(429);
+    expect((await post(app, `/sandbox/${a}`)).status).toBe(429); // token a is spent
+    expect((await post(app, `/sandbox/${b}`)).status).toBe(200); // b has its own; the IP is at 4 of 5
+    expect((await post(app, `/sandbox/${b}`)).status).toBe(200);
+    const capped = await post(app, `/sandbox/${b}`); // the IP ceiling is spent
+    expect(capped.status).toBe(429);
+    expect(Number(capped.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect((await post(app, `/sandbox/${c}`, initialize, "198.51.100.10")).status).toBe(200);
+    // Bare /sandbox is keyed by IP.
+    expect((await post(app, "/sandbox", pings(4), "198.51.100.11")).status).toBe(429);
+    // Path tokens never reach the log.
+    expect(lines.join("\n")).not.toContain(a);
     expect(lines.some((l) => l.includes("/sandbox/:token 429"))).toBe(true);
+  });
+
+  it("sandbox: a path token shorter than 16 URL-safe characters is not found", async () => {
+    const { app } = makeApp();
+    expect((await post(app, "/sandbox/short-token")).status).toBe(404);
+    expect((await post(app, `/sandbox/${"x".repeat(15)}`)).status).toBe(404);
+    expect((await post(app, `/sandbox/${"x".repeat(16)}`)).status).toBe(200);
+    expect((await post(app, `/sandbox/${"x".repeat(15)}!`)).status).toBe(404);
+  });
+
+  it("/mcp: a per-IP ceiling counted per message, before any credential reaches the API", async () => {
+    const up = stubUpstream({ me: {} });
+    const { app } = makeApp({}, { mcpIpLimiter: new RateLimiter(3) });
+    const flood = await post(app, "/mcp", pings(4), "198.51.100.20", { authorization: `Bearer ${freshKey()}` });
+    expect(flood.status).toBe(429);
+    expect(up.calls).toHaveLength(0);
+    expect((await post(app, "/mcp", initialize, "198.51.100.20")).status).toBe(401);
+    expect((await post(app, "/mcp", initialize, "198.51.100.21", { authorization: `Bearer ${freshKey()}` })).status).toBe(200);
+  });
+});
+
+describe("listen streams (2026-07-28)", () => {
+  it(`at most ${LISTEN_STREAMS_PER_CALLER} open per credential on /mcp and per IP on /sandbox; closing one frees its slot`, async () => {
+    stubUpstream({ me: {} });
+    const { app } = makeApp();
+    for (const [path, token] of [["/mcp", freshKey()], [`/sandbox/${"l".repeat(16)}`, undefined]] as const) {
+      const client = await connectClient(app, "modern", path, token);
+      const subs = [];
+      for (let i = 0; i < LISTEN_STREAMS_PER_CALLER; i++) subs.push(await client.listen({ toolsListChanged: true }));
+      await expect(client.listen({ toolsListChanged: true }), path).rejects.toThrow(/limit/i);
+      await subs.shift()!.close();
+      await new Promise((r) => setTimeout(r, 20));
+      subs.push(await client.listen({ toolsListChanged: true }));
+      for (const sub of subs) await sub.close();
+      await client.close();
+    }
   });
 });
 
@@ -441,16 +502,15 @@ describe("OAuth forwards", () => {
 });
 
 describe("over node:http (toNodeHandler)", () => {
-  let server: Server;
+  let running: RunningServer;
   let port: number;
 
   const start = async () => {
     const { app } = makeApp({ MCP_ALLOWED_HOSTS: "127.0.0.1" });
-    server = createServer(toNodeHandler(app, { maxRequestBodySize: MAX_BODY_BYTES }));
-    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-    port = (server.address() as AddressInfo).port;
+    running = await serveHosted(app, { port: 0, host: "127.0.0.1" });
+    port = running.port;
   };
-  const stop = () => new Promise<void>((r) => server.close(() => r()));
+  const stop = () => running.stop();
 
   const raw = (path: string, opts: { method?: string; host?: string; body?: string; headers?: Record<string, string> } = {}) =>
     new Promise<{ status: number; body: string }>((resolve, reject) => {
@@ -489,6 +549,26 @@ describe("over node:http (toNodeHandler)", () => {
       await stop();
     }
   });
+
+  it("on shutdown, a 2026-07-28 call in flight finishes with its real result before the app closes", async () => {
+    const { app } = makeApp({ MCP_ALLOWED_HOSTS: "127.0.0.1" });
+    const server = await serveHosted(app, { port: 0, host: "127.0.0.1" });
+    const client = new Client({ name: "t", version: "1" }, { versionNegotiation: { mode: "auto" } });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${server.port}/sandbox/${"s".repeat(16)}`)));
+    expect(client.getNegotiatedProtocolVersion()).toBe("2026-07-28");
+    const bought = await client.callTool({ name: "rent_number", arguments: { service_id: "svc_telegram", max_price_cents: 150 } });
+    const id = (bought.structuredContent as Record<string, any>).verification.id;
+    // Waits about 2 s for the sandbox code; shutdown starts 300 ms in.
+    const pending = client.callTool({ name: "get_rental", arguments: { rental_id: id, wait_seconds: 20 } });
+    await new Promise((r) => setTimeout(r, 300));
+    const started = Date.now();
+    const stopped = server.stop();
+    const result = await pending;
+    expect(result.isError ?? false, text(result)).toBe(false);
+    expect((result.structuredContent as Record<string, any>).verification.status).toBe("code_received");
+    await stopped;
+    expect(Date.now() - started).toBeLessThan(SHUTDOWN_GRACE_MS - 3_000);
+  }, 15_000);
 });
 
 describe("remoteUserAgent", () => {

@@ -148,7 +148,10 @@ export function registerDedicatedTools(server: McpServer, ctx: ToolContext) {
       "There is no cancel or refund - to stop paying, leave auto_renew off and let the month run out. Returns a ded_ id - poll get_rental with it to read incoming SMS.",
     inputSchema: {
       country: z.string().min(2).max(40).describe("Country code or name from search_dedicated_countries (e.g. 'us', 'uk', 'germany')"),
-      auto_renew: z.boolean().default(false).describe("Charge the next month automatically at the end of each monthly period (ask the user first)"),
+      auto_renew: z.boolean().default(false).describe(
+        "Charge the next month automatically at the end of each monthly period (ask the user first). " +
+        "An app connection can never turn it on: such a purchase is refused with nothing charged.",
+      ),
       max_price_cents: MaxPriceCents,
     },
     outputSchema: DedicatedNumberOutput,

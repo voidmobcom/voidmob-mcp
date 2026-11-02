@@ -752,7 +752,8 @@ export function registerProxyTools(server: McpServer, ctx: ToolContext) {
       format: formatInput.default("login_pass_host_port"),
       network: z.string().max(120).optional().describe(
         "IP whitelist instead of a login: comma-separated IPv4 addresses and/or /24-/32 subnets, max 5 (e.g. '203.0.113.7,198.51.100.0/24'). " +
-        "Cannot be changed later; an address can be on one list at a time.",
+        "Cannot be changed later; an address can be on one list at a time. " +
+        "An app connection can never create an IP-whitelist list (refused, nothing changed); it can create login lists.",
       ),
     },
     outputSchema: ProxyListOutput,

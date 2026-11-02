@@ -51,7 +51,8 @@ import {
   ServiceId,
 } from "../constants/ids.js";
 import { MaxPriceCents } from "../constants/price.js";
-import { defineTool, type ToolContext } from "./context.js";
+import { defineTool, levelAllows, levelSetAt, type ToolContext } from "./context.js";
+import { LEVEL_LABEL } from "../connection.js";
 import { renderDedicated } from "./dedicated.js";
 import { setProxyAutoRenew } from "./proxy.js";
 
@@ -365,6 +366,13 @@ export const reuseNumberHandler = (ctx: ToolContext) =>
     }
     let v: VerificationT;
     if (args.paid) {
+      // Free reuse is Manage; a paid one is a charge, so it needs Buy.
+      if (!levelAllows(ctx.level, "buy")) {
+        return toolError(
+          `A paid reuse needs Buy access, and the API key or app connection this server uses has ${LEVEL_LABEL[ctx.level]} access. ` +
+          `Nothing was charged or changed. Tell the user; only the account owner can change the permission level ${levelSetAt(ctx)}.`,
+        );
+      }
       const max = args.max_price_cents;
       if (max === undefined) {
         return toolError(
@@ -621,12 +629,12 @@ export function registerSmsTools(server: McpServer, ctx: ToolContext) {
 
   defineTool(server, ctx, "reuse_number", {
     group: "sms",
-    level: "buy",
+    level: "manage",
     title: "Reuse a verification number",
     description:
       "Receive another SMS on the number of an earlier verification (ver_...). Free reuse: when allow_reuse is true. " +
       "Paid reuse (paid=true): when allow_paid_reuse is true; charges paid_reuse_price_cents, refunded automatically if the number is no longer available, " +
-      "and requires max_price_cents (that price, shown to and approved by the user). " +
+      "and requires max_price_cents (that price, shown to and approved by the user) and Buy access. " +
       "Check both flags and the price with get_rental first, then call get_rental with wait_seconds for the new code.",
     inputSchema: {
       rental_id: VerificationId.describe("ver_... id of an earlier verification"),

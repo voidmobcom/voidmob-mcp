@@ -137,6 +137,12 @@ describe("instructions follow the key's settings", () => {
     expect(text).toContain("This API key has spending limits: $50.00 per rolling 24 hours");
   });
 
+  it("a key's auto-mode without a daily limit stays off: confirm first", async () => {
+    const text = await instructionsFor(conn({ autoMode: true, dailyLimitCents: null, maxOrderCents: 1000 }));
+    expect(text).not.toContain("Auto-mode is on");
+    expect(text).toContain("get their go-ahead");
+  });
+
   it("auto-mode on (local VOIDMOB_AUTONOMOUS with a budget, or the key's daily limit)", async () => {
     expect(await instructionsFor(null, { autonomous: true, budgetCents: 3000 })).toContain("Auto-mode is on");
     expect(await instructionsFor(conn({ dailyLimitCents: 2000 }), { autonomous: true })).toContain("Auto-mode is on");
@@ -162,7 +168,7 @@ describe("instructions follow the key's settings", () => {
     expect(view).not.toContain("spending limits");
     const manage = await instructionsFor(conn({ permission: "manage", kind: "oauth" }));
     expect(manage).toContain("This server has Manage access: it can cancel");
-    expect(manage).toContain("cannot buy, renew, top up or turn auto-renew on");
+    expect(manage).toContain("cannot buy, renew, top up, reuse a number for a fee or turn auto-renew on");
     expect(manage).toContain("at https://dashboard.voidmob.com/account/connected-apps.");
     expect(await instructionsFor(conn(), { readOnly: true })).toContain("in this MCP server's configuration (VOIDMOB_READ_ONLY)");
   });

@@ -45,7 +45,7 @@ const SAFETY = [
 
 const CANNOT: Record<PermissionLevel, string> = {
   view: "it can look up prices, the balance and orders, but cannot buy, renew, top up, cancel or change anything",
-  manage: "it can cancel, rotate IPs, edit proxy lists and passwords and turn auto-renew off, but cannot buy, renew, top up or turn auto-renew on",
+  manage: "it can cancel, reuse a number for free, rotate IPs, edit proxy lists and passwords and turn auto-renew off, but cannot buy, renew, top up, reuse a number for a fee or turn auto-renew on",
   buy: "",
 };
 

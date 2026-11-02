@@ -135,6 +135,14 @@ const GEO: Record<string, { name: string; available_nodes: number; code?: string
 
 const START_BALANCE_CENTS = 50000; // $500 play-money balance (sandbox has no deposit tool, so spend-only)
 
+// The hosted sandbox keeps a store per caller for an hour, and buy-then-cancel
+// loops refund the balance, so every collection is capped: the oldest orders
+// of a type and the oldest SMS of a verification are dropped. Lists stop at
+// prod's 100 per proxy.
+export const SANDBOX_MAX_ORDERS_PER_TYPE = 200;
+export const SANDBOX_MAX_MESSAGES = 20;
+export const SANDBOX_MAX_LISTS = 100;
+
 class Store {
   balanceCents = START_BALANCE_CENTS;
   verifications = new Map<string, Verification>();
@@ -144,6 +152,17 @@ class Store {
   proxies = new Map<string, Proxy>();
   dedicateds = new Map<string, DedicatedNumber>();
   createdAtMs = new Map<string, number>(); // entity id -> creation epoch ms
+
+  /** Store a new order, dropping the oldest of its type past the cap. */
+  add<T>(orders: Map<string, T>, id: string, order: T): void {
+    orders.set(id, order);
+    for (const old of orders.keys()) {
+      if (orders.size <= SANDBOX_MAX_ORDERS_PER_TYPE) break;
+      orders.delete(old);
+      this.messages.delete(old);
+      this.createdAtMs.delete(old);
+    }
+  }
 }
 
 // ── response envelope helpers ─────────────────────────────────────────────────
@@ -254,7 +273,7 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
     v.can_cancel = false;
     v.allow_reuse = true;
     const sms: VerificationMessage = { code: v.code, text: `Your ${v.service_name} verification code is ${v.code}. Do not share it.`, received_at: v.code_received_at };
-    db.messages.set(v.id, [sms, ...(db.messages.get(v.id) ?? [])]);
+    db.messages.set(v.id, [sms, ...(db.messages.get(v.id) ?? [])].slice(0, SANDBOX_MAX_MESSAGES));
     return v;
   };
 
@@ -348,7 +367,7 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
         allow_paid_reuse: true,
         paid_reuse_price_cents: 50,
       };
-      db.verifications.set(id, v);
+      db.add(db.verifications, id, v);
       db.createdAtMs.set(id, Date.now());
       return ok({ verification: v }, 201);
     }
@@ -449,7 +468,7 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
         cancel_window_expires_at: iso(RENTAL_CANCEL_WINDOW_MS),
         messages: [],
       };
-      db.rentals.set(id, r);
+      db.add(db.rentals, id, r);
       db.createdAtMs.set(id, Date.now());
       return ok(r, 201);
     }
@@ -529,7 +548,7 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
         expires_at: iso(30 * DAY),
         messages: [],
       };
-      db.dedicateds.set(id, d);
+      db.add(db.dedicateds, id, d);
       db.createdAtMs.set(id, Date.now());
       return ok(d, 201);
     }
@@ -600,7 +619,7 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
         completed_at: iso(),
         expires_at: iso(product.validity_days * DAY),
       };
-      db.esims.set(id, esim);
+      db.add(db.esims, id, esim);
       return ok({ esim }, 201);
     }
     if (seg[1] === "esims" && seg[2]) {
@@ -675,7 +694,7 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
           completed_at: iso(),
           expires_at: esim.expires_at,
         };
-        db.esims.set(id, topup);
+        db.add(db.esims, id, topup);
         return ok({ esim: topup }, 201);
       }
     }
@@ -740,7 +759,7 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
         rotation_url: dedicated ? `https://dashboard.voidmob.com/api/proxy/rotate/${alnum(24)}` : null,
         created_at: iso(),
       };
-      db.proxies.set(id, proxy);
+      db.add(db.proxies, id, proxy);
       db.createdAtMs.set(id, Date.now());
       return ok({ proxy }, 202);
     }
@@ -803,6 +822,9 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
         return ok({ proxy });
       }
       if (seg[3] === "lists" && !seg[4] && method === "POST") {
+        if (proxy.lists.length >= SANDBOX_MAX_LISTS) {
+          return fail(409, "PROXY_LIST_LIMIT_EXCEEDED", "Maximum proxy lists per package reached.");
+        }
         if (settleProxy(proxy).status !== "active") return fail(409, "PROXY_NOT_READY", "Proxy is still provisioning. Retry shortly.");
         const id = uid("list_");
         const single = typeof body.country === "string" ? body.country.toUpperCase() : null;

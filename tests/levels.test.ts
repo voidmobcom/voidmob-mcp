@@ -31,8 +31,8 @@ const LEVELS: Record<string, PermissionLevel> = {
   create_proxy_list: "manage",
   update_proxy_list: "manage",
   delete_proxy_list: "manage",
+  reuse_number: "manage",
   rent_number: "buy",
-  reuse_number: "buy",
   re_rent_rental: "buy",
   purchase_dedicated_number: "buy",
   purchase_esim: "buy",
@@ -52,11 +52,11 @@ const expected = (level: PermissionLevel) =>
   Object.keys(LEVELS).filter((name) => levelAllows(level, LEVELS[name])).sort();
 
 describe("permission levels", () => {
-  it("the table covers exactly the tools the server registers: 26, 10 of them view", async () => {
+  it("the table covers exactly the tools the server registers: 26, 10 view, 8 manage, 8 buy", async () => {
     expect(Object.keys(LEVELS).sort()).toEqual(await toolNames(buildSandboxServer()));
     expect(Object.keys(LEVELS)).toHaveLength(26);
     expect(expected("view")).toHaveLength(10);
-    expect(expected("manage")).toHaveLength(17);
+    expect(expected("manage")).toHaveLength(18);
   });
 
   it.each(["view", "manage", "buy"] as const)("a %s key gets exactly the tools at or below its level", async (level) => {
@@ -86,6 +86,24 @@ describe("permission levels", () => {
     }
     const client = await connect(createVoidmobServer(createSandboxHttpClient(), DEFAULT_CONTROLS, key("buy")));
     expect((await client.listPrompts()).prompts.length).toBeGreaterThan(0);
+  });
+
+  it("reuse_number at Manage: a paid reuse is refused naming Buy, with nothing charged", async () => {
+    const http = createSandboxHttpClient();
+    const buyer = await connect(createVoidmobServer(http, DEFAULT_CONTROLS, key("buy")));
+    const bought = await buyer.callTool({ name: "rent_number", arguments: { service_id: "svc_telegram", max_price_cents: 150 } });
+    const id = (bought.structuredContent as Record<string, any>).verification.id;
+    const balance = async () =>
+      ((await buyer.callTool({ name: "get_account", arguments: {} })).structuredContent as Record<string, any>).account.balance.amount_cents;
+    const before = await balance();
+    const manager = await connect(createVoidmobServer(http, DEFAULT_CONTROLS, key("manage")));
+    const paid = await manager.callTool({ name: "reuse_number", arguments: { rental_id: id, paid: true, max_price_cents: 50 } });
+    expect(paid.isError).toBe(true);
+    const text = (paid.content as Array<{ text: string }>)[0].text;
+    expect(text).toContain("A paid reuse needs Buy access");
+    expect(text).toContain("has Manage access");
+    expect(text).toContain("Nothing was charged");
+    expect(await balance()).toBe(before);
   });
 
   it("end to end: the sandbox key's level, read through /v1/me, shapes the tool list", async () => {

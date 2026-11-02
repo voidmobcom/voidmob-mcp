@@ -137,6 +137,13 @@ export function mapApiError(err: unknown, links: ErrorLinks = DEFAULT_LINKS): st
     case "UNAUTHENTICATED":
       return unauthenticatedText(links, reqLine);
     case "IP_NOT_ALLOWED":
+      if (links.hosted) {
+        return (
+          `This API key only accepts requests from allowlisted IP addresses, so it does not work through the hosted VoidMob MCP server. ` +
+          `Nothing was charged or changed. Ask the user to connect with a key that has no IP allowlist, or by signing in, ` +
+          `or to run the server locally (npx @voidmob/mcp) on an allowlisted machine${reqLine}`
+        );
+      }
       return `This API key only accepts requests from allowlisted IP addresses, and this machine's IP is not on the list. Contact VoidMob support to change the allowlist${reqLine}`;
     case "RATE_LIMITED":
       if (typeof err.details?.paused_for_seconds === "number") {

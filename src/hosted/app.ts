@@ -11,6 +11,7 @@ import {
   type McpServer,
   type McpServerFactory,
 } from "@modelcontextprotocol/server";
+import { createHash } from "node:crypto";
 import type { JWTVerifyGetKey } from "jose";
 import { createHttpClient, HttpError, type HttpClient } from "../client/http.js";
 import { DEFAULT_CONTROLS } from "../config.js";
@@ -18,12 +19,23 @@ import { loadConnection, type Connection } from "../connection.js";
 import { createVoidmobServer, VERSION } from "../server.js";
 import { createTokenVerifier, hostedAuthOf, remoteJwks, type HostedAuth } from "./auth.js";
 import { MAX_BODY_BYTES, type HostedConfig } from "./config.js";
-import { RateLimiter, SandboxStore } from "./sandbox.js";
+import { ExpiringSet, RateLimiter, Slots } from "./limits.js";
+import { SandboxStore } from "./sandbox.js";
 
 /** How long a request waits for the credential's settings before using its claims (or the defaults). */
 const CONNECTION_WAIT_MS = 5_000;
 const FORWARD_TIMEOUT_MS = 10_000;
-const SANDBOX_PATH = /^\/sandbox(?:\/([A-Za-z0-9_-]{1,128}))?$/;
+/** A sandbox path token: 16 to 128 URL-safe characters, so tokens are hard to guess. */
+const SANDBOX_PATH = /^\/sandbox(?:\/([A-Za-z0-9_-]{16,128}))?$/;
+
+/** JSON-RPC messages per minute for one sandbox: its path token, or the IP on bare /sandbox. */
+export const SANDBOX_MESSAGES_PER_MINUTE = 60;
+/** JSON-RPC messages per minute from one IP, on /mcp and (separately) on /sandbox. */
+export const IP_MESSAGES_PER_MINUTE = 600;
+/** Open subscriptions/listen streams per credential on /mcp and per IP on /sandbox. */
+export const LISTEN_STREAMS_PER_CALLER = 4;
+/** How long a credential the API refused is answered 401 without asking the API again. */
+export const REFUSED_CREDENTIAL_TTL_MS = 30_000;
 
 /**
  * The User-Agent the hosted server sends to the API: the "voidmob-mcp/" prefix
@@ -48,7 +60,14 @@ export interface HostedDeps {
   /** One line per request; defaults to stdout. */
   log?: (line: string) => void;
   sandboxes?: SandboxStore;
+  /** Per sandbox (path token, or IP on bare /sandbox). */
   sandboxLimiter?: RateLimiter;
+  /** Per IP across /sandbox. */
+  sandboxIpLimiter?: RateLimiter;
+  /** Per IP across /mcp. */
+  mcpIpLimiter?: RateLimiter;
+  /** Credential hashes the API refused, answered 401 without another /v1/me. */
+  refusedCredentials?: ExpiringSet;
 }
 
 /** What the request log line reports. */
@@ -84,6 +103,89 @@ function clientIp(request: Request): string {
 function sandboxKey(request: Request): string {
   const token = SANDBOX_PATH.exec(new URL(request.url).pathname)?.[1];
   return token ? `token:${token}` : `ip:${clientIp(request)}`;
+}
+
+const credentialHash = (token: string): string => createHash("sha256").update(token).digest("hex");
+
+/** What the limits need from a POST body: its JSON-RPC message count, and the listen request in it. */
+interface BodyShape {
+  messages: number;
+  /** The id of a subscriptions/listen request, when the body is one. */
+  listenId?: string | number;
+}
+
+// The body is at most 64 KB (toNodeHandler refuses more before this runs);
+// the handler reads it again from the untouched request.
+async function bodyShape(request: Request): Promise<BodyShape> {
+  if (request.method !== "POST") return { messages: 1 };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await request.clone().text());
+  } catch {
+    return { messages: 1 };
+  }
+  if (Array.isArray(parsed)) return { messages: Math.max(1, parsed.length) };
+  const message = parsed as { method?: unknown; id?: unknown } | null;
+  if (message?.method === "subscriptions/listen" && (typeof message.id === "string" || typeof message.id === "number")) {
+    return { messages: 1, listenId: message.id };
+  }
+  return { messages: 1 };
+}
+
+const tooManyRequests = (wait: number): Response =>
+  json(
+    429,
+    { jsonrpc: "2.0", error: { code: -32000, message: `Too many requests. Wait ${wait}s.` }, id: null },
+    { "Retry-After": String(wait) },
+  );
+
+// Refused in band before the stream opens, the way the SDK refuses past its
+// own global cap.
+const listenRefused = (id: string | number): Response =>
+  json(200, { jsonrpc: "2.0", id, error: { code: -32603, message: "Subscription limit reached" } });
+
+/** Serves the request, holding the listen slot (if any) until its response is done. */
+async function holdSlot(release: (() => void) | undefined, request: Request, serve: () => Promise<Response>): Promise<Response> {
+  if (!release) return serve();
+  let response: Response;
+  try {
+    response = await serve();
+  } catch (e) {
+    release();
+    throw e;
+  }
+  return releaseWhenDone(response, request, release);
+}
+
+/** Holds a listen slot for as long as the response streams; released when it ends, fails or is cancelled. */
+function releaseWhenDone(response: Response, request: Request, release: () => void): Response {
+  if (!response.body) {
+    release();
+    return response;
+  }
+  request.signal.addEventListener("abort", release, { once: true });
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { value, done } = await reader.read();
+        if (done) {
+          release();
+          controller.close();
+        } else {
+          controller.enqueue(value);
+        }
+      } catch (e) {
+        release();
+        controller.error(e);
+      }
+    },
+    cancel(reason) {
+      release();
+      return reader.cancel(reason);
+    },
+  });
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 function protocolVersion(request: Request): string {
@@ -155,8 +257,8 @@ async function hostedConnection(http: HttpClient, token: string, auth: HostedAut
   try {
     return (await Promise.race([loadConnection(http, token), timeout])) ?? fallback;
   } catch (e) {
-    // Disconnected, expired or revoked: the app should sign in again now.
-    // loadConnection never caches a failure, so a new token is read fresh.
+    // Disconnected, expired or revoked: the app should sign in again now
+    // (the caller remembers the refusal for a short while).
     if (e instanceof HttpError && e.status === 401 && e.code === "UNAUTHENTICATED") return "revoked";
     return fallback;
   } finally {
@@ -172,7 +274,17 @@ async function hostedConnection(http: HttpClient, token: string, auth: HostedAut
 export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): HostedApp {
   const log = deps.log ?? ((line: string) => void process.stdout.write(`${line}\n`));
   const sandboxes = deps.sandboxes ?? new SandboxStore();
-  const sandboxLimiter = deps.sandboxLimiter ?? new RateLimiter();
+  const sandboxLimiter = deps.sandboxLimiter ?? new RateLimiter(SANDBOX_MESSAGES_PER_MINUTE);
+  const sandboxIpLimiter = deps.sandboxIpLimiter ?? new RateLimiter(IP_MESSAGES_PER_MINUTE);
+  const mcpIpLimiter = deps.mcpIpLimiter ?? new RateLimiter(IP_MESSAGES_PER_MINUTE);
+  const refused = deps.refusedCredentials ?? new ExpiringSet(REFUSED_CREDENTIAL_TTL_MS);
+  const mcpListens = new Slots(LISTEN_STREAMS_PER_CALLER);
+  const sandboxListens = new Slots(LISTEN_STREAMS_PER_CALLER);
+  const refusedChallenge = () =>
+    bearerAuthChallengeResponse(
+      new OAuthError(OAuthErrorCode.InvalidToken, "This token is no longer accepted; sign in again"),
+      { resourceMetadataUrl: prmUrl },
+    );
   const mcpPath = cfg.resourceUrl.pathname;
   const prmUrl = getOAuthProtectedResourceMetadataUrl(cfg.resourceUrl);
   const prmPaths = new Set(["/.well-known/oauth-protected-resource", new URL(prmUrl).pathname]);
@@ -280,6 +392,11 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
       note.route = mcpPath;
       const badOrigin = originValidationResponse(request, cfg.allowedOrigins);
       if (badOrigin) return badOrigin;
+      // Counted per JSON-RPC message, before any token check, so a flood of
+      // made-up keys cannot reach the API.
+      const shape = await bodyShape(request);
+      const wait = mcpIpLimiter.hit(clientIp(request), shape.messages);
+      if (wait > 0) return tooManyRequests(wait);
       const auth = await gate(request);
       if (auth instanceof Response) {
         note.auth = "none";
@@ -287,36 +404,37 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
       }
       const hosted = hostedAuthOf(auth);
       note.auth = hosted.kind;
+      const credential = credentialHash(auth.token);
+      if (refused.has(credential)) return refusedChallenge();
       const connection = await hostedConnection(
         createHttpClient({ apiKey: auth.token, baseUrl: cfg.apiBaseUrl, debug: false, userAgent: remoteUserAgent() }),
         auth.token,
         hosted,
       );
       if (connection === "revoked") {
-        return bearerAuthChallengeResponse(
-          new OAuthError(OAuthErrorCode.InvalidToken, "This token is no longer accepted; sign in again"),
-          { resourceMetadataUrl: prmUrl },
-        );
+        refused.add(credential);
+        return refusedChallenge();
       }
+      const release = shape.listenId !== undefined ? mcpListens.take(credential) : undefined;
+      if (release === null) return listenRefused(shape.listenId!);
       const extra: McpAuth = { ...hosted, connection };
-      return mcp.fetch(request, { authInfo: { ...auth, extra: extra as unknown as Record<string, unknown> } });
+      return holdSlot(release, request, () => mcp.fetch(request, { authInfo: { ...auth, extra: extra as unknown as Record<string, unknown> } }));
     }
 
-    const sandboxMatch = SANDBOX_PATH.exec(path);
-    if (sandboxMatch) {
-      note.route = sandboxMatch[1] ? "/sandbox/:token" : "/sandbox";
+    if (path === "/sandbox" || path.startsWith("/sandbox/")) {
+      const sandboxMatch = SANDBOX_PATH.exec(path);
+      note.route = path === "/sandbox" ? "/sandbox" : "/sandbox/:token";
       note.auth = "sandbox";
+      if (!sandboxMatch) return json(404, { error: "not_found" });
       const badOrigin = originValidationResponse(request, cfg.allowedOrigins);
       if (badOrigin) return badOrigin;
-      const wait = sandboxLimiter.hit(clientIp(request));
-      if (wait > 0) {
-        return json(
-          429,
-          { jsonrpc: "2.0", error: { code: -32000, message: `Too many sandbox requests from this address. Wait ${wait}s.` }, id: null },
-          { "Retry-After": String(wait) },
-        );
-      }
-      return sandbox.fetch(request);
+      const ip = clientIp(request);
+      const shape = await bodyShape(request);
+      const wait = sandboxLimiter.hit(sandboxKey(request), shape.messages) || sandboxIpLimiter.hit(ip, shape.messages);
+      if (wait > 0) return tooManyRequests(wait);
+      const release = shape.listenId !== undefined ? sandboxListens.take(ip) : undefined;
+      if (release === null) return listenRefused(shape.listenId!);
+      return holdSlot(release, request, () => sandbox.fetch(request));
     }
 
     note.route = "other";

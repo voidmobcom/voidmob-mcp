@@ -31,7 +31,7 @@ export interface ToolContext {
   localReadOnly: boolean;
   /** VOIDMOB_AUTONOMOUS=1, accepted because a limit is set (session budget or the key's daily limit). */
   localAutoMode: boolean;
-  /** Auto-mode in force (the key's or connection's, or the local flag): only the instructions change. */
+  /** Auto-mode in force (the key's or connection's when it has a daily limit, or the local flag): only the instructions change. */
   autoMode: boolean;
   /** Where the user adds funds. */
   depositUrl: string;
@@ -64,7 +64,9 @@ export function createToolContext(
     connection,
     localReadOnly: controls.readOnly,
     localAutoMode,
-    autoMode: connection?.autoMode === true || localAutoMode,
+    // A connection's auto-mode counts only with a daily limit to bound it
+    // (the dashboard requires one; a token's claims carry no limits).
+    autoMode: (connection?.autoMode === true && connection.dailyLimitCents !== null) || localAutoMode,
     depositUrl: depositUrlFor(connection),
     settingsUrl: settingsUrlFor(connection),
     hosted: options.hosted === true,

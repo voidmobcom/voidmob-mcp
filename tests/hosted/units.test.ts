@@ -1,12 +1,19 @@
 // Hosted building blocks: env config, the sandbox store (LRU with idle
-// expiry), the per-IP rate limit, and the UNAUTHENTICATED wording per mode.
-import { describe, it, expect } from "vitest";
+// expiry) and its capped mock, the rate limits, the refused-credential cache,
+// listen slots, and the error wording per mode.
+import { describe, it, expect, afterEach, vi } from "vitest";
 import type { HttpClient } from "../../src/client/http.js";
 import { HttpError } from "../../src/client/http.js";
 import { mapApiError } from "../../src/client/errors.js";
 import { ConfigError } from "../../src/config.js";
 import { parseHostedEnv } from "../../src/hosted/config.js";
-import { RateLimiter, SandboxStore } from "../../src/hosted/sandbox.js";
+import { ExpiringSet, RateLimiter, Slots } from "../../src/hosted/limits.js";
+import { SandboxStore } from "../../src/hosted/sandbox.js";
+import {
+  createSandboxHttpClient, READY_AFTER_MS, SANDBOX_MAX_LISTS, SANDBOX_MAX_MESSAGES, SANDBOX_MAX_ORDERS_PER_TYPE,
+} from "../../src/sandbox/mock-http.js";
+
+afterEach(() => vi.useRealTimers());
 
 describe("parseHostedEnv", () => {
   it("defaults to production", () => {
@@ -83,6 +90,14 @@ describe("RateLimiter", () => {
     expect(limiter.hit("ip1")).toBe(0);
   });
 
+  it("counts a request's messages; a request that does not fit counts nothing", () => {
+    const limiter = new RateLimiter(5, 60_000, 100, () => 0);
+    expect(limiter.hit("ip", 4)).toBe(0);
+    expect(limiter.hit("ip", 2)).toBe(60);
+    expect(limiter.hit("ip", 1)).toBe(0);
+    expect(limiter.hit("ip", 1)).toBe(60);
+  });
+
   it("holds at most maxKeys windows", () => {
     let now = 0;
     const limiter = new RateLimiter(1, 60_000, 2, () => now);
@@ -90,6 +105,92 @@ describe("RateLimiter", () => {
     limiter.hit("b");
     limiter.hit("c"); // a's window is dropped to make room
     expect(limiter.hit("a")).toBe(0);
+  });
+});
+
+describe("ExpiringSet", () => {
+  it("remembers a key for its TTL, holding at most max keys", () => {
+    let now = 0;
+    const set = new ExpiringSet(30_000, 2, () => now);
+    set.add("a");
+    now += 29_999;
+    expect(set.has("a")).toBe(true);
+    now += 1;
+    expect(set.has("a")).toBe(false);
+    set.add("b");
+    set.add("c");
+    set.add("d"); // full: b goes
+    expect([set.has("b"), set.has("c"), set.has("d")]).toEqual([false, true, true]);
+  });
+});
+
+describe("Slots", () => {
+  it("allows perKey slots per key; a release (once) frees one", () => {
+    const slots = new Slots(2);
+    const r1 = slots.take("k")!;
+    expect(slots.take("k")).not.toBeNull();
+    expect(slots.take("k")).toBeNull();
+    expect(slots.take("other")).not.toBeNull();
+    r1();
+    r1();
+    expect(slots.take("k")).not.toBeNull();
+    expect(slots.take("k")).toBeNull();
+  });
+});
+
+describe("sandbox mock caps", () => {
+  const call = async (http: HttpClient, method: string, path: string, body?: unknown) => {
+    const res = await http.request(method, path, body === undefined ? {} : { body });
+    return { status: res.status, body: res.body as Record<string, any> };
+  };
+
+  it(`keeps the newest ${SANDBOX_MAX_ORDERS_PER_TYPE} orders of a type`, async () => {
+    const http = createSandboxHttpClient();
+    const ids: string[] = [];
+    for (let i = 0; i <= SANDBOX_MAX_ORDERS_PER_TYPE; i++) {
+      const res = await call(http, "POST", "/v1/verifications", { service_id: "svc_discord", max_price_cents: 120 });
+      ids.push(res.body.data.verification.id);
+      if (i % 2) await call(http, "POST", `/v1/verifications/${ids[i]}/cancel`); // refunds keep the balance up
+    }
+    expect((await call(http, "GET", `/v1/verifications/${ids[0]}`)).status).toBe(404);
+    expect((await call(http, "GET", `/v1/verifications/${ids[1]}`)).status).toBe(200);
+  });
+
+  it(`keeps the newest ${SANDBOX_MAX_MESSAGES} SMS of a verification`, async () => {
+    vi.useFakeTimers();
+    const http = createSandboxHttpClient();
+    const id = (await call(http, "POST", "/v1/verifications", { service_id: "svc_discord", max_price_cents: 120 })).body.data.verification.id;
+    for (let i = 0; i < SANDBOX_MAX_MESSAGES + 5; i++) {
+      vi.advanceTimersByTime(READY_AFTER_MS + 1);
+      await call(http, "GET", `/v1/verifications/${id}`); // the code arrives
+      await call(http, "POST", `/v1/verifications/${id}/reuse`);
+    }
+    vi.advanceTimersByTime(READY_AFTER_MS + 1);
+    await call(http, "GET", `/v1/verifications/${id}`);
+    expect((await call(http, "GET", `/v1/verifications/${id}/messages`)).body.data.messages).toHaveLength(SANDBOX_MAX_MESSAGES);
+  });
+
+  it(`refuses list ${SANDBOX_MAX_LISTS + 1} on a proxy, like prod`, async () => {
+    vi.useFakeTimers();
+    const http = createSandboxHttpClient();
+    const proxy = (await call(http, "POST", "/v1/proxies", { plan_id: "plan_US5GB30D", max_price_cents: 1800 })).body.data.proxy.id;
+    vi.advanceTimersByTime(READY_AFTER_MS + 1);
+    for (let i = 0; i < SANDBOX_MAX_LISTS; i++) {
+      expect((await call(http, "POST", `/v1/proxies/${proxy}/lists`, { name: `l${i}`, country: "US" })).status).toBe(201);
+    }
+    const over = await call(http, "POST", `/v1/proxies/${proxy}/lists`, { name: "over", country: "US" });
+    expect(over.status).toBe(409);
+    expect(over.body.error.code).toBe("PROXY_LIST_LIMIT_EXCEEDED");
+  });
+});
+
+describe("IP_NOT_ALLOWED wording", () => {
+  const err = new HttpError(403, "IP_NOT_ALLOWED", "req_1", undefined, "IP not allowed", { method: "GET" });
+  it("stdio: this machine's IP; hosted: keys with an IP allowlist do not work through the hosted server", () => {
+    expect(mapApiError(err, { depositUrl: "x" })).toContain("this machine's IP is not on the list");
+    const hosted = mapApiError(err, { depositUrl: "x", hosted: true });
+    expect(hosted).toContain("does not work through the hosted VoidMob MCP server");
+    expect(hosted).not.toContain("this machine");
   });
 });
 
