@@ -89,10 +89,10 @@ describe("create_deposit", () => {
 
   it("leaves the payment link out when the coin has none", async () => {
     const http = createMockHttpClient();
-    http.expect("POST", "/v1/deposits", okBody({ deposit: deposit({ coin: "usdt_trc20", asset: "USDT", network: "TRON (TRC-20)", crypto_amount: "20.00", payment_uri: null }) }, 201));
+    http.expect("POST", "/v1/deposits", okBody({ deposit: deposit({ coin: "usdt_trc20", asset: "USDT", network: "Tron (TRC-20)", crypto_amount: "20.00", payment_uri: null }) }, 201));
     const res = await createDepositHandler(toolContext(http))({ coin: "usdt_trc20", amount_cents: 2000 });
     const text = textOf(res);
-    expect(text).toContain("Send exactly 20.00 USDT on the TRON (TRC-20) network");
+    expect(text).toContain("Send exactly 20.00 USDT on the Tron (TRC-20) network");
     expect(text).not.toContain("Payment link");
     expect(sc(res).deposit.payment_uri).toBeNull();
   });
@@ -177,14 +177,17 @@ describe("get_deposit with a deposit_id", () => {
     const until = "2026-11-03T13:30:00.000Z";
     const text = await read(deposit({
       status: "underpaid", received_cents: 1500, credited_cents: 1500, top_up: { crypto_amount: "0.06250000", until },
+      payment_uri: "litecoin:ltc1qexampleaddress0000000000000000000?amount=0.06250000",
     }));
+    expect(text).toContain("Payment link:   litecoin:ltc1qexampleaddress0000000000000000000?amount=0.06250000");
     expect(text).toContain("Received:       $15.00");
     expect(text).toContain("Credited:       $15.00");
     expect(text).toContain("Send more:      0.06250000 LTC");
     expect(text).toContain(`To complete it, send 0.06250000 LTC more on the Litecoin network to the same address until ${until}.`);
-    const closed = await read(deposit({ status: "underpaid", received_cents: 1500, credited_cents: 1500, top_up: null }));
+    const closed = await read(deposit({ status: "underpaid", received_cents: 1500, credited_cents: 1500, top_up: null, payment_uri: null }));
     expect(closed).toContain("This deposit takes no more payments: for the rest, create a new deposit.");
     expect(closed).not.toContain("Send more");
+    expect(closed).not.toContain("Payment link");
   });
 
   it("credited: the credited amount and any bonus", async () => {
@@ -192,11 +195,20 @@ describe("get_deposit with a deposit_id", () => {
       status: "credited", received_cents: 2000, credited_cents: 2000, bonus_cents: 1000, credited_at: "2026-11-03T12:20:00.000Z",
     }));
     expect(text).toContain("Credited:       $20.00 (+$10.00 bonus)");
-    expect(text).toContain("Credited at:    2026-11-03T12:20:00.000Z");
+    expect(text).toContain("First credit:   2026-11-03T12:20:00.000Z");
     expect(text).toContain("Paid in full");
     expect(text).not.toContain("Address:");
     expect(text).toContain(`Payment window: https://dashboard.voidmob.com/wallet?deposit=${ID}`);
     expect(text).not.toContain("check the address");
+  });
+
+  it("a deposit in the retired ton coin (never in deposit_coins) still reads", async () => {
+    const text = await read(deposit({
+      coin: "ton", asset: "TON", network: "TON", status: "credited", payment_uri: null,
+      received_cents: 2000, credited_cents: 2000, credited_at: "2026-10-01T12:20:00.000Z",
+    }));
+    expect(text).toContain("Amount:         $20.00 (ton)");
+    expect(text).toContain("Credited:       $20.00");
   });
 
   it("expired: don't send to it, create a new one", async () => {
@@ -223,7 +235,7 @@ describe("get_deposit with a deposit_id", () => {
 describe("get_deposit without a deposit_id", () => {
   const coins = [
     { coin: "btc", asset: "BTC", network: "Bitcoin", min_amount_cents: 1000, max_amount_cents: 1_000_000 },
-    { coin: "usdt_trc20", asset: "USDT", network: "TRON (TRC-20)", min_amount_cents: 500, max_amount_cents: 1_000_000 },
+    { coin: "usdt_trc20", asset: "USDT", network: "Tron (TRC-20)", min_amount_cents: 500, max_amount_cents: 1_000_000 },
   ];
 
   it("lists the coins with their limits and the 5 newest deposits, naming the ones that still take payments", async () => {
@@ -234,11 +246,24 @@ describe("get_deposit without a deposit_id", () => {
     const text = textOf(res);
     expect(text).toContain("btc          BTC on Bitcoin");
     expect(text).toContain("$10.00 - $10000.00");
-    expect(text).toContain("usdt_trc20   USDT on TRON (TRC-20)");
+    expect(text).toContain("usdt_trc20   USDT on Tron (TRC-20)");
     expect(text).toContain(`Still taking payments: ${ID}. Reuse one rather than creating another`);
     expect(text).not.toContain("Still taking payments: dep_old");
     expect(text).toContain("To add funds, create_deposit with a coin id and amount_cents (ask the user which coin and how much unless they said)");
     expect(sc(res)).toMatchObject({ coins, deposits: [{ id: ID }, { id: "dep_old" }] });
+  });
+
+  it("an old deposit in a coin no longer offered (ton) lists like any other", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/deposit_coins", okBody({ coins }));
+    http.expect("GET", "/v1/deposits?limit=5", okBody({
+      deposits: [deposit({ id: "dep_ton", coin: "ton", asset: "TON", network: "TON", status: "expired", payment_uri: null })], next_cursor: null,
+    }));
+    const res = await getDepositHandler(toolContext(http, {}, manage))({});
+    expect(res.isError ?? false, textOf(res)).toBe(false);
+    expect(textOf(res)).toMatch(/dep_ton +expired +\$20\.00 +ton/);
+    expect(textOf(res)).not.toContain("Still taking payments");
+    expect(sc(res).coins.map((c: { coin: string }) => c.coin)).not.toContain("ton");
   });
 
   it("at View, the deposit link alone; no deposits yet", async () => {

@@ -4,7 +4,7 @@
     "title": "VoidMob Public API",
     "version": "1.0.0",
     "summary": "SMS verifications, mobile proxies, and webhooks for programmatic use.",
-    "description": "The VoidMob Public API (`/api/v1`) exposes the same surface that powers the\ndashboard - SMS verifications, mobile/GB proxy provisioning, real-time\nbalance, and outbound webhooks - under a stable, programmatic contract.\n\nRunning higher volumes? Custom pricing is available -\n[contact us](https://voidmob.com/contact).\n\n## Conventions\n\n- **Base URL:** `https://dashboard.voidmob.com/api/v1`\n- **Authentication:** Bearer token. Issue keys from\n  [Developers - API Keys](https://dashboard.voidmob.com/developers/api-keys).\n  Live keys are prefixed `vmk_live_`.\n- **Money:** all monetary values are **USD cents** as integers. The API\n  never returns floats for money.\n- **Identifiers:** every public id has a stable prefix (`svc_`, `ver_`,\n  `ren_`, `prx_`, `plan_`, `pool_`, `list_`, `whep_`, `esim_`, `prod_`,\n  `evt_`). Treat them as opaque.\n- **Envelopes:** every JSON response is either\n  `{ \"success\": true, \"data\": ... }` or\n  `{ \"success\": false, \"error\": { code, message, docs_url, request_id, details? } }`.\n- **Idempotency:** order-creating and money-moving POST / PATCH / DELETE\n  requests require an `Idempotency-Key` header (any string up to 255\n  chars) - see each operation's parameters for whether it is required.\n  Lighter-weight management calls (webhook-endpoint create/delete,\n  auto-renew toggle, dedicated IP rotation) do not. Re-sending the same\n  key with the same body replays the original response; a different body\n  returns `409 IDEMPOTENCY_CONFLICT`.\n- **Rate limits:** every response carries `X-RateLimit-Limit`,\n  `X-RateLimit-Remaining`, and `X-RateLimit-Reset` (unix seconds). 429s\n  additionally carry `Retry-After`.\n- **Pricing:** SMS prices drift between catalog and create. Send\n  `max_price_cents` to cap how much you authorize; if the lowest\n  available price is above that cap, the API returns `409 PRICE_OVER_CAP`\n  with both your cap and the current price in the error details. No\n  partial state is created. See `verifications` and `rentals`.\n",
+    "description": "The VoidMob Public API (`/api/v1`) exposes the same surface that powers the\ndashboard - SMS verifications, mobile/GB proxy provisioning, real-time\nbalance, and outbound webhooks - under a stable, programmatic contract.\n\nRunning higher volumes? Custom pricing is available -\n[contact us](https://voidmob.com/contact).\n\n## Conventions\n\n- **Base URL:** `https://dashboard.voidmob.com/api/v1`\n- **Authentication:** Bearer token. Issue keys from\n  [Developers - API Keys](https://dashboard.voidmob.com/developers/api-keys).\n  Live keys are prefixed `vmk_live_`.\n- **Money:** all monetary values are **USD cents** as integers. The API\n  never returns floats for money.\n- **Identifiers:** every public id has a stable prefix (`svc_`, `ver_`,\n  `ren_`, `prx_`, `plan_`, `pool_`, `list_`, `whep_`, `esim_`, `prod_`,\n  `dep_`, `evt_`). Treat them as opaque.\n- **Envelopes:** every JSON response is either\n  `{ \"success\": true, \"data\": ... }` or\n  `{ \"success\": false, \"error\": { code, message, docs_url, request_id, details? } }`.\n- **Idempotency:** order-creating and money-moving POST / PATCH / DELETE\n  requests require an `Idempotency-Key` header (any string up to 255\n  chars) - see each operation's parameters for whether it is required.\n  Lighter-weight management calls (webhook-endpoint create/delete,\n  auto-renew toggle, dedicated IP rotation) do not. Re-sending the same\n  key with the same body replays the original response; a different body\n  returns `409 IDEMPOTENCY_CONFLICT`.\n- **Rate limits:** every response carries `X-RateLimit-Limit`,\n  `X-RateLimit-Remaining`, and `X-RateLimit-Reset` (unix seconds). 429s\n  additionally carry `Retry-After`.\n- **Pricing:** SMS prices drift between catalog and create. Send\n  `max_price_cents` to cap how much you authorize; if the lowest\n  available price is above that cap, the API returns `409 PRICE_OVER_CAP`\n  with both your cap and the current price in the error details. No\n  partial state is created. See `verifications` and `rentals`.\n",
     "contact": {
       "name": "VoidMob",
       "url": "https://voidmob.com",
@@ -74,6 +74,10 @@
     {
       "name": "eSIM",
       "description": "Purchase and manage eSIM orders, browse the product catalog, and top up data."
+    },
+    {
+      "name": "Deposits",
+      "description": "Add funds to the balance with crypto. Create a deposit, send the exact amount to its address, and follow its status."
     },
     {
       "name": "System",
@@ -4034,6 +4038,289 @@
         }
       }
     },
+    "/deposits": {
+      "post": {
+        "operationId": "createDeposit",
+        "tags": [
+          "Deposits"
+        ],
+        "summary": "Create a crypto deposit",
+        "description": "Opens a deposit to the caller's own balance and returns the address and\nexact amount to send. Nothing is charged. Needs Manage access; app\nconnections may create deposits too.\n\nSend exactly `crypto_amount` of `asset` on `network` to `address` before\n`expires_at`. Any extra is credited too. Don't send to an expired\ndeposit; create a new one. If a payment arrives anyway, it is credited\nonce it confirms. `url` opens the deposit's payment window in the\ndashboard (QR code, countdown, and the address to check against).\n\nLimits per account, shared with the dashboard: 5 a minute\n(`429 RATE_LIMITED` with `Retry-After`), and a cap on open deposits and\non deposits created per day (`429 DEPOSIT_LIMIT_REACHED`, with\n`details.reason` and `details.limit`). An amount under the coin's\nminimum is `400 VALIDATION_ERROR` with `details.min_amount_cents`; see\n`GET /v1/deposit_coins`.\n\nIdempotent by `Idempotency-Key`: a replay returns the same deposit and\naddress. Every answer is cached under the key, so a retry after a\nrefusal needs a new key. The exception is `503 SERVICE_UNAVAILABLE`:\nno deposit was created, and the same key may retry.\n",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDepositRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Deposit created. Poll `GET /v1/deposits/{id}` for its status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "required": [
+                            "deposit"
+                          ],
+                          "properties": {
+                            "deposit": {
+                              "$ref": "#/components/schemas/Deposit"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/VALIDATION_ERROR"
+          },
+          "401": {
+            "$ref": "#/components/responses/UNAUTHENTICATED"
+          },
+          "403": {
+            "$ref": "#/components/responses/PERMISSION_DENIED"
+          },
+          "409": {
+            "description": "Conflict - IDEMPOTENCY_CONFLICT or IDEMPOTENCY_REPLAY_IN_FLIGHT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests - RATE_LIMITED (5 deposits a minute) or DEPOSIT_LIMIT_REACHED (open or daily deposits).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/INTERNAL_ERROR"
+          },
+          "503": {
+            "$ref": "#/components/responses/SERVICE_UNAVAILABLE"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listDeposits",
+        "tags": [
+          "Deposits"
+        ],
+        "summary": "List the caller's deposits",
+        "description": "Deposits owned by the caller, newest first, including ones made in the\ndashboard. Up to 100 per page (default 20). Use `next_cursor` to fetch\nthe next page.\n\nWith `status`, a page can hold fewer than `limit` deposits and still\ncarry a `next_cursor`: keep paging until `next_cursor` is null.\n",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DepositStatus"
+            },
+            "description": "Only deposits in this status."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "description": "Maximum number of results per page."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "description": "Opaque pagination cursor from a previous response's `next_cursor`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of deposits.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/DepositList"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/VALIDATION_ERROR"
+          },
+          "401": {
+            "$ref": "#/components/responses/UNAUTHENTICATED"
+          },
+          "429": {
+            "$ref": "#/components/responses/RATE_LIMITED"
+          }
+        }
+      }
+    },
+    "/deposits/{id}": {
+      "get": {
+        "operationId": "getDeposit",
+        "tags": [
+          "Deposits"
+        ],
+        "summary": "Get a deposit by id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DepositId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deposit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "required": [
+                            "deposit"
+                          ],
+                          "properties": {
+                            "deposit": {
+                              "$ref": "#/components/schemas/Deposit"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UNAUTHENTICATED"
+          },
+          "404": {
+            "$ref": "#/components/responses/NOT_FOUND"
+          },
+          "429": {
+            "$ref": "#/components/responses/RATE_LIMITED"
+          }
+        }
+      }
+    },
+    "/deposit_coins": {
+      "get": {
+        "operationId": "listDepositCoins",
+        "tags": [
+          "Deposits"
+        ],
+        "summary": "List the coins a deposit can be made in",
+        "description": "Every coin `POST /v1/deposits` accepts, with the smallest and largest\ndeposit in each.\n",
+        "responses": {
+          "200": {
+            "description": "The coins.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "required": [
+                            "coins"
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "coins": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/DepositCoin"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UNAUTHENTICATED"
+          },
+          "429": {
+            "$ref": "#/components/responses/RATE_LIMITED"
+          }
+        }
+      }
+    },
     "/geo": {
       "get": {
         "operationId": "listGeo",
@@ -5897,6 +6184,12 @@
         "pattern": "^ren_[A-Za-z0-9_-]+$",
         "description": "Opaque long-term rental identifier.",
         "example": "ren_01HXYZ123ABC"
+      },
+      "DepositId": {
+        "type": "string",
+        "pattern": "^dep_[A-Za-z0-9_-]{1,64}$",
+        "description": "Opaque crypto deposit identifier.",
+        "example": "dep_3f2b9d3a-1c4e-4a3b-9f0e-6c1d2b3a4f5e"
       },
       "RequestId": {
         "type": "string",
@@ -8672,6 +8965,265 @@
           }
         }
       },
+      "DepositCoinId": {
+        "type": "string",
+        "enum": [
+          "sol",
+          "ltc",
+          "eth",
+          "bnb",
+          "trx",
+          "btc",
+          "xmr",
+          "usdt_sol",
+          "usdt_bep20",
+          "usdt_trc20",
+          "usdc_sol",
+          "usdc_erc20"
+        ],
+        "description": "A coin a new deposit can be made in. `GET /v1/deposit_coins` lists each with its asset, network and limits.",
+        "example": "ltc"
+      },
+      "DepositStatus": {
+        "type": "string",
+        "enum": [
+          "awaiting_payment",
+          "confirming",
+          "underpaid",
+          "credited",
+          "expired"
+        ],
+        "description": "- `awaiting_payment`: open, nothing seen yet.\n- `confirming`: a payment was seen and waits for network confirmations.\n- `underpaid`: what arrived was credited, and it is less than the\n  deposit's amount. While more can still be sent, `top_up` says how\n  much and until when. It stays `underpaid` if nothing follows.\n- `credited`: paid in full and credited to the balance; any extra is\n  credited too.\n- `expired`: the payment window ended with nothing received. Don't\n  send to an expired deposit; create a new one. If a payment arrives\n  anyway, it is credited once it confirms.\n"
+      },
+      "CreateDepositRequest": {
+        "type": "object",
+        "required": [
+          "coin",
+          "amount_cents"
+        ],
+        "properties": {
+          "coin": {
+            "$ref": "#/components/schemas/DepositCoinId"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000,
+            "description": "The deposit in USD cents. At least the coin's `min_amount_cents` from `GET /v1/deposit_coins`.",
+            "example": 2500
+          }
+        }
+      },
+      "Deposit": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "coin",
+          "asset",
+          "network",
+          "amount_cents",
+          "crypto_amount",
+          "address",
+          "payment_uri",
+          "confirmations",
+          "required_confirmations",
+          "received_cents",
+          "credited_cents",
+          "bonus_cents",
+          "top_up",
+          "url",
+          "expires_at",
+          "created_at",
+          "credited_at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/DepositId"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DepositStatus"
+          },
+          "coin": {
+            "type": "string",
+            "enum": [
+              "sol",
+              "ltc",
+              "eth",
+              "bnb",
+              "trx",
+              "btc",
+              "xmr",
+              "usdt_sol",
+              "usdt_bep20",
+              "usdt_trc20",
+              "usdc_sol",
+              "usdc_erc20",
+              "ton"
+            ],
+            "description": "The deposit's coin: one of the `DepositCoinId` values, or `ton`.\n`ton` is retired: it appears only on deposits made before Toncoin\nwas withdrawn, and a new deposit can't use it.\n",
+            "example": "ltc"
+          },
+          "asset": {
+            "type": "string",
+            "description": "What to send, e.g. `USDT`.",
+            "example": "LTC"
+          },
+          "network": {
+            "type": "string",
+            "description": "The network to send it on. Sending on another network loses the payment.",
+            "example": "Litecoin"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "description": "The deposit's amount in USD cents."
+          },
+          "crypto_amount": {
+            "type": "string",
+            "description": "The exact amount of `asset` to send, as a decimal string.",
+            "example": "0.31822817"
+          },
+          "address": {
+            "type": "string",
+            "description": "The address to send to."
+          },
+          "payment_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A payment link that opens a wallet app with the address and amount\nfilled in, while something is still to send: the full amount while\n`awaiting_payment`, the rest with `top_up`. Bitcoin, Litecoin,\nMonero and Solana only; null otherwise.\n",
+            "example": "litecoin:ltc1qexampleaddress?amount=0.31822817"
+          },
+          "confirmations": {
+            "type": "integer",
+            "description": "Network confirmations of the payment seen so far."
+          },
+          "required_confirmations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Confirmations the payment needs, when known."
+          },
+          "received_cents": {
+            "type": "integer",
+            "description": "Confirmed payments in USD cents at the deposit's rate. 0 until a payment confirms."
+          },
+          "credited_cents": {
+            "type": "integer",
+            "description": "Everything credited to the balance for this deposit, in USD cents."
+          },
+          "bonus_cents": {
+            "type": "integer",
+            "description": "Bonus credited for this deposit (welcome or promo), in USD cents."
+          },
+          "top_up": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "While an underpaid deposit can still take the rest, how much more to send and until when. Null otherwise.",
+            "required": [
+              "crypto_amount",
+              "until"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "crypto_amount": {
+                "type": "string",
+                "description": "The rest to send, in `asset`, to the same address."
+              },
+              "until": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Send it before this time."
+              }
+            }
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "The deposit's payment window in the dashboard (QR code, countdown, and the address to check against).",
+            "example": "https://dashboard.voidmob.com/wallet?deposit=dep_3f2b9d3a-1c4e-4a3b-9f0e-6c1d2b3a4f5e"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the payment window ends."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "credited_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the deposit was first credited to the balance. Null until then."
+          }
+        }
+      },
+      "DepositList": {
+        "type": "object",
+        "required": [
+          "deposits",
+          "next_cursor"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "deposits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Deposit"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` in the next request to advance the page. Null on the last page."
+          }
+        }
+      },
+      "DepositCoin": {
+        "type": "object",
+        "required": [
+          "coin",
+          "asset",
+          "network",
+          "min_amount_cents",
+          "max_amount_cents"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "coin": {
+            "$ref": "#/components/schemas/DepositCoinId"
+          },
+          "asset": {
+            "type": "string",
+            "example": "USDT"
+          },
+          "network": {
+            "type": "string",
+            "example": "Tron (TRC-20)"
+          },
+          "min_amount_cents": {
+            "type": "integer",
+            "description": "The smallest deposit in this coin, in USD cents.",
+            "example": 5000
+          },
+          "max_amount_cents": {
+            "type": "integer",
+            "description": "The largest deposit, in USD cents.",
+            "example": 1000000
+          }
+        }
+      },
       "PublicErrorCode": {
         "type": "string",
         "description": "Stable enum of all public error codes. Each code maps to a fixed HTTP status; see the per-response components for status/body shape.",
@@ -8734,7 +9286,8 @@
           "PRODUCT_UNAVAILABLE",
           "USAGE_UNAVAILABLE",
           "ESIM_GONE",
-          "ESIM_NOT_ACTIVE"
+          "ESIM_NOT_ACTIVE",
+          "DEPOSIT_LIMIT_REACHED"
         ]
       },
       "ErrorEnvelope": {
@@ -10870,6 +11423,39 @@
                 "code": "ESIM_NOT_ACTIVE",
                 "message": "eSIM is not in an active state.",
                 "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#esim_not_active",
+                "request_id": "req_01HXYZ123456789ABCDEFG"
+              }
+            }
+          }
+        }
+      },
+      "DEPOSIT_LIMIT_REACHED": {
+        "description": "429 - This account has reached its deposit limit. Pay or wait out an open deposit, or try again later.",
+        "headers": {
+          "X-RateLimit-Limit": {
+            "$ref": "#/components/headers/X-RateLimit-Limit"
+          },
+          "X-RateLimit-Remaining": {
+            "$ref": "#/components/headers/X-RateLimit-Remaining"
+          },
+          "X-RateLimit-Reset": {
+            "$ref": "#/components/headers/X-RateLimit-Reset"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/Retry-After"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "success": false,
+              "error": {
+                "code": "DEPOSIT_LIMIT_REACHED",
+                "message": "This account has reached its deposit limit. Pay or wait out an open deposit, or try again later.",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#deposit_limit_reached",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }

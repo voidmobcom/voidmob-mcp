@@ -89,6 +89,8 @@ export function renderDeposit(d: DepositT): string {
           `  Send more:      ${d.top_up.crypto_amount} ${d.asset}`,
           `  Network:        ${d.network}`,
           `  Address:        ${d.address}`,
+          // While a top-up is open, the link carries the rest to send.
+          ...(d.payment_uri ? [`  Payment link:   ${d.payment_uri}`] : []),
           `  Until:          ${deadline(d.top_up.until)}`,
           ``,
           `Less arrived than the deposit asked for, and what arrived was credited. To complete it, send ${d.top_up.crypto_amount} ${d.asset} more on the ${d.network} network to the same address until ${d.top_up.until}.`,
@@ -98,7 +100,7 @@ export function renderDeposit(d: DepositT): string {
       }
       break;
     case "credited":
-      lines.push(`  Credited:       ${credited}`, `  Credited at:    ${d.credited_at ?? "-"}`, ``, `Paid in full: the amount is on the balance (any extra was credited too).`);
+      lines.push(`  Credited:       ${credited}`, `  First credit:   ${d.credited_at ?? "-"}`, ``, `Paid in full: the amount is on the balance (any extra was credited too).`);
       break;
     case "expired":
       lines.push(``, `The payment window ended with nothing received. Don't send to this deposit; create a new one. If a payment arrives anyway, it is credited once it confirms.`);
