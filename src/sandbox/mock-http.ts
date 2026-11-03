@@ -1,5 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type { HttpClient, HttpResponse, HttpRequestOpts } from "../client/http.js";
 import type {
+  Deposit,
+  DepositCoin,
   MeKey,
   MePayload,
   SmsService,
@@ -110,6 +113,20 @@ const PROXY_PLANS: ProxyPlan[] = [
 
 const isDedicatedProxy = (p: Proxy): boolean => p.type === "dedicated_standard" || p.type === "dedicated_premium";
 
+// Deposit coins, with a fake USD price per coin to work out the amount to send.
+const DEPOSIT_COINS: Array<DepositCoin & { usd: number; decimals: number; confirmations: number }> = [
+  { coin: "btc", asset: "BTC", network: "Bitcoin", min_amount_cents: 1000, max_amount_cents: 1_000_000, usd: 60_000, decimals: 8, confirmations: 2 },
+  { coin: "eth", asset: "ETH", network: "Ethereum", min_amount_cents: 1000, max_amount_cents: 1_000_000, usd: 3_000, decimals: 6, confirmations: 12 },
+  { coin: "ltc", asset: "LTC", network: "Litecoin", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 80, decimals: 6, confirmations: 6 },
+  { coin: "sol", asset: "SOL", network: "Solana", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 150, decimals: 6, confirmations: 1 },
+  { coin: "usdt_trc20", asset: "USDT", network: "TRON (TRC-20)", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 1, decimals: 2, confirmations: 20 },
+  { coin: "usdc_sol", asset: "USDC", network: "Solana", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 1, decimals: 2, confirmations: 1 },
+];
+// Mirrors prod: a deposit's payment window is 60 minutes, and an account can
+// hold 8 deposits that still wait for a payment.
+const DEPOSIT_WINDOW_MS = 60 * MINUTE;
+const MAX_OPEN_DEPOSITS = 8;
+
 const GEO: Record<string, { name: string; available_nodes: number; code?: string }[]> = {
   countries: [
     { code: "US", name: "United States", available_nodes: 4200 },
@@ -133,7 +150,7 @@ const GEO: Record<string, { name: string; available_nodes: number; code?: string
 
 // ── state ────────────────────────────────────────────────────────────────────
 
-const START_BALANCE_CENTS = 50000; // $500 play-money balance (sandbox has no deposit tool, so spend-only)
+const START_BALANCE_CENTS = 50000; // $500 play-money balance; a sandbox deposit adds to it once credited
 
 // The hosted sandbox keeps a store per caller for an hour, and buy-then-cancel
 // loops refund the balance, so every collection is capped: the oldest orders
@@ -151,6 +168,10 @@ class Store {
   esims = new Map<string, Esim>();
   proxies = new Map<string, Proxy>();
   dedicateds = new Map<string, DedicatedNumber>();
+  // A deposit and how many times it has been read: the first read sees the
+  // payment confirming, the second sees it credited.
+  deposits = new Map<string, { deposit: Deposit; reads: number }>();
+  depositedCents = 0; // credited by sandbox deposits
   createdAtMs = new Map<string, number>(); // entity id -> creation epoch ms
 
   /** Store a new order, dropping the oldest of its type past the cap. */
@@ -321,8 +342,8 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
           permission: "buy",
           max_order_cents: null,
           daily_limit_cents: null,
-          // Net spend: the sandbox only spends and refunds, and lives well under 24h.
-          spent_24h_cents: Math.max(0, START_BALANCE_CENTS - db.balanceCents),
+          // Net spend: the sandbox spends, refunds and credits deposits, and lives well under 24h.
+          spent_24h_cents: Math.max(0, START_BALANCE_CENTS + db.depositedCents - db.balanceCents),
           auto_mode: false,
           ...options.key,
         },
@@ -888,6 +909,77 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
           return ok({ list });
         }
       }
+    }
+
+    // ── deposits ──
+    if (rawPath === "/v1/deposit_coins" && method === "GET") {
+      return ok({ coins: DEPOSIT_COINS.map(({ coin, asset, network, min_amount_cents, max_amount_cents }) => ({ coin, asset, network, min_amount_cents, max_amount_cents })) });
+    }
+    if (rawPath === "/v1/deposits" && method === "GET") {
+      const all = byStatus([...db.deposits.values()].map((e) => e.deposit).reverse(), query);
+      const { page, nextCursor } = paginate(all, query, 20);
+      return ok({ deposits: page, next_cursor: nextCursor });
+    }
+    if (rawPath === "/v1/deposits" && method === "POST") {
+      const coin = DEPOSIT_COINS.find((c) => c.coin === body.coin);
+      if (!coin) return fail(400, "VALIDATION_ERROR", `Unknown coin '${String(body.coin)}'.`);
+      const amount = Number(body.amount_cents);
+      if (!Number.isInteger(amount) || amount < 1 || amount > coin.max_amount_cents) {
+        return fail(400, "VALIDATION_ERROR", `amount_cents must be a whole number from 1 to ${coin.max_amount_cents}.`);
+      }
+      if (amount < coin.min_amount_cents) {
+        return fail(400, "VALIDATION_ERROR", `The minimum deposit for ${coin.asset} on ${coin.network} is ${formatUsd(coin.min_amount_cents)}.`, {
+          min_amount_cents: coin.min_amount_cents,
+        });
+      }
+      const open = [...db.deposits.values()].filter((e) => e.deposit.status === "awaiting_payment").length;
+      if (open >= MAX_OPEN_DEPOSITS) {
+        return fail(429, "DEPOSIT_LIMIT_REACHED", "Too many open deposits.", { reason: "open_deposits", limit: MAX_OPEN_DEPOSITS });
+      }
+      const id = `dep_${randomUUID()}`;
+      const deposit: Deposit = {
+        id,
+        status: "awaiting_payment",
+        coin: coin.coin,
+        asset: coin.asset,
+        network: coin.network,
+        amount_cents: amount,
+        crypto_amount: (amount / 100 / coin.usd).toFixed(coin.decimals),
+        address: `SANDBOX-NOT-A-REAL-ADDRESS-${alnum(16).toUpperCase()}`,
+        payment_uri: null,
+        confirmations: 0,
+        required_confirmations: coin.confirmations,
+        received_cents: 0,
+        credited_cents: 0,
+        bonus_cents: 0,
+        top_up: null,
+        url: `https://dashboard.voidmob.com/wallet?deposit=${id}`,
+        expires_at: iso(DEPOSIT_WINDOW_MS),
+        created_at: iso(),
+        credited_at: null,
+      };
+      db.add(db.deposits, id, { deposit, reads: 0 });
+      return ok({ deposit }, 201);
+    }
+    if (seg[1] === "deposits" && seg[2] && !seg[3] && method === "GET") {
+      const entry = db.deposits.get(seg[2]);
+      if (!entry) return fail(404, "NOT_FOUND", "Deposit not found.");
+      // Each read of a deposit moves it on once: payment seen, then credited.
+      const d = entry.deposit;
+      entry.reads += 1;
+      if (entry.reads === 1 && d.status === "awaiting_payment") {
+        d.status = "confirming";
+        d.confirmations = 1;
+      } else if (entry.reads === 2 && d.status === "confirming") {
+        d.status = "credited";
+        d.confirmations = d.required_confirmations ?? d.confirmations;
+        d.received_cents = d.amount_cents;
+        d.credited_cents = d.amount_cents;
+        d.credited_at = iso();
+        db.balanceCents += d.amount_cents;
+        db.depositedCents += d.amount_cents;
+      }
+      return ok({ deposit: d });
     }
 
     // ── geo (cascading) ──

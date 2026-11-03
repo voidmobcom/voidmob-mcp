@@ -18,6 +18,8 @@ export interface HttpRequestOpts {
   idempotencyKey?: string;
   headers?: Record<string, string>;
   expectBinary?: boolean;
+  /** Overrides the default timeout (10 s for a GET, 30 s for a write), per attempt. */
+  timeoutMs?: number;
 }
 
 export interface HttpClient {
@@ -85,7 +87,7 @@ export function createHttpClient(opts: ClientOpts): HttpClient {
 
   async function doOnce(method: string, path: string, ropts: HttpRequestOpts): Promise<HttpResponse> {
     const ac = new AbortController();
-    const timeoutMs = method.toUpperCase() === "GET" ? GET_TIMEOUT_MS : WRITE_TIMEOUT_MS;
+    const timeoutMs = ropts.timeoutMs ?? (method.toUpperCase() === "GET" ? GET_TIMEOUT_MS : WRITE_TIMEOUT_MS);
     // The timer stays armed until the body has been read: a response whose
     // headers arrive but whose body stalls is aborted too.
     const timer = setTimeout(() => ac.abort(), timeoutMs);

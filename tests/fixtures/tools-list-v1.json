@@ -1,9 +1,11 @@
 {
   "tools": [
     "cancel_rental",
+    "create_deposit",
     "create_proxy_list",
     "delete_proxy_list",
     "get_account",
+    "get_deposit",
     "get_esim_status",
     "get_geo",
     "get_proxy_status",

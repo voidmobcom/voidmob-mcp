@@ -1,6 +1,6 @@
 import { HttpError, NetworkError, isWriteMethod } from "./http.js";
 import { formatUsd } from "../utils/format.js";
-import { levelLabel, type Connection } from "../connection.js";
+import { levelLabel, type Connection, type PermissionLevel } from "../connection.js";
 
 const SETUP_URL = "https://dashboard.voidmob.com/developers/api-keys";
 const WALLET_URL = "https://dashboard.voidmob.com/wallet";
@@ -13,6 +13,8 @@ export interface ErrorLinks {
   hosted?: boolean;
   /** The key's or app connection's settings; `kind` picks the wording. */
   connection?: Connection | null;
+  /** The server's level: at Manage or above, create_deposit is there to add funds. */
+  level?: PermissionLevel;
 }
 
 const DEFAULT_LINKS: ErrorLinks = { depositUrl: WALLET_URL };
@@ -60,6 +62,36 @@ function keyLimitText(err: HttpError, reqLine: string): string {
     `Tell the user; only the account owner can raise the limit${settings ? `, at ${settings}` : ", in the dashboard"}. ${AFTER_RAISE}`,
   );
   return `${parts.join(" ")}${reqLine}`;
+}
+
+/** Copy for a purchase the balance cannot cover: a deposit at Manage or above, else the link alone. */
+function insufficientBalanceText(links: ErrorLinks, reqLine: string): string {
+  if (links.level === "manage" || links.level === "buy") {
+    return (
+      `Your VoidMob balance is too low for this purchase. Nothing was charged. ` +
+      `Offer to add funds with create_deposit (ask which coin and how much), or the user can add funds at ${links.depositUrl}. Then retry.${reqLine}`
+    );
+  }
+  return `Your VoidMob balance is too low for this purchase. Nothing was charged. Ask the user to add funds at ${links.depositUrl}, then retry${reqLine}`;
+}
+
+/** Copy for a deposit refused by the account's open or daily deposit limit. */
+function depositLimitText(err: HttpError, reqLine: string): string {
+  const limit = typeof err.details?.limit === "number" ? err.details.limit : undefined;
+  const reuse = "Reuse an open one (get_deposit without a deposit_id lists the newest)";
+  if (err.details?.reason === "open_deposits") {
+    const head = limit !== undefined
+      ? `This account already has ${limit} open deposits, the most allowed at once`
+      : "This account already has as many open deposits as allowed";
+    return `${head}, so no deposit was created. ${reuse} or wait until one is paid or expires${reqLine}`;
+  }
+  if (err.details?.reason === "daily_deposits") {
+    const head = limit !== undefined
+      ? `This account has created ${limit} deposits in the last 24 hours, the most allowed`
+      : "This account has created as many deposits in the last 24 hours as allowed";
+    return `${head}, so no deposit was created. ${reuse} or try again later${reqLine}`;
+  }
+  return `${apiMessage(err) ?? "This account has reached its deposit limit."} No deposit was created.${reqLine}`;
 }
 
 /** Copy for a credential the API no longer accepts. */
@@ -156,7 +188,20 @@ export function mapApiError(err: unknown, links: ErrorLinks = DEFAULT_LINKS): st
       }
       return `Rate limit reached. ${wait ? `Wait ${wait}s before retrying` : "Wait a few seconds before retrying"}${reqLine}`;
     case "INSUFFICIENT_BALANCE":
-      return `Your VoidMob balance is too low for this purchase. Nothing was charged. Ask the user to add funds at ${links.depositUrl}, then retry${reqLine}`;
+      return insufficientBalanceText(links, reqLine);
+    case "DEPOSIT_LIMIT_REACHED":
+      return depositLimitText(err, reqLine);
+    case "VALIDATION_ERROR": {
+      // A deposit under its coin's minimum says how much the minimum is.
+      const min = centsDetail(err, "min_amount_cents");
+      if (min !== undefined) {
+        return (
+          `The amount is below this coin's minimum deposit of ${formatUsd(min)} (amount_cents ${min}), so no deposit was created. ` +
+          `Ask the user for at least that much or another coin (get_deposit without a deposit_id lists the coins and their minimums)${reqLine}`
+        );
+      }
+      return `${err.message ?? err.code}${reqLine}`;
+    }
     case "PERMISSION_DENIED":
       return permissionDeniedText(err, reqLine);
     case "ORDER_LIMIT_EXCEEDED":

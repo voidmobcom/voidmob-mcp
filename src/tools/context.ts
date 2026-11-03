@@ -39,6 +39,8 @@ export interface ToolContext {
   settingsUrl: string;
   /** Served over HTTP at mcp.voidmob.com rather than run locally over stdio. */
   hosted: boolean;
+  /** The hosted bare /sandbox, which keeps no state between calls; null everywhere else. */
+  statelessSandbox: { playgroundUrl: string } | null;
 }
 
 /** How the server is run. */
@@ -72,12 +74,21 @@ export function createToolContext(
     depositUrl: depositUrlFor(connection),
     settingsUrl: settingsUrlFor(connection),
     hosted: options.hosted === true,
+    statelessSandbox: options.statelessSandbox ?? null,
   };
 }
 
 /** A context with no limits, for handler-level tests and callers that do not need controls. */
 export function toolContext(http: HttpClient, controls: Partial<OwnerControls> = {}, connection: Connection | null = null): ToolContext {
   return createToolContext(http, { ...DEFAULT_CONTROLS, ...controls }, connection);
+}
+
+/** Said on the hosted bare /sandbox, where every call starts from fresh demo data. */
+export function statelessSandboxNote(playgroundUrl: string): string {
+  return (
+    `This sandbox keeps no state between calls: every call starts from fresh demo data, so an order made in one call is gone in the next. ` +
+    `For a playground that keeps its state, connect to ${playgroundUrl} instead (any id of 16 or more letters, digits, - or _).`
+  );
 }
 
 /** Where the server's level is set: this server's configuration, or the key's settings page. */
@@ -88,7 +99,7 @@ export function levelSetAt(ctx: ToolContext): string {
 }
 
 export interface ToolSpec {
-  /** "core" tools (account, orders, geo) are always registered. */
+  /** "core" tools (account, deposits, orders, geo) are always registered. */
   group: Toolset | "core" | Toolset[];
   /**
    * The highest level any API call the tool can make needs. A tool is not

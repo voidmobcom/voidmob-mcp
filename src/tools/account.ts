@@ -8,7 +8,7 @@ import { formatUsd } from "../utils/format.js";
 import { structuredOk, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { READ_ONLY } from "../utils/annotations.js";
 import { outputObject } from "../utils/output.js";
-import { defineTool, type ToolContext } from "./context.js";
+import { defineTool, levelAllows, type ToolContext } from "./context.js";
 
 // What this server acts with: its permission level (the key's, lowered by
 // VOIDMOB_READ_ONLY) and whether auto-mode is in force.
@@ -67,7 +67,9 @@ export const getAccountHandler = (ctx: ToolContext) =>
       `Account ${me.id}`,
       ``,
       `  Balance:     ${me.balance.formatted}`,
-      `  Add funds:   ${depositUrl}`,
+      levelAllows(ctx.level, "manage")
+        ? `  Add funds:   create_deposit (ask the user which coin and how much), or ${depositUrl}`
+        : `  Add funds:   ${depositUrl}`,
       `  Created:     ${me.created_at.slice(0, 10)}`,
       ...(me.key ? describeKey(me.key, settingsUrl) : []),
       ``,
@@ -99,7 +101,9 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext) {
       "spending limits (per order and per rolling 24 hours), spend in the last 24 hours and auto-mode, per-endpoint-group rate limits, " +
       "plus any limits the owner set on this server. " +
       "Use it before buying to confirm sufficient funds, and after an uncertain purchase result to see whether a charge landed. " +
-      "The balance is topped up with crypto in the dashboard by the account owner.",
+      (levelAllows(ctx.level, "manage")
+        ? "The balance is topped up with crypto: create_deposit gives an address to pay, or the user pays in the dashboard."
+        : "The balance is topped up with crypto in the dashboard by the account owner."),
     inputSchema: {},
     outputSchema: GetAccountOutput,
     annotations: READ_ONLY,

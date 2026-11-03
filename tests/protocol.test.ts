@@ -21,6 +21,7 @@ const WRITE_TOOLS = [
   "purchase_dedicated_number", "purchase_esim", "topup_esim",
   "purchase_proxy", "rotate_proxy_ip", "renew_proxy", "topup_proxy",
   "regenerate_proxy_password", "create_proxy_list", "update_proxy_list", "delete_proxy_list",
+  "create_deposit",
 ];
 
 afterEach(() => {
@@ -29,7 +30,7 @@ afterEach(() => {
 });
 
 describe("structuredContent matches outputSchema for every tool (sandbox)", () => {
-  it("drives all 26 tools over the protocol and validates each result against its declared schema", async () => {
+  it("drives all 28 tools over the protocol and validates each result against its declared schema", async () => {
     const fetchSpy = vi.fn(() => Promise.reject(new Error("network must not be touched")));
     vi.stubGlobal("fetch", fetchSpy);
     const client = await sandbox();
@@ -84,6 +85,10 @@ describe("structuredContent matches outputSchema for every tool (sandbox)", () =
     await call("get_geo", { country: "US" });
     await call("list_orders");
     await call("list_orders", { kind: "verification", status: "cancelled", limit: 5 });
+    await call("get_deposit");
+    const dep = sc(await call("create_deposit", { coin: "usdt_trc20", amount_cents: 2000 })).deposit.id;
+    await call("get_deposit", { deposit_id: dep }); // confirming
+    await call("get_deposit", { deposit_id: dep }); // credited
 
     expect([...called].sort()).toEqual(tools.map((t) => t.name).sort());
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -125,7 +130,7 @@ describe("owner controls (sandbox behaves like live)", () => {
   it("read-only: no tool that spends or changes anything is registered, and no buying prompts", async () => {
     const client = await sandbox({ readOnly: true });
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(11);
     for (const w of WRITE_TOOLS) expect(names).not.toContain(w);
     expect(client.getServerCapabilities()?.prompts).toBeUndefined();
     expect(client.getInstructions()).toContain("This server has View access");
@@ -135,19 +140,19 @@ describe("owner controls (sandbox behaves like live)", () => {
     expect(text(acct)).toContain("Access:          View (VOIDMOB_READ_ONLY");
   });
 
-  it("toolsets: only the chosen groups plus account, orders and geo", async () => {
+  it("toolsets: only the chosen groups plus account, deposits, orders and geo", async () => {
     const counts: Array<[string, number, string[]]> = [
-      ["sms", 10, ["get_verification_code"]],
-      ["numbers", 7, []],
-      ["esim", 7, ["buy_travel_esim"]],
-      ["proxy", 14, ["setup_mobile_proxy"]],
-      ["sms,proxy", 20, ["get_verification_code", "setup_mobile_proxy"]],
+      ["sms", 12, ["get_verification_code"]],
+      ["numbers", 9, []],
+      ["esim", 9, ["buy_travel_esim"]],
+      ["proxy", 16, ["setup_mobile_proxy"]],
+      ["sms,proxy", 22, ["get_verification_code", "setup_mobile_proxy"]],
     ];
     for (const [sets, n, prompts] of counts) {
       const client = await sandbox(parseControls({ VOIDMOB_TOOLSETS: sets }));
       const names = (await client.listTools()).tools.map((t) => t.name);
       expect(names, sets).toHaveLength(n);
-      expect(names, sets).toEqual(expect.arrayContaining(["get_account", "list_orders", "get_geo"]));
+      expect(names, sets).toEqual(expect.arrayContaining(["get_account", "create_deposit", "get_deposit", "list_orders", "get_geo"]));
       const listed = client.getServerCapabilities()?.prompts ? (await client.listPrompts()).prompts.map((p) => p.name).sort() : [];
       expect(listed, sets).toEqual([...prompts].sort());
     }

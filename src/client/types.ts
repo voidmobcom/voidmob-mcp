@@ -341,3 +341,44 @@ export const GeoCountry = z.object({
 export const GeoRegion = z.object({ name: z.string(), available_nodes: z.number().int() });
 export const GeoCity = GeoRegion;
 export const GeoIsp = GeoRegion;
+
+// ── Deposits (/v1/deposits, /v1/deposit_coins) ──────────────────────────────
+
+export const DepositStatus = z.enum(["awaiting_payment", "confirming", "underpaid", "credited", "expired"]);
+export type DepositStatus = z.infer<typeof DepositStatus>;
+
+export const Deposit = z.object({
+  id: z.string(),
+  status: DepositStatus,
+  coin: z.string(),
+  asset: z.string(),
+  network: z.string(),
+  amount_cents: z.number().int(),
+  // The exact amount to send, in the coin's own units.
+  crypto_amount: z.string(),
+  address: z.string(),
+  // A wallet link for the coins that have one; null otherwise.
+  payment_uri: z.string().nullable(),
+  confirmations: z.number().int(),
+  required_confirmations: z.number().int().nullable(),
+  received_cents: z.number().int(),
+  credited_cents: z.number().int(),
+  bonus_cents: z.number().int(),
+  // An underpaid deposit that still takes money: send this much more until then.
+  top_up: z.object({ crypto_amount: z.string(), until: z.string() }).nullable(),
+  // The payment window in the dashboard (QR code, countdown, the address to check).
+  url: z.string(),
+  expires_at: z.string(),
+  created_at: z.string(),
+  credited_at: z.string().nullable(),
+});
+export type Deposit = z.infer<typeof Deposit>;
+
+export const DepositCoin = z.object({
+  coin: z.string(),
+  asset: z.string(),
+  network: z.string(),
+  min_amount_cents: z.number().int(),
+  max_amount_cents: z.number().int(),
+});
+export type DepositCoin = z.infer<typeof DepositCoin>;

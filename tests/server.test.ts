@@ -23,10 +23,10 @@ const modes: Array<[string, () => McpServer]> = [
 afterEach(() => vi.restoreAllMocks());
 
 describe.each(modes)("%s server over MCP", (_mode, build) => {
-  it("lists 26 tools, each with a title, an output schema and explicit annotation booleans", async () => {
+  it("lists 28 tools, each with a title, an output schema and explicit annotation booleans", async () => {
     const client = await connect(build());
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(26);
+    expect(tools).toHaveLength(28);
     for (const tool of tools) {
       expect(tool.title, tool.name).toBeTruthy();
       for (const hint of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const) {
@@ -83,9 +83,12 @@ describe("spending tools are flagged for confirmation", () => {
     for (const name of ["reuse_number", "topup_esim"]) {
       expect(Object.keys(schemas.get(name)?.properties ?? {}), name).toContain("max_price_cents");
     }
-    for (const name of ["get_account", "search_sms_services", "get_rental", "list_orders", "search_esim_plans", "get_esim_status", "search_proxies", "get_proxy_status", "get_geo", "search_dedicated_countries"]) {
+    for (const name of ["get_account", "search_sms_services", "get_rental", "list_orders", "search_esim_plans", "get_esim_status", "search_proxies", "get_proxy_status", "get_geo", "search_dedicated_countries", "get_deposit"]) {
       expect(byName.get(name)).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     }
+    // A deposit spends nothing: neither a read nor destructive, and it takes no price commitment.
+    expect(byName.get("create_deposit")).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    expect(Object.keys(schemas.get("create_deposit")?.properties ?? {})).not.toContain("max_price_cents");
   });
 });
 

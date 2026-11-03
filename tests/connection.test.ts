@@ -125,7 +125,27 @@ describe("instructions follow the key's settings", () => {
     expect(text).toContain("Quote first: show the user the price");
     expect(text).toContain("get their go-ahead");
     expect(text).not.toContain("Auto-mode");
-    expect(text).toContain("add funds at https://dashboard.voidmob.com/wallet");
+    expect(text).toContain("offer a deposit or https://dashboard.voidmob.com/wallet");
+  });
+
+  it("deposits at Manage and above: create_deposit spends nothing, ask the coin and amount, one open deposit, offered never created unasked", async () => {
+    for (const permission of ["manage", "buy"] as const) {
+      const text = await instructionsFor(conn({ permission }));
+      expect(text, permission).toContain("create_deposit gives a crypto address to pay and spends nothing: no purchase approval.");
+      expect(text, permission).toContain("Ask the coin and amount unless given; reuse an open deposit (get_deposit) rather than create another.");
+      expect(text, permission).toContain("On a low balance, offer a deposit or https://dashboard.voidmob.com/wallet, never create one unasked (auto-mode too).");
+    }
+    // The same rules in auto-mode.
+    const auto = await instructionsFor(conn({ autoMode: true, dailyLimitCents: 5000 }));
+    expect(auto).toContain("Auto-mode is on");
+    expect(auto).toContain("never create one unasked (auto-mode too)");
+  });
+
+  it("below Manage: the deposit link alone, no create_deposit", async () => {
+    for (const text of [await instructionsFor(conn({ permission: "view" })), await instructionsFor(conn(), { readOnly: true })]) {
+      expect(text).toContain("If the balance is too low, ask the user to add funds at https://dashboard.voidmob.com/wallet.");
+      expect(text).not.toContain("create_deposit");
+    }
   });
 
   it("auto-mode on (the key's): may buy without asking within the limits, and must report every purchase", async () => {
@@ -167,7 +187,7 @@ describe("instructions follow the key's settings", () => {
     expect(view).not.toContain("Auto-mode");
     expect(view).not.toContain("spending limits");
     const manage = await instructionsFor(conn({ permission: "manage", kind: "oauth" }));
-    expect(manage).toContain("This server has Manage access: it can cancel");
+    expect(manage).toContain("This server has Manage access: it can create deposits, cancel");
     expect(manage).toContain("cannot buy, renew, top up, reuse a number for a fee or turn auto-renew on");
     expect(manage).toContain("at https://dashboard.voidmob.com/account/connected-apps.");
     expect(await instructionsFor(conn(), { readOnly: true })).toContain("in this MCP server's configuration (VOIDMOB_READ_ONLY)");
@@ -190,8 +210,8 @@ describe("stdio startup", () => {
     const build = await prepareServer({ VOIDMOB_API_KEY: freshKey() });
     const first = await connect(build());
     const second = await connect(build());
-    expect((await first.listTools()).tools).toHaveLength(10);
-    expect((await second.listTools()).tools).toHaveLength(10);
+    expect((await first.listTools()).tools).toHaveLength(11);
+    expect((await second.listTools()).tools).toHaveLength(11);
     // Only the startup read: building twice reads nothing more.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(String((fetchSpy.mock.calls[0] as unknown[])[0])).toContain("/v1/me");
@@ -202,7 +222,7 @@ describe("stdio startup", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const build = await prepareServer({ VOIDMOB_API_KEY: freshKey(), VOIDMOB_AUTONOMOUS: "1" });
     const client = await connect(build());
-    expect((await client.listTools()).tools).toHaveLength(26);
+    expect((await client.listTools()).tools).toHaveLength(28);
     expect(client.getInstructions()).not.toContain("Auto-mode is on");
     const lines = stderr.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("permission and limits"));
     expect(lines).toHaveLength(1);

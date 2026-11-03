@@ -5,7 +5,7 @@ export class ConfigError extends Error {
   }
 }
 
-/** Optional tool groups; account, orders and geo tools are always registered. */
+/** Optional tool groups; account, deposit, orders and geo tools are always registered. */
 export const TOOLSETS = ["sms", "numbers", "esim", "proxy"] as const;
 export type Toolset = (typeof TOOLSETS)[number];
 
@@ -105,7 +105,7 @@ function parseToolsets(env: Record<string, string | undefined>): ReadonlySet<Too
     if (!(TOOLSETS as readonly string[]).includes(part)) {
       throw new ConfigError(
         `VOIDMOB_TOOLSETS has an unknown group '${part}'. Use a comma list of: ${TOOLSETS.join(", ")} ` +
-        `(account, orders and geo tools are always on).`,
+        `(account, deposit, orders and geo tools are always on).`,
       );
     }
     picked.add(part as Toolset);

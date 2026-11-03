@@ -24,6 +24,7 @@ const LEVELS: Record<string, PermissionLevel> = {
   get_esim_status: "view",
   search_proxies: "view",
   get_proxy_status: "view",
+  get_deposit: "view",
   cancel_rental: "manage",
   toggle_auto_renew: "manage",
   rotate_proxy_ip: "manage",
@@ -32,6 +33,7 @@ const LEVELS: Record<string, PermissionLevel> = {
   update_proxy_list: "manage",
   delete_proxy_list: "manage",
   reuse_number: "manage",
+  create_deposit: "manage",
   rent_number: "buy",
   re_rent_rental: "buy",
   purchase_dedicated_number: "buy",
@@ -52,11 +54,11 @@ const expected = (level: PermissionLevel) =>
   Object.keys(LEVELS).filter((name) => levelAllows(level, LEVELS[name])).sort();
 
 describe("permission levels", () => {
-  it("the table covers exactly the tools the server registers: 26, 10 view, 8 manage, 8 buy", async () => {
+  it("the table covers exactly the tools the server registers: 28, 11 view, 9 manage, 8 buy", async () => {
     expect(Object.keys(LEVELS).sort()).toEqual(await toolNames(buildSandboxServer()));
-    expect(Object.keys(LEVELS)).toHaveLength(26);
-    expect(expected("view")).toHaveLength(10);
-    expect(expected("manage")).toHaveLength(18);
+    expect(Object.keys(LEVELS)).toHaveLength(28);
+    expect(expected("view")).toHaveLength(11);
+    expect(expected("manage")).toHaveLength(20);
   });
 
   it.each(["view", "manage", "buy"] as const)("a %s key gets exactly the tools at or below its level", async (level) => {
@@ -76,7 +78,7 @@ describe("permission levels", () => {
 
   it("VOIDMOB_TOOLSETS still narrows a key's level", async () => {
     const names = await namesFor("manage", { toolsets: new Set(["esim"] as const) });
-    expect(names).toEqual(["get_account", "get_esim_status", "get_geo", "list_orders", "search_esim_plans"]);
+    expect(names).toEqual(["create_deposit", "get_account", "get_deposit", "get_esim_status", "get_geo", "list_orders", "search_esim_plans"]);
   });
 
   it("guided buying prompts appear only at Buy", async () => {

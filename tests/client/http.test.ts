@@ -218,6 +218,25 @@ describe("createHttpClient", () => {
     expect(fetchMock.mock.calls[1][1].headers.get("Idempotency-Key")).toBe("key-6");
   });
 
+  it("timeoutMs replaces the default: a write given 45 s is still waiting at 30 s and aborts at 45 s", async () => {
+    vi.useFakeTimers();
+    const stalled = (_url: string, init: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+      });
+    fetchMock
+      .mockImplementationOnce(stalled)
+      .mockResolvedValueOnce(jsonResponse(201, { success: true, data: { deposit: { id: "dep_1" } } }));
+    const p = client().request("POST", "/v1/deposits", { body: { coin: "btc", amount_cents: 2000 }, idempotencyKey: "key-45", timeoutMs: 45_000 });
+    await vi.advanceTimersByTimeAsync(44_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // past the default 30 s, still waiting
+    await vi.advanceTimersByTimeAsync(3_000); // 45 s fires, then the same-key retry
+    const res = await p;
+    expect(res.body).toEqual({ success: true, data: { deposit: { id: "dep_1" } } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][1].headers.get("Idempotency-Key")).toBe("key-45");
+  });
+
   it("a stalled GET body times out as a NetworkError", async () => {
     vi.useFakeTimers();
     fetchMock.mockImplementation((_url: string, init: RequestInit) =>

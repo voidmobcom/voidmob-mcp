@@ -24,6 +24,7 @@ import {
 } from "../src/tools/proxy.js";
 import { getGeoHandler } from "../src/tools/geo.js";
 import { listOrdersHandler } from "../src/tools/orders.js";
+import { createDepositHandler, getDepositHandler } from "../src/tools/deposits.js";
 import { toolContext } from "../src/tools/context.js";
 
 const http = createSandboxHttpClient();
@@ -49,6 +50,13 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
     okResult(await getGeoHandler(ctx)({ country: "US" }));
     okResult(await getGeoHandler(ctx)({ country: "US", region: "California" }));
     okResult(await getGeoHandler(ctx)({ country: "US", region: "California", city: "Los Angeles" }));
+  });
+
+  it("deposit lifecycle", async () => {
+    okResult(await getDepositHandler(ctx)({}));
+    const dep = sc(okResult(await createDepositHandler(ctx)({ coin: "btc", amount_cents: 2000 }))).deposit.id as string;
+    expect(sc(okResult(await getDepositHandler(ctx)({ deposit_id: dep }))).deposit.status).toBe("confirming");
+    expect(sc(okResult(await getDepositHandler(ctx)({ deposit_id: dep }))).deposit.status).toBe("credited");
   });
 
   it("SMS verification lifecycle", async () => {

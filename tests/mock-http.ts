@@ -8,7 +8,7 @@ interface Expectation {
 
 export interface MockHttpClient extends HttpClient {
   expect(method: string, path: string, respond: HttpResponse): void;
-  history: Array<{ method: string; path: string; body?: unknown; headers: Record<string, string> }>;
+  history: Array<{ method: string; path: string; body?: unknown; headers: Record<string, string>; timeoutMs?: number }>;
 }
 
 export function createMockHttpClient(): MockHttpClient {
@@ -27,7 +27,7 @@ export function createMockHttpClient(): MockHttpClient {
       if (opts?.idempotencyKey) {
         recordedHeaders["Idempotency-Key"] = opts.idempotencyKey;
       }
-      history.push({ method, path, body: opts?.body, headers: recordedHeaders });
+      history.push({ method, path, body: opts?.body, headers: recordedHeaders, ...(opts?.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) });
       const exp = queue.shift();
       if (!exp) throw new Error(`No expectation for ${method} ${path}`);
       if (exp.method !== method || exp.path !== path) {

@@ -296,7 +296,7 @@ describe.each<Era>(["legacy", "modern"])("MCP over HTTP (%s era)", (era) => {
     const { app, lines } = makeApp();
     const key = freshKey();
     const client = await connectClient(app, era, "/mcp", key);
-    expect(await toolCount(client)).toBe(10);
+    expect(await toolCount(client)).toBe(11);
     const acct = await client.callTool({ name: "get_account", arguments: {} });
     expect(acct.isError ?? false).toBe(false);
     const me = up.calls.filter((c) => c.url === `${API}/v1/me`);
@@ -322,7 +322,7 @@ describe.each<Era>(["legacy", "modern"])("MCP over HTTP (%s era)", (era) => {
     stubUpstream({ me: { kind: "oauth", permission: "manage" } });
     const { app } = makeApp();
     const client = await connectClient(app, era, "/mcp", await accessToken({ perm: "buy" }));
-    expect(await toolCount(client)).toBe(18);
+    expect(await toolCount(client)).toBe(20);
     expect(client.getInstructions()).toContain("/account/connected-apps");
     await client.close();
   });
@@ -331,7 +331,7 @@ describe.each<Era>(["legacy", "modern"])("MCP over HTTP (%s era)", (era) => {
     stubUpstream({ meStatus: 500 });
     const { app } = makeApp();
     const client = await connectClient(app, era, "/mcp", await accessToken({ perm: "view" }));
-    expect(await toolCount(client)).toBe(10);
+    expect(await toolCount(client)).toBe(11);
     expect(client.getInstructions()).toContain("View access");
     await client.close();
   });
@@ -390,6 +390,14 @@ describe.each<Era>(["legacy", "modern"])("MCP over HTTP (%s era)", (era) => {
     const bought = await client.callTool({ name: "rent_number", arguments: { service_id: "svc_telegram", max_price_cents: 150 } });
     expect(bought.isError ?? false).toBe(false);
     expect(await balance(client)).toBe(50_000);
+    // A deposit made in one call is gone in the next: the lookup says where state is kept.
+    const created = await client.callTool({ name: "create_deposit", arguments: { coin: "ltc", amount_cents: 1000 } });
+    expect(created.isError ?? false).toBe(false);
+    const id = (created.structuredContent as { deposit: { id: string } }).deposit.id;
+    const lookup = await client.callTool({ name: "get_deposit", arguments: { deposit_id: id } });
+    expect(lookup.isError).toBe(true);
+    expect(text(lookup)).toContain(`No deposit ${id} was found`);
+    expect(text(lookup)).toContain("https://mcp.voidmob.com/sandbox/<any-random-id>");
     await client.close();
     const next = await connectClient(app, era, "/sandbox");
     expect(await balance(next)).toBe(50_000);

@@ -54,7 +54,7 @@ describe("get_account", () => {
     });
     const res = await getAccountHandler(toolContext(http))({});
     const text = res.content[0].type === "text" ? res.content[0].text : "";
-    expect(text).toContain("Add funds:   https://dash.example/wallet");
+    expect(text).toContain("Add funds:   create_deposit (ask the user which coin and how much), or https://dash.example/wallet");
     expect(text).toContain('App connection "Claude":');
     expect(text).toContain("Permission:      Buy");
     expect(text).toContain("Max per order:   No limit");
@@ -73,10 +73,20 @@ describe("get_account", () => {
     http.expect("GET", "/v1/me", { status: 200, body: { success: true, data: me }, headers: new Headers() });
     const res = await getAccountHandler(toolContext(http, { autonomous: true, budgetCents: 2000 }))({});
     const text = res.content[0].type === "text" ? res.content[0].text : "";
-    expect(text).toContain("Add funds:   https://dashboard.voidmob.com/wallet");
+    expect(text).toContain("Add funds:   create_deposit (ask the user which coin and how much), or https://dashboard.voidmob.com/wallet");
     expect(text).toContain("Auto-mode:       on (VOIDMOB_AUTONOMOUS");
     expect(text).toContain("Session budget:  $20.00 left");
     expect(res.structuredContent?.access).toMatchObject({ permission: "buy", auto_mode: true });
+  });
+
+  it("below Manage the Add funds line is the link alone", async () => {
+    const http = createMockHttpClient();
+    const me = { id: "u", balance: { amount_cents: 0, currency: "USD", formatted: "$0.00" }, rate_limits: {}, created_at: "2026-01-01T00:00:00Z" };
+    http.expect("GET", "/v1/me", { status: 200, body: { success: true, data: me }, headers: new Headers() });
+    const res = await getAccountHandler(toolContext(http, { readOnly: true }))({});
+    const text = res.content[0].type === "text" ? res.content[0].text : "";
+    expect(text).toContain("Add funds:   https://dashboard.voidmob.com/wallet\n");
+    expect(text).not.toContain("create_deposit");
   });
 
   it("maps UNAUTHENTICATED to docs URL", async () => {

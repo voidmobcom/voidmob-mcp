@@ -5,7 +5,7 @@ Every error is `{"success": false, "error": {"code", "message", "request_id", "d
 ## Retrying a purchase safely
 
 - **No response** (client timeout, dropped connection, unreadable body): send the same request again with the **same** `Idempotency-Key` and the same body. You get the original outcome and are never charged twice. `409 IDEMPOTENCY_REPLAY_IN_FLIGHT` means it is still running or the first attempt was dropped before it finished: wait `Retry-After` (5 s) and repeat once. If it still says this, check the order lists and `GET /me`; buy with a new key only once they show nothing was bought.
-- **An error response**: that outcome is final for that key (a retry with the same key replays it). A new attempt needs a new key, and a new approval if the price changed.
+- **An error response**: that outcome is final for that key (a retry with the same key replays it). A new attempt needs a new key, and a new approval if the price changed. One exception: `SERVICE_UNAVAILABLE` on `POST /deposits` created nothing, so the same key may retry.
 - **A 5xx on a purchase**: do not assume nothing happened. Check the matching list (`GET /verifications?status=waiting_for_code`, `/rentals`, `/dedicated/numbers`, `/proxies`, `/esims`) and `GET /me` before any new attempt.
 
 ## Codes
@@ -17,8 +17,9 @@ Every error is `{"success": false, "error": {"code", "message", "request_id", "d
 | `IP_NOT_ALLOWED` | 403 | Key is limited to other source IPs | Call from an allowed IP, or the user asks support to change the allowlist. |
 | `FORBIDDEN` | 403 | Account restricted, or too many open verifications | If the message is about open verifications, wait for one to finish or complete it. Otherwise the user contacts support. |
 | `RATE_LIMITED` | 429 | Per-minute limit hit, or a rotate_ip cooldown | Wait `Retry-After` seconds plus a little jitter. Ignoring 429s pauses the whole account for 10-60 minutes. |
-| `VALIDATION_ERROR` | 400 | Bad body or header (often a missing `Idempotency-Key`) | Fix what `message` names and resend. |
-| `INSUFFICIENT_BALANCE` | 402 | Balance below the price | Stop. Tell the user the price and balance; they top up at https://dashboard.voidmob.com/wallet. Then a new key. |
+| `VALIDATION_ERROR` | 400 | Bad body or header (often a missing `Idempotency-Key`), an unknown deposit coin, or a deposit under its coin's minimum (`details.min_amount_cents`) | Fix what `message` names and resend. For a deposit, pick a coin and amount from `GET /deposit_coins`. |
+| `INSUFFICIENT_BALANCE` | 402 | Balance below the price | Stop. Tell the user the price and balance, and offer to add funds: a deposit (ask which coin and how much) or https://dashboard.voidmob.com/wallet. Then a new key. |
+| `DEPOSIT_LIMIT_REACHED` | 429 | Too many open deposits (`details.reason` `open_deposits`) or too many created in 24 hours (`daily_deposits`); `details.limit` is the limit | Nothing was created. Reuse an open deposit (`GET /deposits`), or wait until one is paid or expires. |
 | `ORDER_LIMIT_EXCEEDED`, `DAILY_SPEND_CAP_EXCEEDED` | 402 | Over the owner's per-order limit, or the daily limit over a rolling 24 hours, net of refunds | Nothing was charged. `details.limit_cents` and `details.remaining_cents` say how much is allowed; `details.settings_url` is where the owner raises it. Retry only after a raise, with a new key. |
 | `PRICE_OVER_CAP` | 409 | Live price above `max_price_cents` (SMS, rentals, numbers, eSIM) | `details.available_price_cents` is the current price. Show it, ask again, retry with a new key. Nothing was charged. |
 | `PRICE_MISMATCH` | 409 | Proxy price above `max_price_cents` | Re-read the plan or `next_renewal_price_cents`, ask again, new key. Nothing was charged. |

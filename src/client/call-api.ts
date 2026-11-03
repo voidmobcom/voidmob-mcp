@@ -35,7 +35,7 @@ export async function callApi<T>(
   http: HttpClient,
   method: string,
   path: string,
-  opts?: { body?: unknown; idempotencyKey?: string },
+  opts?: { body?: unknown; idempotencyKey?: string; timeoutMs?: number },
 ): Promise<T> {
   const res = await http.request(method, path, opts);
   // 204 No Content (e.g. DELETE proxy list) is a success with no body.

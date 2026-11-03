@@ -22,3 +22,4 @@ export const ProxyId = idSchema(PROXY, "a prx_... id");
 // Anything with auto-renew: a long-term rental, a dedicated number or a proxy.
 export const AutoRenewId = idSchema(`(?:ren|ded)_${BODY}|${PROXY}`, "a ren_..., ded_... or prx_... id");
 export const ProxyListId = idSchema(`list_${BODY}`, "a list_... id from get_proxy_status");
+export const DepositId = idSchema(`dep_${BODY}`, "a dep_... id from create_deposit or get_deposit");

@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node](https://img.shields.io/node/v/@voidmob/mcp)](https://nodejs.org)
 
-Mobile proxies, non-VoIP SMS verifications, dedicated numbers, and global eSIMs - exposed as 26 tools your AI agent can call directly, plus short guides (resources) and guided prompts.
+Mobile proxies, non-VoIP SMS verifications, dedicated numbers, and global eSIMs - exposed as 28 tools your AI agent can call directly, plus short guides (resources) and guided prompts.
 
 Two ways to connect:
 
@@ -32,7 +32,7 @@ Menu names change between app versions; if one differs, look for "custom connect
 
 ### What you choose when you connect
 
-- **Permission level.** View (look up prices, balance and orders), Manage (also cancel, free reuse, rotate IPs, edit proxy lists and passwords, turn auto-renew off) or Buy (everything, including every purchase, renewal and top-up). Apps VoidMob does not recognize start at View. The agent only sees the tools its level allows.
+- **Permission level.** View (look up prices, balance and orders), Manage (also create deposits, cancel, free reuse, rotate IPs, edit proxy lists and passwords, turn auto-renew off) or Buy (everything, including every purchase, renewal and top-up). Apps VoidMob does not recognize start at View. The agent only sees the tools its level allows.
 - **Optional spending limits.** A maximum per order and a daily limit over a rolling 24 hours, net of refunds. Both are off by default. VoidMob enforces them on every purchase the app makes, so they hold whatever the app or agent does.
 - **Buy without asking.** Off by default and needs a daily limit. It only changes what the server tells the agent: it may buy without asking first, still quotes the price, and must report every purchase. Your chat app's own approval prompts are a separate setting in that app.
 
@@ -216,7 +216,7 @@ The skill runs the REST API with curl on the Bot's computer and reads the secret
 
 ## How money works
 
-- **Prepaid balance.** Everything is paid from your USD balance, which you top up with crypto in the [dashboard](https://dashboard.voidmob.com/wallet). The MCP cannot add funds. Your balance is the limit unless you set optional spending limits: a per-order and a daily limit on the API key or app connection (enforced by VoidMob on every purchase, see [Connect with one URL](#what-you-choose-when-you-connect)) and the local [owner controls](#owner-controls). Keep on the balance only what you are happy for an agent to spend.
+- **Prepaid balance.** Everything is paid from your USD balance, which you top up with crypto in the [dashboard](https://dashboard.voidmob.com/wallet). An agent or script can create a deposit and get the address (`create_deposit`). Payment comes from a crypto wallet: yours, or your own automation's. Your balance is the limit unless you set optional spending limits: a per-order and a daily limit on the API key or app connection (enforced by VoidMob on every purchase, see [Connect with one URL](#what-you-choose-when-you-connect)) and the local [owner controls](#owner-controls). Keep on the balance only what you are happy for an agent to spend.
 - **You approve the price.** Search tools show your live prices. Every buy, renewal, top-up and paid reuse requires `max_price_cents`: the price the agent showed you and you approved. If the current price is higher, nothing is charged and the tool returns the new price so the agent can ask you again; it never buys at a price you did not see. Every buy debits the balance immediately, and every result shows what was charged.
 - **No double charges on retries.** Every purchase carries an idempotency key. If the connection drops, this MCP server retries once with the same key, which the API never charges twice.
 - **When a result is uncertain,** the tool says the purchase may have gone through. Check `list_orders`, the matching get tool or `get_account` before buying again.
@@ -236,7 +236,7 @@ Optional safety settings for the person who runs the server locally. They apply 
 | `VOIDMOB_MAX_ORDER_CENTS=2500` | Refuses, before any request, a purchase, renewal, top-up or paid reuse whose `max_price_cents` is above this (here $25). Turning auto-renew on is refused when one renewal would cost more. |
 | `VOIDMOB_BUDGET_CENTS=5000` | Running spending limit for this server process (here $50). The server counts what each purchase charged; when an outcome is unclear (a dropped connection, a purchase still in flight) it counts the full `max_price_cents`. A purchase that could go over is refused, and auto-renew cannot be turned on (renewals are charged later, outside the session). **This is a per-session safety net, not an account limit:** it resets when the server restarts and does not see purchases made elsewhere. |
 | `VOIDMOB_AUTONOMOUS=1` | Auto-mode: the server instructions let the agent buy without asking first, within the limits, and tell it to report every purchase. It needs `VOIDMOB_BUDGET_CENTS` or a daily limit on the API key (the server stops with a config error if the API confirms neither exists). It changes only the instructions: every limit still applies. An API key with auto-mode turned on in the dashboard gets the same instructions. |
-| `VOIDMOB_TOOLSETS=sms,esim` | Loads only these tool groups, so the agent carries less context: `sms`, `numbers` (dedicated numbers), `esim`, `proxy`. Account, order and geo tools are always on. |
+| `VOIDMOB_TOOLSETS=sms,esim` | Loads only these tool groups, so the agent carries less context: `sms`, `numbers` (dedicated numbers), `esim`, `proxy`. Account, deposit, order and geo tools are always on. |
 
 `get_account` shows the permission level, the limits in force and how much is left. A malformed value stops the server with an error instead of being ignored.
 
@@ -311,13 +311,15 @@ The hosted server is the same code behind HTTP (`node dist/http.js`, port 8080, 
 
 ## Tools
 
-26 tools across six domains: 10 need View access, 8 Manage and 8 Buy (see [permission levels](#what-you-choose-when-you-connect)). A server registers only the tools its level allows, and a call above the level is refused with nothing charged. Every tool returns text plus `structuredContent` that matches its declared `outputSchema`.
+28 tools across six domains: 11 need View access, 9 Manage and 8 Buy (see [permission levels](#what-you-choose-when-you-connect)). A server registers only the tools its level allows, and a call above the level is refused with nothing charged. Every tool returns text plus `structuredContent` that matches its declared `outputSchema`.
 
-### Account (1)
+### Account and deposits (3)
 
 | Tool | Level | Description |
 |---|---|---|
 | `get_account` | View | Balance, rate limits, account id, and the access level and spending limits in force with a deposit link |
+| `create_deposit` | Manage | Add funds with crypto: the exact amount, network, address and deadline to pay, and the payment window where you can check the address. Spends nothing |
+| `get_deposit` | View | A deposit's status, how much more to send if it is underpaid, and what was credited; without an id, the coins with their minimums and the 5 newest deposits |
 
 ### SMS (7)
 

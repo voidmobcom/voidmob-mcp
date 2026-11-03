@@ -178,6 +178,9 @@ describe("contract: every request the tools make", () => {
       await call("list_orders", { kind, limit: 2, cursor: "x" });
     }
     await call("list_orders", { kind: "verification", status: "cancelled" });
+    await call("get_deposit");
+    const dep = (await call("create_deposit", { coin: "ltc", amount_cents: 1000 })).deposit.id;
+    await call("get_deposit", { deposit_id: dep });
 
     const problems: string[] = [];
     for (const req of seen) {
@@ -203,6 +206,9 @@ describe("contract: every request the tools make", () => {
     // The drive reached every endpoint the tools use (a guard against a
     // silently shrinking drive).
     const endpoints = new Set(seen.map((r) => `${r.method} ${findOperation(r.method, r.path.split("?")[0])?.template}`));
-    expect(endpoints.size).toBeGreaterThanOrEqual(38);
+    expect(endpoints.size).toBeGreaterThanOrEqual(42);
+    for (const re of [/^POST \/deposits$/, /^GET \/deposits$/, /^GET \/deposits\/\{[^}]+\}$/, /^GET \/deposit_coins$/]) {
+      expect([...endpoints].some((e) => re.test(e)), String(re)).toBe(true);
+    }
   }, 15_000);
 });

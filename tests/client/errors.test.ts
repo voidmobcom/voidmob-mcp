@@ -110,6 +110,43 @@ describe("mapApiError", () => {
     expect(mapApiError(err)).toContain("add funds at https://dashboard.voidmob.com/wallet");
   });
 
+  it("INSUFFICIENT_BALANCE at each level: create_deposit at Manage and Buy, the link alone at View or unknown", () => {
+    const err = new HttpError(402, "INSUFFICIENT_BALANCE", "req_b", undefined, "Your wallet balance is too low for this purchase.", { method: "POST" });
+    const depositUrl = "https://dash.example/wallet";
+    for (const level of ["manage", "buy"] as const) {
+      expect(mapApiError(err, { depositUrl, level }), level).toBe(
+        "Your VoidMob balance is too low for this purchase. Nothing was charged. " +
+        "Offer to add funds with create_deposit (ask which coin and how much), or the user can add funds at https://dash.example/wallet. Then retry. (request_id: req_b)",
+      );
+    }
+    const linkOnly = "Your VoidMob balance is too low for this purchase. Nothing was charged. Ask the user to add funds at https://dash.example/wallet, then retry (request_id: req_b)";
+    expect(mapApiError(err, { depositUrl, level: "view" })).toBe(linkOnly);
+    expect(mapApiError(err, { depositUrl })).toBe(linkOnly);
+  });
+
+  it("DEPOSIT_LIMIT_REACHED: open or daily deposits, reuse an open one, nothing created", () => {
+    const open = mapApiError(new HttpError(429, "DEPOSIT_LIMIT_REACHED", "req_d", { reason: "open_deposits", limit: 8 }, "Too many open deposits.", { method: "POST" }));
+    expect(open).toBe(
+      "This account already has 8 open deposits, the most allowed at once, so no deposit was created. " +
+      "Reuse an open one (get_deposit without a deposit_id lists the newest) or wait until one is paid or expires (request_id: req_d)",
+    );
+    const daily = mapApiError(new HttpError(429, "DEPOSIT_LIMIT_REACHED", "r", { reason: "daily_deposits", limit: 25 }, "x", { method: "POST" }));
+    expect(daily).toContain("This account has created 25 deposits in the last 24 hours, the most allowed, so no deposit was created.");
+    expect(daily).toContain("or try again later");
+    expect(mapApiError(new HttpError(429, "DEPOSIT_LIMIT_REACHED", "r", { reason: "daily_deposits" }))).toContain("as many deposits in the last 24 hours as allowed");
+    // An unknown reason keeps the API's message.
+    expect(mapApiError(new HttpError(429, "DEPOSIT_LIMIT_REACHED", "r", { reason: "new" }, "Deposit limit reached."))).toBe("Deposit limit reached. No deposit was created. (request_id: r)");
+  });
+
+  it("VALIDATION_ERROR with min_amount_cents names the coin's minimum; without it, the API's message", () => {
+    const min = mapApiError(new HttpError(400, "VALIDATION_ERROR", "req_v", { min_amount_cents: 500 }, "Below the minimum.", { method: "POST" }));
+    expect(min).toBe(
+      "The amount is below this coin's minimum deposit of $5.00 (amount_cents 500), so no deposit was created. " +
+      "Ask the user for at least that much or another coin (get_deposit without a deposit_id lists the coins and their minimums) (request_id: req_v)",
+    );
+    expect(mapApiError(new HttpError(400, "VALIDATION_ERROR", "r", undefined, "status is not valid."))).toBe("status is not valid. (request_id: r)");
+  });
+
   it("PERMISSION_DENIED names the current and required level and the settings page", () => {
     const text = mapApiError(new HttpError(403, "PERMISSION_DENIED", "req_p",
       { permission: "manage", required_permission: "buy", settings_url: "https://dashboard.voidmob.com/account/connected-apps" },
@@ -155,7 +192,7 @@ describe("mapApiError", () => {
       "UNAUTHENTICATED", "IP_NOT_ALLOWED", "RATE_LIMITED", "INSUFFICIENT_BALANCE", "PRICE_OVER_CAP", "PRICE_MISMATCH",
       "SERVICE_OUT_OF_STOCK", "OUT_OF_STOCK_AT_PRICE", "CANCEL_WINDOW_NOT_OPEN", "CANCEL_NOT_ALLOWED",
       "IDEMPOTENCY_REPLAY_IN_FLIGHT", "PROVIDER_TIMEOUT", "PROVISIONING_FAILED", "PROVIDER_ERROR", "INTERNAL_ERROR",
-      "PERMISSION_DENIED", "ORDER_LIMIT_EXCEEDED", "DAILY_SPEND_CAP_EXCEEDED",
+      "PERMISSION_DENIED", "ORDER_LIMIT_EXCEEDED", "DAILY_SPEND_CAP_EXCEEDED", "DEPOSIT_LIMIT_REACHED", "VALIDATION_ERROR",
     ];
     for (const code of codes) {
       for (const method of ["GET", "POST"]) {
