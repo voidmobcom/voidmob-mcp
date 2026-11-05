@@ -105,6 +105,12 @@ describe("contract: src/ against the OpenAPI spec", () => {
     const proxyFormat = deref<{ enum?: string[] }>({ $ref: "#/components/schemas/ProxyFormat" });
     expect([...LIST_FORMATS].sort()).toEqual([...(proxyFormat.enum ?? [])].sort());
   });
+
+  it("the proxy object carries topup_prices with the fields the top-up tools read", () => {
+    const proxy = deref<{ properties?: Record<string, { items?: { $ref?: string } }> }>({ $ref: "#/components/schemas/Proxy" });
+    const item = deref<{ required?: string[] }>(proxy.properties?.topup_prices?.items ?? {});
+    expect([...(item.required ?? [])].sort()).toEqual(["additional_gb", "days_added", "price_cents"]);
+  });
 });
 
 describe("contract: every request the tools make", () => {
@@ -150,7 +156,7 @@ describe("contract: every request the tools make", () => {
     const prx = (await call("purchase_proxy", { plan_id: "plan_US5GB30D", max_price_cents: 1800 })).proxy.id;
     await new Promise((r) => setTimeout(r, READY_AFTER_MS + 100));
     await call("get_proxy_status", { proxy_id: prx });
-    await call("topup_proxy", { proxy_id: prx, additional_gb: 1, max_price_cents: 1 }); // PRICE_MISMATCH -> proxy + plan lookup
+    await call("topup_proxy", { proxy_id: prx, additional_gb: 1, max_price_cents: 1 }); // PRICE_MISMATCH -> proxy lookup
     await call("topup_proxy", { proxy_id: prx, additional_gb: 1, max_price_cents: 400 });
     await call("renew_proxy", { proxy_id: prx, max_price_cents: 1 }); // PRICE_MISMATCH -> proxy lookup
     await call("renew_proxy", { proxy_id: prx, max_price_cents: 1800 });

@@ -315,10 +315,27 @@ describe("get_proxy_status", () => {
     const res = await getProxyStatusHandler(toolContext(http))({ proxy_id: "proxy_xyz" });
     expect(res.isError).toBeFalsy();
     expect(http.history.map((h) => h.method)).not.toContain("POST");
-    // No topup_prices on the proxy (older dashboard or not top-uppable): no price line.
-    expect(textOf(res)).not.toContain("Top-up prices");
+    // No topup_prices field (a dashboard without it): says so, never estimates.
+    expect(textOf(res)).toContain("Top-up prices: not available here (the dashboard shows them; don't estimate one)");
+    expect(http.history.some((h) => h.path.startsWith("/v1/proxy_plans"))).toBe(false);
     expect(res.structuredContent?.proxy).toMatchObject({ data_bytes_used: 3221225472 });
     expect(res.structuredContent?.nolist_credentials).toMatchObject({ username: "vm_abc123" });
+  });
+
+  it("topup_prices null (the API says no paid top-up now): says the proxy can't take one, no price", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/proxies/proxy_xyz", {
+      status: 200,
+      headers: new Headers(),
+      body: { success: true, data: { proxy: proxyResp("proxy_xyz", { topup_prices: null }) } },
+    });
+    http.expect("GET", "/v1/proxies/proxy_xyz/usage", usageOk);
+    const res = await getProxyStatusHandler(toolContext(http))({ proxy_id: "proxy_xyz" });
+    expect(res.isError).toBeFalsy();
+    const t = textOf(res);
+    expect(t).toContain("Top-up:        not available - this proxy can't take a paid top-up now");
+    expect(t).not.toContain("Top-up prices");
+    expect(res.structuredContent?.proxy).toMatchObject({ topup_prices: null });
   });
 
   it("takes only the gateway from flex_credentials, never its (replayable, stale) proxy snapshot", async () => {
@@ -546,7 +563,25 @@ describe("topup_proxy", () => {
     const t = textOf(res);
     // 5 GB at the 1 GB rate: 5 x $3.99
     expect(t).toContain("about $19.95");
+    expect(t).toContain("a few cents higher");
     expect(t).toContain("max_price_cents (e.g. 2016)");
+  });
+
+  it.each([
+    ["null (no paid top-up now)", { topup_prices: null }, "Nothing was charged: proxy_xyz can't take a paid top-up now"],
+    ["absent (a dashboard without it)", {}, "Its price isn't available here, so don't estimate one"],
+  ])("PRICE_MISMATCH with topup_prices %s: says so and never estimates a price", async (_why, overrides, expected) => {
+    const http = createMockHttpClient();
+    http.expect("POST", "/v1/proxies/proxy_xyz/topup", priceMismatch);
+    http.expect("GET", "/v1/proxies/proxy_xyz", { status: 200, headers: new Headers(), body: { success: true, data: { proxy: proxyResp("proxy_xyz", overrides) } } });
+    const ctx = toolContext(http, { budgetCents: 10000 });
+    const res = await topupProxyHandler(ctx)({ proxy_id: "proxy_xyz", additional_gb: 5, max_price_cents: 1500 });
+    expect(res.isError).toBe(true);
+    const t = textOf(res);
+    expect(t).toContain(expected);
+    expect(t).not.toMatch(/\$(?!15\.00)\d/); // no dollar figure but the refused cap
+    expect(http.history.some((h) => h.path.startsWith("/v1/proxy_plans"))).toBe(false);
+    expect(ctx.guard.countedCents).toBe(0);
   });
 });
 
@@ -854,8 +889,9 @@ describe("get_proxy_status - dedicated", () => {
     expect(t.text).not.toContain("_c_US");
     expect(t.text).toContain("Auto-renew:    on");
     expect(t.text).toContain("$55.20");
-    // Lists are a shared-proxy feature.
+    // Lists and top-ups are shared-proxy features.
     expect(t.text).not.toContain("Lists");
+    expect(t.text).not.toContain("Top-up");
   });
 
   it("an active Premium proxy never triggers a flex call and says where its credentials are", async () => {

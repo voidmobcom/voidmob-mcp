@@ -264,6 +264,14 @@ export const getProxyStatusHandler = (ctx: ToolContext) =>
     if (proxy.topup_prices?.length) {
       const sizes = proxy.topup_prices.map((t) => `${t.additional_gb} GB ${formatUsd(t.price_cents)} (+${t.days_added}d)`).join(", ");
       lines.push(`  Top-up prices: ${sizes} (topup_proxy; pass the price as max_price_cents)`);
+    } else if (!dedicated) {
+      // No price list: say so, never estimate one. Null means the API says it
+      // can't take a paid top-up; absent means a dashboard without the field.
+      lines.push(
+        proxy.topup_prices === undefined
+          ? `  Top-up prices: not available here (the dashboard shows them; don't estimate one)`
+          : `  Top-up:        not available - this proxy can't take a paid top-up now`,
+      );
     }
     if (proxy.rotation_url) lines.push(`  Rotation URL:  ${proxy.rotation_url}`);
     if (proxy.gateway) {
@@ -410,9 +418,14 @@ export const topupProxyHandler = (ctx: ToolContext) =>
       }),
       async () => {
         const proxy = await fetchProxy(ctx, args.proxy_id);
-        const quote = proxy.topup_prices ? topupQuote(proxy.topup_prices, args.additional_gb) : null;
-        if (quote === null) return null;
+        const quote = topupQuote(proxy.topup_prices ?? [], args.additional_gb);
         const refused = `The ${args.additional_gb} GB top-up costs more than your max_price_cents ${max} (${formatUsd(max)}), so nothing was charged. `;
+        if (quote === null) {
+          // No price list on the proxy: say so, never estimate one.
+          return proxy.topup_prices === undefined
+            ? refused + `Its price isn't available here, so don't estimate one: the user can see this proxy's top-up prices in the dashboard`
+            : `Nothing was charged: ${args.proxy_id} can't take a paid top-up now (get_proxy_status shows its status)`;
+        }
         if (quote.exact) {
           return (
             refused +
@@ -420,11 +433,11 @@ export const topupProxyHandler = (ctx: ToolContext) =>
           );
         }
         // Off-list size: a ceiling a little above the estimate, so an approved
-        // retry is not refused again over a cent of discount rounding.
+        // retry is not refused again over a few cents of discount rounding.
         const suggested = Math.ceil(Math.max(quote.cents, max) * 1.01) + 1;
         return (
           refused +
-          `It comes to about ${formatUsd(quote.cents)} (the exact total can be a cent higher after your discount). ` +
+          `It comes to about ${formatUsd(quote.cents)} (the exact total can be a few cents higher after your discount). ` +
           `Show the user; only if they approve a ceiling a little above that, call topup_proxy again with it as max_price_cents (e.g. ${suggested})`
         );
       },

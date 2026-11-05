@@ -11,7 +11,8 @@ export interface TopupPrice {
  * API's exact charges for 1, 10, 25, 50 and 100 GB, discount included). Any
  * other size follows the API's rule: the per-GB rate of the largest listed
  * size below it, never more than the next listed size. `exact` is false for
- * those, where discount rounding can move the charge by a cent.
+ * those: the API takes the discount after the rule, so its rounding can move
+ * the charge by a few cents.
  */
 export function topupQuote(prices: TopupPrice[], gb: number): { cents: number; exact: boolean } | null {
   if (prices.length === 0) return null;
