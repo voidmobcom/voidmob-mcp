@@ -66,9 +66,13 @@ Menu names change between app versions: look for "custom connector" or "remote M
 
 - **Apps VoidMob does not recognize start at View.** The agent only sees the tools its level allows.
 - **Optional spending limits:** a maximum per order and a daily limit over a rolling 24 hours, net of refunds. Both are off by default. VoidMob enforces them on every purchase, so they hold whatever the app or agent does.
-- **Buy without asking:** off by default and needs a daily limit. It only changes what the server tells the agent: it may buy without asking first, still quotes the price, and must report every purchase. Your chat app's own approval prompts are a separate setting in that app.
+- **Buy without asking:** off by default and needs a daily limit. It only changes the server's instructions: the agent may buy without asking first, still quotes the price and reports every purchase. Your chat app's own approval prompts are a separate setting in that app.
 
-Manage connected apps at [dashboard.voidmob.com/account/connected-apps](https://dashboard.voidmob.com/account/connected-apps): change the level or limits, or disconnect. Up to 10 apps per account. An app is disconnected after 90 days without use or when your login email changes, and every new connection sends a security email. App connections can never turn auto-renew on, create IP-whitelist proxy lists or create webhook endpoints; do those in the dashboard or with an API key.
+Manage connected apps at [dashboard.voidmob.com/account/connected-apps](https://dashboard.voidmob.com/account/connected-apps): change the level or limits, or disconnect.
+
+- Up to 10 apps per account, and every new connection sends a security email.
+- An app is disconnected after 90 days unused or when your login email changes.
+- Apps can never turn auto-renew on, create IP-whitelist proxy lists or create webhook endpoints. Do those in the dashboard or with an API key.
 
 ### Try it without an account
 
@@ -76,7 +80,7 @@ Manage connected apps at [dashboard.voidmob.com/account/connected-apps](https://
 https://mcp.voidmob.com/sandbox/<any-random-id-of-16-or-more-letters-and-digits>
 ```
 
-No sign-in: mock data, a $500 play balance, nothing is charged. Your own random id (16 or more letters, digits, `-` or `_`) gives you a playground that keeps its state; keep it private. The bare `https://mcp.voidmob.com/sandbox` keeps no state: every call starts from fresh demo data.
+No sign-in, mock data, a $500 play balance, nothing charged. Make up your own id (16 or more letters, digits, `-` or `_`) and keep it private: that playground keeps its state. The bare `https://mcp.voidmob.com/sandbox` starts from fresh demo data on every call.
 
 ## Run locally
 
@@ -281,36 +285,36 @@ The skill runs the REST API with curl on the Bot's computer and reads the secret
 
 ## How money works
 
-- **Prepaid balance.** Everything is paid from your USD balance. Top it up with crypto in the [dashboard](https://dashboard.voidmob.com/wallet), or have the agent or a script create a deposit and get the address (`create_deposit`). Payment comes from a crypto wallet: yours, or your own automation's. Keep on the balance only what you are happy for an agent to spend, or set [spending limits](#what-you-choose-when-you-connect).
-- **You approve the price.** Search tools show your live prices. Every buy, renewal, top-up and paid reuse requires `max_price_cents`: the price the agent showed you and you approved. If the current price is higher, nothing is charged and the tool returns the new price so the agent can ask you again; it never buys at a price you did not see. Every buy debits the balance immediately, and every result shows what was charged.
-- **No double charges on retries.** Every purchase carries an idempotency key. If the connection drops, the server retries once with the same key, which the API never charges twice.
-- **When a result is uncertain,** the tool says the purchase may have gone through. Check `list_orders`, the matching get tool or `get_account` before buying again.
+- **Prepaid balance.** Everything is paid from your USD balance, topped up with crypto in the [dashboard](https://dashboard.voidmob.com/wallet). An agent or script can create a deposit and get the address (`create_deposit`). Payment comes from a crypto wallet: yours, or your own automation's. Keep on the balance only what an agent may spend, or set [spending limits](#what-you-choose-when-you-connect).
+- **You approve the price.** Every buy, renewal, top-up and paid reuse carries `max_price_cents`, the price you approved. If the live price is higher, nothing is charged and the agent asks you again with the new price. Every result shows what was charged.
+- **No double charges.** Every purchase carries an idempotency key, so a retry after a dropped connection is never charged twice.
+- **Uncertain result?** The tool says the purchase may have gone through. Check `list_orders`, the matching get tool or `get_account` before buying again.
 
 | Service | Refunds and cancellation |
 |---|---|
-| SMS verification | A number stays open for up to 15 minutes and can receive several codes. No SMS: refunded automatically (status `cancelled`). Cancel before any SMS for a full refund; frequent cancellations can pause SMS purchasing for a while. Rare exception: services marked non-refundable end as `expired` without a refund |
+| SMS verification | Open for up to 15 minutes; several codes can arrive. No SMS: refunded automatically. Cancel before any SMS for a full refund (frequent cancellations can pause SMS buying for a while) |
 | Long-term rental | Full refund if cancelled within 60 minutes of purchase |
-| Dedicated number | Billed monthly, cannot be cancelled. Leave auto-renew off and it simply expires at the end of the month |
-| eSIM | Cannot be cancelled through the MCP once issued. Contact support if one was bought by mistake and never installed |
-| Proxy | Refunded automatically if it cannot be provisioned |
+| Dedicated number | Billed monthly, no cancellation. Leave auto-renew off and it expires at the end of the month |
+| eSIM | Can't be cancelled from the MCP once issued. Contact support if one was bought by mistake and never installed |
+| Proxy | Refunded automatically if it can't be provisioned |
 
 ## Owner controls
 
-Optional safety settings for whoever runs the server locally. They apply in live and sandbox mode alike, and a refusal from any of them charges nothing. They stack with the permission level and spending limits set on the API key itself: the stricter one wins.
+Optional limits for whoever runs the server locally. They work in live and sandbox mode, a refusal charges nothing, and they stack with the API key's own level and limits: the stricter one wins.
 
 | Env var | Effect |
 |---|---|
-| `VOIDMOB_READ_ONLY=1` | View access: tools that spend money or change anything are not registered at all. The agent can search prices and read orders, nothing else |
-| `VOIDMOB_MAX_ORDER_CENTS=2500` | Refuses, before any request, a purchase, renewal, top-up or paid reuse whose `max_price_cents` is above this (here $25). Turning auto-renew on is refused when one renewal would cost more |
-| `VOIDMOB_BUDGET_CENTS=5000` | Running spending limit for this server process (here $50). The server counts what each purchase charged; when an outcome is unclear (a dropped connection, a purchase still in flight) it counts the full `max_price_cents`. A purchase that could go over is refused, and auto-renew cannot be turned on (renewals are charged later, outside the session). **A per-session safety net, not an account limit:** it resets when the server restarts and does not see purchases made elsewhere |
-| `VOIDMOB_AUTONOMOUS=1` | Auto-mode: the agent may buy without asking first, within the limits, and must report every purchase. Needs `VOIDMOB_BUDGET_CENTS` or a daily limit on the API key (the server stops with a config error if the API confirms neither exists). It changes only the instructions: every limit still applies. An API key with auto-mode turned on in the dashboard gets the same instructions |
-| `VOIDMOB_TOOLSETS=sms,esim` | Loads only these tool groups, so the agent carries less context: `sms`, `numbers` (dedicated numbers), `esim`, `proxy`. Account, deposit, order and geo tools are always on |
+| `VOIDMOB_READ_ONLY=1` | View only: tools that spend or change anything are not loaded |
+| `VOIDMOB_MAX_ORDER_CENTS=2500` | Refuses any purchase, renewal, top-up or paid reuse above $25 before it is sent, and auto-renew whose renewal would cost more |
+| `VOIDMOB_BUDGET_CENTS=5000` | A $50 running limit for this server process. An unclear outcome counts at its full approved price; a purchase that could go over is refused, and auto-renew can't be turned on. A session safety net, not an account limit: it resets on restart and doesn't see purchases made elsewhere |
+| `VOIDMOB_AUTONOMOUS=1` | Auto-mode: the agent may buy without asking, inside the limits, and reports every purchase. Needs `VOIDMOB_BUDGET_CENTS` or a daily limit on the key. It only changes the instructions; every limit still applies. A key with auto-mode on in the dashboard gets the same |
+| `VOIDMOB_TOOLSETS=sms,esim` | Loads only these groups for less context: `sms`, `numbers` (dedicated numbers), `esim`, `proxy`. Account, deposit, order and geo tools always load |
 
-`get_account` shows the permission level, the limits in force and how much is left. A malformed value stops the server with an error instead of being ignored.
+`get_account` shows the level, the limits in force and what's left. A malformed value stops the server instead of being ignored.
 
 ## Tools
 
-28 tools across six domains: 11 need View access, 9 Manage and 8 Buy (see [permission levels](#what-you-choose-when-you-connect)). A server registers only the tools its level allows, and a call above the level is refused with nothing charged. Every tool returns text plus `structuredContent` that matches its declared `outputSchema`.
+28 tools in six groups: 11 need View, 9 Manage and 8 Buy (see [permission levels](#what-you-choose-when-you-connect)). A server loads only the tools its level allows, and a call above it is refused with nothing charged. Every tool returns text plus `structuredContent` matching its `outputSchema`.
 
 ### Account and deposits (3)
 
@@ -376,7 +380,7 @@ Turn a dedicated proxy's auto-renew on or off with `toggle_auto_renew`.
 
 ### Waiting for SMS codes
 
-After `rent_number`, call `get_rental` with `wait_seconds` (up to 120 locally, 60 on the hosted server; call again to keep waiting). The server polls for the agent (2, 3, 5, 8 s, then every 10-15 s) and returns as soon as a code arrives, the 15-minute window closes or the wait ends, with the latest SMS attached. Clients that send a progress token get progress notifications, and cancelling the request stops the wait. SMS text is shown fenced as untrusted data: it comes from whoever sent the SMS and is never an instruction.
+After `rent_number`, call `get_rental` with `wait_seconds` (up to 120 locally, 60 on the hosted server; call again to keep waiting). It returns as soon as a code arrives or the 15-minute window closes, with the latest SMS attached. Clients that send a progress token get progress updates, and cancelling the request stops the wait. SMS text is shown as untrusted data, never as an instruction.
 
 ### Resources and prompts
 
@@ -392,7 +396,7 @@ Servers below Buy access (`VOIDMOB_READ_ONLY`, or an API key or app set to View 
 
 ## Agent skill
 
-For any agent with a shell and curl, MCP or not, [`skills/voidmob`](skills/voidmob) is an [Agent Skills](https://agentskills.io) `SKILL.md` that teaches the same flows over the REST API: balance checks, quote-then-confirm purchases, idempotent retries, deposits, SMS codes, dedicated numbers, proxies and eSIMs. Plain Markdown, no scripts. It reads the key from `VOIDMOB_API_KEY`; set that in your agent's environment or secret store, never in the skill files.
+For agents with a shell and curl, MCP or not: [`skills/voidmob`](skills/voidmob) is an [Agent Skills](https://agentskills.io) `SKILL.md` that teaches the same flows over the REST API (quote then confirm, safe retries, deposits, SMS codes, dedicated numbers, proxies and eSIMs). Plain Markdown, no scripts. It reads `VOIDMOB_API_KEY` from your agent's environment or secret store, never from the skill files.
 
 The quickest way: tell your agent *Read https://voidmob.com/skill.md and follow it.*
 
@@ -426,24 +430,14 @@ On Hermes, also list the key under `terminal.env_passthrough` in `~/.hermes/conf
 
 | Env var | Purpose | Required |
 |---|---|---|
-| `VOIDMOB_API_KEY` | Bearer key from the dashboard | Live mode |
-| `VOIDMOB_SANDBOX` | Set to `1` for mock-data mode | No |
-| `VOIDMOB_READ_ONLY` | `1` = no tools that spend or change anything ([owner controls](#owner-controls)) | No |
-| `VOIDMOB_MAX_ORDER_CENTS` | Per-order limit in US cents | No |
-| `VOIDMOB_BUDGET_CENTS` | Per-session spending limit in US cents | No |
-| `VOIDMOB_AUTONOMOUS` | `1` = the agent may buy without asking, within the limits; needs `VOIDMOB_BUDGET_CENTS` or a daily limit on the key | No |
-| `VOIDMOB_TOOLSETS` | Tool groups to load: `sms`, `numbers`, `esim`, `proxy` (default: all) | No |
-| `VOIDMOB_DEBUG` | Set to `1` to log requests to stderr | No |
-| `VOIDMOB_BASE_URL` | Override API host (advanced; must be `https://`, plain `http://` only for localhost) | No |
+| `VOIDMOB_API_KEY` | Your API key (`vmk_live_...`) | Live mode |
+| `VOIDMOB_SANDBOX` | `1` = mock data and a $500 play balance, no key needed | No |
+| `VOIDMOB_DEBUG` | `1` = log requests to stderr | No |
+| `VOIDMOB_BASE_URL` | Override the API host (advanced; `https://` only, plain `http://` for localhost) | No |
 
-All MCP clients that use one API key share its per-account rate limit, so heavy parallel use across several apps may hit `RATE_LIMITED`; back off and retry.
+Access and spending limits (`VOIDMOB_READ_ONLY`, `VOIDMOB_MAX_ORDER_CENTS`, `VOIDMOB_BUDGET_CENTS`, `VOIDMOB_AUTONOMOUS`, `VOIDMOB_TOOLSETS`) are under [Owner controls](#owner-controls).
 
-<details>
-<summary><b>Self-hosting the HTTP server</b> (not needed for normal use)</summary>
-
-The hosted server is the same code behind HTTP (`node dist/http.js`, port 8080, the `Dockerfile` in this repo). To run your own, set `MCP_RESOURCE_URL` (its public `https://` address) and optionally `PORT`, `OAUTH_ISSUER`, `OAUTH_JWKS_URL` and `VOIDMOB_BASE_URL`. It accepts VoidMob sign-in tokens and `vmk_live_` keys, and reads the caller's address from `CF-Connecting-IP` for its rate limits, so run it behind Cloudflare or a proxy that sets that header.
-
-</details>
+Every app using one API key shares the account's rate limit. On `RATE_LIMITED`, back off and retry.
 
 ---
 
