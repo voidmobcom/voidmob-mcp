@@ -1,0 +1,7 @@
+# Only what the image build reads.
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!src
+!skills

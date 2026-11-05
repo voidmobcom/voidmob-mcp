@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { HttpError, NetworkError } from "../client/http.js";
 import { callApi, callApiPage } from "../client/call-api.js";
@@ -141,7 +141,7 @@ const failureNote = (kind: OrderKind, e: unknown): string =>
   `${kind}: could not be read (${e instanceof HttpError || e instanceof NetworkError ? mapApiError(e) : "unexpected response"})`;
 
 export const listOrdersHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { kind?: OrderKind | "sms"; status?: string; cursor?: string; limit?: number }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { kind?: OrderKind | "sms"; status?: string; cursor?: string; limit?: number }): Promise<ToolResult> => {
     const single = args.kind && args.kind !== "sms" ? args.kind : undefined;
     if ((args.status || args.cursor) && !single) {
       return toolError(
@@ -215,7 +215,7 @@ export const listOrdersHandler = (ctx: ToolContext) =>
 export function registerOrdersTools(server: McpServer, ctx: ToolContext) {
   defineTool(server, ctx, "list_orders", {
     group: "core",
-    writes: false,
+    level: "view",
     title: "List orders",
     description:
       "List your orders: SMS verifications (ver_...), long-term rentals (ren_...), dedicated numbers (ded_...), eSIMs (esim_...) and proxies (prx_...), with status and price. " +

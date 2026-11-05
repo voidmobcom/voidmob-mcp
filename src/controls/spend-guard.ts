@@ -167,9 +167,9 @@ export class SpendGuard {
   }
 }
 
-export function describeLimits(guard: SpendGuard, readOnly: boolean): string[] {
-  const lines: string[] = [];
-  if (readOnly) lines.push(`    Read-only:       on (tools that spend or change anything are not available)`);
+/** get_account lines for the owner's local controls; `extra` lines (access, auto-mode) go first. */
+export function describeLimits(guard: SpendGuard, extra: string[] = []): string[] {
+  const lines: string[] = [...extra];
   if (guard.maxOrderCents !== null) lines.push(`    Max per order:   ${formatUsd(guard.maxOrderCents)}`);
   if (guard.budgetCents !== null) {
     lines.push(

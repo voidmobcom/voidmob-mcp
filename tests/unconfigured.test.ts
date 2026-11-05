@@ -6,18 +6,14 @@ import { getAccountHandler } from "../src/tools/account.js";
 import type { ToolResult } from "../src/utils/render.js";
 import { toolContext } from "../src/tools/context.js";
 import { DEFAULT_CONTROLS } from "../src/config.js";
-
-function toolNames(server: ReturnType<typeof buildUnconfiguredServer>): string[] {
-  // @ts-expect-error - reach into internal map for the registered tool set
-  return Object.keys(server._registeredTools).sort();
-}
+import { toolNames } from "./connect.js";
 
 const liveServer = () =>
   buildLiveServer({ sandbox: false, apiKey: "vmk_live_" + "a".repeat(32), baseUrl: "https://x", debug: false, controls: DEFAULT_CONTROLS });
 
 describe("unconfigured mode", () => {
-  it("exposes the EXACT same tool set as live (cannot drift)", () => {
-    expect(toolNames(buildUnconfiguredServer())).toEqual(toolNames(liveServer()));
+  it("exposes the EXACT same tool set as live (cannot drift)", async () => {
+    expect(await toolNames(buildUnconfiguredServer())).toEqual(await toolNames(liveServer()));
   });
 
   it("tool calls fail with setup instructions instead of crashing", async () => {

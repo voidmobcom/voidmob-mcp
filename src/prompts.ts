@@ -1,6 +1,6 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import type { ToolContext } from "./tools/context.js";
+import { levelAllows, type ToolContext } from "./tools/context.js";
 
 // Guided flows a host can offer as slash commands. Each one buys something,
 // so each spells out the confirm-the-price step before the purchase.
@@ -13,8 +13,8 @@ const CONFIRM =
 const user = (text: string) => ({ messages: [{ role: "user" as const, content: { type: "text" as const, text } }] });
 
 export function registerPrompts(server: McpServer, ctx: ToolContext): void {
-  // Every flow ends in a purchase, which a read-only server cannot make.
-  if (ctx.readOnly) return;
+  // Every flow ends in a purchase, which needs the buy level.
+  if (!levelAllows(ctx.level, "buy")) return;
 
   if (ctx.toolsets.has("sms")) {
     server.registerPrompt(
@@ -22,7 +22,7 @@ export function registerPrompts(server: McpServer, ctx: ToolContext): void {
       {
         title: "Get an SMS verification code",
         description: "Rent a US non-VoIP number for one service and wait for the SMS code.",
-        argsSchema: { service: z.string().describe("The app or site that sends the code, e.g. Telegram") },
+        argsSchema: z.object({ service: z.string().describe("The app or site that sends the code, e.g. Telegram") }),
       },
       ({ service }) =>
         user(
@@ -45,10 +45,10 @@ export function registerPrompts(server: McpServer, ctx: ToolContext): void {
       {
         title: "Set up a mobile proxy in a country",
         description: "Pick and buy a 4G/5G mobile proxy plan for a country and get ready-to-use connection details.",
-        argsSchema: {
+        argsSchema: z.object({
           country: z.string().describe("Exit country, 2-letter ISO code (e.g. US, GB, DE)"),
           usage: z.string().optional().describe("What it is for, e.g. 'rotating IP per request' or 'sticky IP for 10 minutes'"),
-        },
+        }),
       },
       ({ country, usage }) =>
         user(
@@ -71,11 +71,11 @@ export function registerPrompts(server: McpServer, ctx: ToolContext): void {
       {
         title: "Buy a travel eSIM",
         description: "Find and buy an eSIM data plan for a destination and get the install details.",
-        argsSchema: {
+        argsSchema: z.object({
           destination: z.string().describe("Country (2-letter ISO code such as JP) or region (e.g. Europe)"),
           days: z.string().optional().describe("Trip length in days"),
           data_gb: z.string().optional().describe("Data needed in GB"),
-        },
+        }),
       },
       ({ destination, days, data_gb }) =>
         user(
@@ -85,7 +85,7 @@ export function registerPrompts(server: McpServer, ctx: ToolContext): void {
               `${days ? ` with min_days=${days}` : ""}${data_gb ? ` and min_data_gb=${data_gb}` : ""}. Show 2-3 good options with coverage, data, validity and price.`,
             `2. Tell me it cannot be cancelled once issued and that my phone must support eSIM. ${CONFIRM}`,
             `3. Call purchase_esim with the prod_ id and max_price_cents. If it is processing, poll get_esim_status until completed.`,
-            `4. Give me the install details: the LPA string and the QR code from get_esim_qr.`,
+            `4. Give me the install details: the LPA string, and the QR code from get_esim_status with include_qr=true.`,
           ].join("\n"),
         ),
     );

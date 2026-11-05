@@ -1,8 +1,132 @@
 import { HttpError, NetworkError, isWriteMethod } from "./http.js";
 import { formatUsd } from "../utils/format.js";
+import { levelLabel, type Connection, type PermissionLevel } from "../connection.js";
 
 const SETUP_URL = "https://dashboard.voidmob.com/developers/api-keys";
 const WALLET_URL = "https://dashboard.voidmob.com/wallet";
+
+/** Per-server links and context an error message can point at. */
+export interface ErrorLinks {
+  /** Where the user adds funds (/v1/me deposit_url). */
+  depositUrl: string;
+  /** Served over HTTP: a refused credential is fixed in the app, not in VOIDMOB_API_KEY. */
+  hosted?: boolean;
+  /** The key's or app connection's settings; `kind` picks the wording. */
+  connection?: Connection | null;
+  /** The server's level: at Manage or above, create_deposit is there to add funds. */
+  level?: PermissionLevel;
+}
+
+const DEFAULT_LINKS: ErrorLinks = { depositUrl: WALLET_URL };
+
+const centsDetail = (err: HttpError, name: string): number | undefined => {
+  const v = err.details?.[name];
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+};
+
+// The API's own (white-labeled) message. Without one, HttpError's message
+// starts with the code.
+const apiMessage = (err: HttpError): string | undefined =>
+  err.message && !err.message.startsWith(err.code) ? err.message : undefined;
+
+const stringDetail = (err: HttpError, name: string): string | undefined => {
+  const v = err.details?.[name];
+  return typeof v === "string" && v ? v : undefined;
+};
+
+// The API answers a limit refusal from its Idempotency-Key record on a
+// same-key retry; every tool call sends a new key, so calling again is fresh.
+const AFTER_RAISE = "Once the owner raises it, call this tool again: each call is a new request.";
+
+/**
+ * Copy for a purchase refused by the API key's or app connection's per-order
+ * or daily limit: the API's message, the largest order still possible, and
+ * where the owner raises the limit.
+ */
+function keyLimitText(err: HttpError, reqLine: string): string {
+  const limit = centsDetail(err, "limit_cents");
+  const remaining = centsDetail(err, "remaining_cents");
+  const settings = stringDetail(err, "settings_url");
+  const daily = err.code === "DAILY_SPEND_CAP_EXCEEDED";
+  const head = apiMessage(err) ??
+    `This order is over the ${daily ? "daily" : "per-order"} spending limit${limit !== undefined ? ` of ${formatUsd(limit)}` : ""}.`;
+  const parts = [head, "Nothing was charged."];
+  if (remaining !== undefined) {
+    parts.push(
+      remaining > 0
+        ? `The largest order allowed right now is ${formatUsd(remaining)}.`
+        : `No order is allowed right now${daily ? " until earlier purchases are more than 24 hours old" : ""}.`,
+    );
+  }
+  parts.push(
+    `Tell the user; only the account owner can raise the limit${settings ? `, at ${settings}` : ", in the dashboard"}. ${AFTER_RAISE}`,
+  );
+  return `${parts.join(" ")}${reqLine}`;
+}
+
+/** Copy for a purchase the balance cannot cover: a deposit at Manage or above, else the link alone. */
+function insufficientBalanceText(links: ErrorLinks, reqLine: string): string {
+  if (links.level === "manage" || links.level === "buy") {
+    return (
+      `Your VoidMob balance is too low for this purchase. Nothing was charged. ` +
+      `Offer to add funds with create_deposit (ask which coin and how much), or the user can add funds at ${links.depositUrl}. Then retry.${reqLine}`
+    );
+  }
+  return `Your VoidMob balance is too low for this purchase. Nothing was charged. Ask the user to add funds at ${links.depositUrl}, then retry${reqLine}`;
+}
+
+/** Copy for a deposit refused by the account's open or daily deposit limit. */
+function depositLimitText(err: HttpError, reqLine: string): string {
+  const limit = typeof err.details?.limit === "number" ? err.details.limit : undefined;
+  const reuse = "Reuse an open one (get_deposit without a deposit_id lists the newest)";
+  if (err.details?.reason === "open_deposits") {
+    const head = limit !== undefined
+      ? `This account already has ${limit} open deposits, the most allowed at once`
+      : "This account already has as many open deposits as allowed";
+    return `${head}, so no deposit was created. ${reuse} or wait until one is paid or expires${reqLine}`;
+  }
+  if (err.details?.reason === "daily_deposits") {
+    const head = limit !== undefined
+      ? `This account has created ${limit} deposits in the last 24 hours, the most allowed`
+      : "This account has created as many deposits in the last 24 hours as allowed";
+    return `${head}, so no deposit was created. ${reuse} or try again later${reqLine}`;
+  }
+  return `${apiMessage(err) ?? "This account has reached its deposit limit."} No deposit was created.${reqLine}`;
+}
+
+/** Copy for a credential the API no longer accepts. */
+function unauthenticatedText(links: ErrorLinks, reqLine: string): string {
+  if (!links.hosted) return `Your VOIDMOB_API_KEY is invalid or revoked. Generate a new key at ${SETUP_URL}${reqLine}`;
+  if (links.connection?.kind === "oauth") {
+    return (
+      `VoidMob no longer accepts this app's connection: it was disconnected or its sign-in expired. Nothing was charged or changed. ` +
+      `Ask the user to reconnect VoidMob in this app and sign in again${reqLine}`
+    );
+  }
+  return (
+    `VoidMob no longer accepts the API key this app connects with: it is invalid or revoked. Nothing was charged or changed. ` +
+    `Ask the user to generate a new key at ${SETUP_URL} and update it in this app's VoidMob connection${reqLine}`
+  );
+}
+
+/** Copy for a call above the key's or connection's permission level. */
+function permissionDeniedText(err: HttpError, reqLine: string): string {
+  // Something app connections can never do, whatever their level: the API
+  // says what to use instead (the dashboard or an API key).
+  if (err.details?.reason === "connection_not_allowed") {
+    return `${apiMessage(err) ?? "App connections can't do this. Do it in the VoidMob dashboard or with an API key."} Nothing was charged or changed.${reqLine}`;
+  }
+  const have = levelLabel(err.details?.permission);
+  const need = levelLabel(err.details?.required_permission);
+  const settings = stringDetail(err, "settings_url");
+  const head = have && need
+    ? `This needs ${need} access, and the API key or app connection this server uses has ${have} access.`
+    : apiMessage(err) ?? "The permission level of the API key or app connection this server uses does not allow this action.";
+  return (
+    `${head} Nothing was charged or changed. ` +
+    `Tell the user; only the account owner can change the permission level${settings ? `, at ${settings}` : ", in the dashboard"}.${reqLine}`
+  );
+}
 
 // A write that got no verdict may still have been applied (and charged).
 const UNCERTAIN_WRITE =
@@ -32,7 +156,7 @@ function retryAfterSeconds(err: HttpError): number | undefined {
   return undefined;
 }
 
-export function mapApiError(err: unknown): string {
+export function mapApiError(err: unknown, links: ErrorLinks = DEFAULT_LINKS): string {
   if (err instanceof NetworkError) {
     return isWriteMethod(err.method)
       ? UNCERTAIN_WRITE
@@ -48,8 +172,15 @@ export function mapApiError(err: unknown): string {
 
   switch (err.code) {
     case "UNAUTHENTICATED":
-      return `Your VOIDMOB_API_KEY is invalid or revoked. Generate a new key at ${SETUP_URL}${reqLine}`;
+      return unauthenticatedText(links, reqLine);
     case "IP_NOT_ALLOWED":
+      if (links.hosted) {
+        return (
+          `This API key only accepts requests from allowlisted IP addresses, so it does not work through the hosted VoidMob MCP server. ` +
+          `Nothing was charged or changed. Ask the user to connect with a key that has no IP allowlist, or by signing in, ` +
+          `or to run the server locally (npx @voidmob/mcp) on an allowlisted machine${reqLine}`
+        );
+      }
       return `This API key only accepts requests from allowlisted IP addresses, and this machine's IP is not on the list. Contact VoidMob support to change the allowlist${reqLine}`;
     case "RATE_LIMITED":
       if (typeof err.details?.paused_for_seconds === "number") {
@@ -57,7 +188,25 @@ export function mapApiError(err: unknown): string {
       }
       return `Rate limit reached. ${wait ? `Wait ${wait}s before retrying` : "Wait a few seconds before retrying"}${reqLine}`;
     case "INSUFFICIENT_BALANCE":
-      return `Your VoidMob balance is too low for this purchase. Nothing was charged. Ask the account owner to top up at ${WALLET_URL}, then retry${reqLine}`;
+      return insufficientBalanceText(links, reqLine);
+    case "DEPOSIT_LIMIT_REACHED":
+      return depositLimitText(err, reqLine);
+    case "VALIDATION_ERROR": {
+      // A deposit under its coin's minimum says how much the minimum is.
+      const min = centsDetail(err, "min_amount_cents");
+      if (min !== undefined) {
+        return (
+          `The amount is below this coin's minimum deposit of ${formatUsd(min)} (amount_cents ${min}), so no deposit was created. ` +
+          `Ask the user for at least that much or another coin (get_deposit without a deposit_id lists the coins and their minimums)${reqLine}`
+        );
+      }
+      return `${err.message ?? err.code}${reqLine}`;
+    }
+    case "PERMISSION_DENIED":
+      return permissionDeniedText(err, reqLine);
+    case "ORDER_LIMIT_EXCEEDED":
+    case "DAILY_SPEND_CAP_EXCEEDED":
+      return keyLimitText(err, reqLine);
     case "PRICE_OVER_CAP": {
       const max = err.details?.max_price_cents;
       const avail = err.details?.available_price_cents;
@@ -83,6 +232,18 @@ export function mapApiError(err: unknown): string {
     case "PROVIDER_TIMEOUT":
     case "PROVISIONING_FAILED":
       return `The order could not be completed, and its charge was refunded to your balance. You can retry${reqLine}`;
+    case "SERVICE_UNAVAILABLE":
+      // VoidMob paused buying through app connections: refused before
+      // anything ran. Matched by its reason only; any other 503 keeps the
+      // API's own message.
+      if (err.details?.reason === "connected_app_purchases_paused") {
+        const minutes = wait ? Math.max(1, Math.round(wait / 60)) : undefined;
+        return (
+          `Purchases through connected apps are paused right now, so nothing was charged. ` +
+          `Try again later${minutes ? ` (in about ${minutes} minute${minutes === 1 ? "" : "s"})` : ""}${reqLine}`
+        );
+      }
+      return `${err.message ?? err.code}${reqLine}`;
     case "PROVIDER_ERROR":
       return `Temporary service error. Please retry shortly${reqLine}`;
     case "INTERNAL_ERROR":

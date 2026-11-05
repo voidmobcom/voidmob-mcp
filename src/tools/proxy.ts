@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { HttpError, NetworkError } from "../client/http.js";
 import { callApi } from "../client/call-api.js";
@@ -9,11 +9,13 @@ import { Proxy, ProxyPlan, ProxyList, ProxyGateway, type ProxyPlan as ProxyPlanT
 import { ToolRefusal } from "../controls/spend-guard.js";
 import { structuredOk, toolError, wrapToolErrors, type ToolResult } from "../utils/render.js";
 import { formatUsd } from "../utils/format.js";
+import { topupQuote } from "../utils/topup-price.js";
 import { READ_ONLY, SPENDS } from "../utils/annotations.js";
 import { outputObject } from "../utils/output.js";
 import { ProxyId, ProxyListId, ProxyPlanId } from "../constants/ids.js";
 import { MaxPriceCents } from "../constants/price.js";
-import { defineTool, type ToolContext } from "./context.js";
+import { LEVEL_LABEL } from "../connection.js";
+import { defineTool, levelAllows, levelSetAt, type ToolContext } from "./context.js";
 
 /** One plan with the caller's live quote; null when the plan does not exist (or is not sold via the API). */
 async function fetchProxyPlan(ctx: ToolContext, planId: string): Promise<ProxyPlanT | null> {
@@ -36,16 +38,6 @@ const isDedicated = (type: string | undefined): boolean => type === "dedicated_s
 /** Ready-to-paste proxy URL; credentials are percent-encoded so any character survives. */
 const proxyUrl = (scheme: "http" | "socks5", username: string, password: string, host: string, port: number): string =>
   `${scheme}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
-
-/**
- * A top-up has no quote endpoint; the API prices it from the plan's price per
- * GB, with discounts and rounding applied to the total. The plan's current
- * price per GB is therefore an estimate that can differ by a few cents.
- */
-function topupEstimateCents(plan: ProxyPlanT, gb: number): number | null {
-  if (!plan.data_gb || plan.data_gb <= 0) return null;
-  return Math.round((plan.quoted_price_cents / plan.data_gb) * gb);
-}
 
 /**
  * On PRICE_MISMATCH (the API's "price above max_price_cents", which carries
@@ -87,6 +79,10 @@ function listRotation(seconds: number): string {
   return seconds === 0 ? "per-request" : seconds === -1 ? "sticky" : `${seconds}s`;
 }
 
+function listLine(l: ProxyListT): string {
+  return `${l.name} (${l.id}) geo=${listGeo(l)} rotation=${listRotation(l.rotation_period_seconds)} mode=${l.rotation_mode}${l.network ? ` ip-whitelist=${l.network}` : ""}`;
+}
+
 /** Credentials and ready-to-paste URLs for one list. */
 function listCredentialLines(list: ProxyListT): string[] {
   const c = list.credentials;
@@ -115,7 +111,7 @@ const PLAN_TYPE_PARAM = { shared: "shared", dedicated: "dedicated_standard", all
 export const SearchProxiesOutput = outputObject({ proxy_plans: z.array(ProxyPlan), next_cursor: z.string().nullable() });
 
 export const searchProxiesHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: {
+  wrapToolErrors(ctx, async (args: {
     country?: string;
     min_data_gb?: number;
     type?: "shared" | "dedicated" | "all";
@@ -157,7 +153,7 @@ export const searchProxiesHandler = (ctx: ToolContext) =>
 export const ProxyOutput = outputObject({ proxy: Proxy });
 
 export const purchaseProxyHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { plan_id: string; max_price_cents: number }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { plan_id: string; max_price_cents: number }): Promise<ToolResult> => {
     const max = args.max_price_cents;
     const proxy = await withCurrentPrice(
       // The API enforces max_price_cents (PRICE_MISMATCH, nothing charged) and
@@ -189,14 +185,12 @@ export const ProxyStatusOutput = outputObject({
   proxy: Proxy,
   usage: ProxyUsage.nullable(),
   nolist_credentials: ProxyGateway.nullable(),
-  // Shared proxies: the plan's current price per GB, the basis of a top-up price.
-  topup_estimate_per_gb_cents: z.number().int().nullable().optional(),
 });
 
 export const getProxyStatusHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
-    // The core GET is the source of truth (and enforces auth/ownership). Usage,
-    // the Flex gateway and the top-up estimate are best-effort enrichment:
+  wrapToolErrors(ctx, async (args: { proxy_id: string }): Promise<ToolResult> => {
+    // The core GET is the source of truth (and enforces auth/ownership). Usage
+    // and the Flex gateway are best-effort enrichment:
     // degrade each to null on ANY API/network error so a transient secondary
     // failure never sinks a status read. Non-API throws (bugs) still propagate.
     // Logged, so a moved endpoint shows up instead of hiding as "no gateway".
@@ -235,22 +229,17 @@ export const getProxyStatusHandler = (ctx: ToolContext) =>
     // key, so its proxy snapshot goes stale. Once created, the core GET carries
     // the gateway itself. The key is per 10-minute window: polls inside a window
     // share one create, and a cached failure is retried in the next window
-    // instead of replaying for the key's 24h lifetime. In read-only mode this
-    // server changes nothing, so it does not create the login.
+    // instead of replaying for the key's 24h lifetime. Creating it needs the
+    // manage level; a view-level server changes nothing, so it does not.
     let gateway = core.gateway;
     const needsGateway = !gateway && core.status === "active" && !dedicated;
-    if (needsGateway && !ctx.readOnly) {
+    const canCreateGateway = levelAllows(ctx.level, "manage");
+    if (needsGateway && canCreateGateway) {
       const slot = Math.floor(Date.now() / 600_000);
       const flexRaw = await callApi<{ proxy: unknown }>(ctx.http, "POST", path`/v1/proxies/${args.proxy_id}/flex_credentials`, {
         idempotencyKey: `flex-${args.proxy_id}-${slot}`,
       }).catch(degradeToNull);
       gateway = flexRaw ? Proxy.parse(flexRaw.proxy).gateway : null;
-    }
-    // Top-up price basis for a shared proxy that can take one.
-    let perGbCents: number | null = null;
-    if (!dedicated && core.plan_id && ["active", "exhausted", "expired"].includes(core.status)) {
-      const plan = await fetchProxyPlan(ctx, core.plan_id).catch(degradeToNull);
-      perGbCents = plan ? topupEstimateCents(plan, 1) : null;
     }
     const proxy = { ...core, gateway };
     const lines = [
@@ -272,7 +261,18 @@ export const getProxyStatusHandler = (ctx: ToolContext) =>
     if (proxy.next_renewal_price_cents != null) {
       lines.push(`  Renewal price: ${formatUsd(proxy.next_renewal_price_cents)} (renew_proxy max_price_cents=${proxy.next_renewal_price_cents})`);
     }
-    if (perGbCents !== null) lines.push(`  Top-up price:  about ${formatUsd(perGbCents)} per GB (topup_proxy; the exact total can differ by a few cents)`);
+    if (proxy.topup_prices?.length) {
+      const sizes = proxy.topup_prices.map((t) => `${t.additional_gb} GB ${formatUsd(t.price_cents)} (+${t.days_added}d)`).join(", ");
+      lines.push(`  Top-up prices: ${sizes} (topup_proxy; pass the price as max_price_cents)`);
+    } else if (!dedicated) {
+      // No price list: say so, never estimate one. Null means the API says it
+      // can't take a paid top-up; absent means a dashboard without the field.
+      lines.push(
+        proxy.topup_prices === undefined
+          ? `  Top-up prices: not available here (the dashboard shows them; don't estimate one)`
+          : `  Top-up:        not available - this proxy can't take a paid top-up now`,
+      );
+    }
     if (proxy.rotation_url) lines.push(`  Rotation URL:  ${proxy.rotation_url}`);
     if (proxy.gateway) {
       const gw = proxy.gateway;
@@ -305,16 +305,28 @@ export const getProxyStatusHandler = (ctx: ToolContext) =>
       }
     } else if (proxy.type === "dedicated_premium") {
       lines.push(``, `  Gateway:       (Premium proxy credentials are shown in the dashboard)`);
-    } else if (needsGateway && ctx.readOnly) {
-      lines.push(``, `  Gateway:       (not set up yet; this server is read-only, so it cannot create the login - use the dashboard or a server without VOIDMOB_READ_ONLY)`);
+    } else if (needsGateway && !canCreateGateway) {
+      lines.push(
+        ``,
+        `  Gateway:       (not set up yet; creating the login needs Manage access and this server has ${LEVEL_LABEL[ctx.level]} access - ` +
+          `open the proxy in the dashboard, or the account owner can raise the access level ${levelSetAt(ctx)})`,
+      );
     } else {
       lines.push(``, `  Gateway:       (not yet provisioned)`);
+    }
+    if (!dedicated) {
+      // Shared proxies: their geo-targeted lists (full objects, logins included, in proxy.lists).
+      lines.push(
+        ``,
+        ...(proxy.lists.length === 0
+          ? [`  Lists:         none yet (create_proxy_list adds one)`]
+          : [`  Lists (${proxy.lists.length}):`, ...proxy.lists.map((l) => `    ${listLine(l)}`)]),
+      );
     }
     return structuredOk(lines.join("\n"), {
       proxy,
       usage,
       nolist_credentials: proxy.gateway,
-      ...(dedicated ? {} : { topup_estimate_per_gb_cents: perGbCents }),
     });
   });
 
@@ -325,7 +337,7 @@ const RotateResult = z.object({ proxy_id: z.string(), rotated_at: z.string(), cu
 export const RotateProxyIpOutput = outputObject(RotateResult.shape);
 
 export const rotateProxyIpHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { proxy_id: string }): Promise<ToolResult> => {
     // No Idempotency-Key: the API does not honor one here (every call must
     // rotate), so this write is also never retried automatically.
     const out = RotateResult.parse(await callApi<unknown>(ctx.http, "POST", path`/v1/proxies/${args.proxy_id}/rotate_ip`));
@@ -338,7 +350,7 @@ export const rotateProxyIpHandler = (ctx: ToolContext) =>
 // ── renew_proxy ─────────────────────────────────────────────────────────────
 
 export const renewProxyHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string; max_price_cents: number }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { proxy_id: string; max_price_cents: number }): Promise<ToolResult> => {
     const max = args.max_price_cents;
     const renewed = await withCurrentPrice(
       // The API enforces max_price_cents (PRICE_MISMATCH, nothing charged).
@@ -362,36 +374,36 @@ export const renewProxyHandler = (ctx: ToolContext) =>
     );
   });
 
-// ── set_proxy_auto_renew ────────────────────────────────────────────────────
+// ── proxy auto-renew (toggle_auto_renew with a prx_ id) ─────────────────────
 
-export const setProxyAutoRenewHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string; enabled: boolean }): Promise<ToolResult> => {
-    // Turning it on schedules charges, so the owner's limits apply to the
-    // renewal price. Turning it off is always allowed.
-    if (args.enabled && ctx.guard.limitsAutoRenew) {
-      const renewal = ctx.guard.budgetCents !== null ? null : (await fetchProxy(ctx, args.proxy_id)).next_renewal_price_cents ?? null;
-      const refusal = ctx.guard.autoRenewRefusal(renewal);
-      if (refusal) return toolError(refusal);
-    }
-    // Explicit state, so a retry can never flip it back - no idempotency key needed.
-    const out = await callApi<{ proxy: unknown }>(
-      ctx.http,
-      "POST",
-      path`/v1/proxies/${args.proxy_id}/auto_renew`,
-      { body: { enabled: args.enabled } },
-    );
-    const proxy = Proxy.parse(out.proxy);
-    const price = proxy.next_renewal_price_cents != null ? ` for ${formatUsd(proxy.next_renewal_price_cents)}` : "";
-    const text = proxy.auto_renew
-      ? `Auto-renew is on for ${proxy.id}: it renews${price} about 12 hours before ${proxy.expires_at}, charged to your balance. Keep enough balance - if it cannot renew by expiry, the proxy expires.`
-      : `Auto-renew is off for ${proxy.id}. It expires at ${proxy.expires_at} unless renewed with renew_proxy.`;
-    return structuredOk(text, { proxy });
-  });
+/** Turn a Standard dedicated proxy's auto-renew on or off. Callers wrap it in wrapToolErrors. */
+export async function setProxyAutoRenew(ctx: ToolContext, proxyId: string, enabled: boolean): Promise<ToolResult> {
+  // Turning it on schedules charges, so the owner's limits apply to the
+  // renewal price. Turning it off is always allowed.
+  if (enabled && ctx.guard.limitsAutoRenew) {
+    const renewal = ctx.guard.budgetCents !== null ? null : (await fetchProxy(ctx, proxyId)).next_renewal_price_cents ?? null;
+    const refusal = ctx.guard.autoRenewRefusal(renewal);
+    if (refusal) return toolError(refusal);
+  }
+  // Explicit state, so a retry can never flip it back - no idempotency key needed.
+  const out = await callApi<{ proxy: unknown }>(
+    ctx.http,
+    "POST",
+    path`/v1/proxies/${proxyId}/auto_renew`,
+    { body: { enabled } },
+  );
+  const proxy = Proxy.parse(out.proxy);
+  const price = proxy.next_renewal_price_cents != null ? ` for ${formatUsd(proxy.next_renewal_price_cents)}` : "";
+  const text = proxy.auto_renew
+    ? `Auto-renew is on for ${proxy.id}: it renews${price} about 12 hours before ${proxy.expires_at}, charged to your balance. Keep enough balance - if it cannot renew by expiry, the proxy expires.`
+    : `Auto-renew is off for ${proxy.id}. It expires at ${proxy.expires_at} unless renewed with renew_proxy.`;
+  return structuredOk(text, { proxy });
+}
 
 // ── topup_proxy ─────────────────────────────────────────────────────────────
 
 export const topupProxyHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string; additional_gb: number; max_price_cents: number }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { proxy_id: string; additional_gb: number; max_price_cents: number }): Promise<ToolResult> => {
     const max = args.max_price_cents;
     const refreshed = await withCurrentPrice(
       // The API prices the top-up itself and enforces max_price_cents
@@ -406,15 +418,26 @@ export const topupProxyHandler = (ctx: ToolContext) =>
       }),
       async () => {
         const proxy = await fetchProxy(ctx, args.proxy_id);
-        const plan = proxy.plan_id ? await fetchProxyPlan(ctx, proxy.plan_id) : null;
-        const estimate = plan ? topupEstimateCents(plan, args.additional_gb) : null;
-        if (estimate === null) return null;
-        // A ceiling a little above both the estimate and the refused cap, so
-        // an approved retry is not refused again over a few cents.
-        const suggested = Math.ceil(Math.max(estimate, max) * 1.05);
+        const quote = topupQuote(proxy.topup_prices ?? [], args.additional_gb);
+        const refused = `The ${args.additional_gb} GB top-up costs more than your max_price_cents ${max} (${formatUsd(max)}), so nothing was charged. `;
+        if (quote === null) {
+          // No price list on the proxy: say so, never estimate one.
+          return proxy.topup_prices === undefined
+            ? refused + `Its price isn't available here, so don't estimate one: the user can see this proxy's top-up prices in the dashboard`
+            : `Nothing was charged: ${args.proxy_id} can't take a paid top-up now (get_proxy_status shows its status)`;
+        }
+        if (quote.exact) {
+          return (
+            refused +
+            `It costs ${formatUsd(quote.cents)}. Show the user; only if they approve it, call topup_proxy again with max_price_cents=${quote.cents}`
+          );
+        }
+        // Off-list size: a ceiling a little above the estimate, so an approved
+        // retry is not refused again over a few cents of discount rounding.
+        const suggested = Math.ceil(Math.max(quote.cents, max) * 1.01) + 1;
         return (
-          `The ${args.additional_gb} GB top-up costs more than your max_price_cents ${max} (${formatUsd(max)}), so nothing was charged. ` +
-          `At the plan's current price it comes to about ${formatUsd(estimate)}; the exact total can be a few cents higher (discounts and rounding apply to the total). ` +
+          refused +
+          `It comes to about ${formatUsd(quote.cents)} (the exact total can be a few cents higher after your discount). ` +
           `Show the user; only if they approve a ceiling a little above that, call topup_proxy again with it as max_price_cents (e.g. ${suggested})`
         );
       },
@@ -430,7 +453,7 @@ export const topupProxyHandler = (ctx: ToolContext) =>
 export const RegeneratePasswordOutput = outputObject({ proxy: Proxy.optional(), list: ProxyList.optional() });
 
 export const regenerateProxyPasswordHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string; list_id?: string }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { proxy_id: string; list_id?: string }): Promise<ToolResult> => {
     if (args.list_id) {
       const out = await callApi<{ list: unknown }>(
         ctx.http,
@@ -455,36 +478,16 @@ export const regenerateProxyPasswordHandler = (ctx: ToolContext) =>
     return structuredOk(`New gateway password for ${args.proxy_id}: ${password}`, { proxy });
   });
 
-// ── list_proxy_lists ────────────────────────────────────────────────────────
-
-export const ListProxyListsOutput = outputObject({ lists: z.array(ProxyList) });
-
-export const listProxyListsHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string }): Promise<ToolResult> => {
-    const lists = (await fetchProxy(ctx, args.proxy_id)).lists;
-    if (lists.length === 0) {
-      return structuredOk(`No proxy lists on ${args.proxy_id} yet. Create one with create_proxy_list.`, { lists: [] });
-    }
-    const text = [
-      `Lists for ${args.proxy_id}:`,
-      ``,
-      ...lists.map((l) =>
-        `  ${l.name} (${l.id}) geo=${listGeo(l)} rotation=${listRotation(l.rotation_period_seconds)} mode=${l.rotation_mode}${l.network ? ` ip-whitelist=${l.network}` : ""}`,
-      ),
-    ].join("\n");
-    return structuredOk(text, { lists });
-  });
-
 // ── create_proxy_list / update_proxy_list ───────────────────────────────────
 
-const LIST_FORMATS = [
+export const LIST_FORMATS = [
   "login_pass_host_port",
-  "host_port_login_pass",
   "http_url",
   "socks5_url",
-  "host_port",
-  "login_pass_at_host_port",
-  "json",
+  "host_port_login_pass_colon",
+  "login_pass_host_port_colon",
+  "host_port_login_pass_comma",
+  "login_pass_host_port_at",
 ] as const;
 type ListFormat = (typeof LIST_FORMATS)[number];
 type RotationMode = "instant" | "delayed_5s" | "no_rotation_on_fail";
@@ -520,7 +523,7 @@ function geoBody(args: GeoArgs): Record<string, unknown> {
 export const ProxyListOutput = outputObject({ list: ProxyList });
 
 export const createProxyListHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: GeoArgs & {
+  wrapToolErrors(ctx, async (args: GeoArgs & {
     proxy_id: string;
     name: string;
     rotation_period_seconds?: number;
@@ -557,7 +560,7 @@ export const createProxyListHandler = (ctx: ToolContext) =>
   });
 
 export const updateProxyListHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: GeoArgs & {
+  wrapToolErrors(ctx, async (args: GeoArgs & {
     proxy_id: string;
     list_id: string;
     name?: string;
@@ -592,7 +595,7 @@ export const updateProxyListHandler = (ctx: ToolContext) =>
 export const DeleteProxyListOutput = outputObject({ proxy_id: z.string(), list_id: z.string() });
 
 export const deleteProxyListHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { proxy_id: string; list_id: string }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { proxy_id: string; list_id: string }): Promise<ToolResult> => {
     await callApi<unknown>(ctx.http, "DELETE", path`/v1/proxies/${args.proxy_id}/lists/${args.list_id}`, {
       idempotencyKey: newIdempotencyKey(),
     });
@@ -614,12 +617,15 @@ const listGeoInputs = {
 
 const rotationPeriodInput = z.number().int().min(-1).max(86400).describe("0=new IP per request, -1=sticky, N=keep the IP for N seconds (max 86400)");
 const rotationModeInput = z.enum(["instant", "delayed_5s", "no_rotation_on_fail"]).describe("What happens when the current node fails");
-const formatInput = z.enum(LIST_FORMATS).describe("Saved export-format preference for the dashboard. Does not change entries in the response.");
+const formatInput = z.enum(LIST_FORMATS).describe(
+  "Saved export-format preference for the dashboard. Does not change entries in the response. " +
+  "Each name lists the fields in order, ending in the separator (_colon, _comma, _at); login_pass_host_port is login:pass@host:port and the _url values add the scheme.",
+);
 
 export function registerProxyTools(server: McpServer, ctx: ToolContext) {
   defineTool(server, ctx, "search_proxies", {
     group: "proxy",
-    writes: false,
+    level: "view",
     title: "Search proxy plans",
     description:
       "Search mobile (4G/5G) proxy plans. Shared plans are rotating mobile IPs billed by data; geo (country/region/city/ISP), sticky sessions and rotation " +
@@ -639,7 +645,7 @@ export function registerProxyTools(server: McpServer, ctx: ToolContext) {
 
   defineTool(server, ctx, "purchase_proxy", {
     group: "proxy",
-    writes: true,
+    level: "buy",
     title: "Buy a proxy",
     description:
       "Buy a proxy plan from search_proxies, charged to your balance immediately. " +
@@ -656,24 +662,25 @@ export function registerProxyTools(server: McpServer, ctx: ToolContext) {
 
   defineTool(server, ctx, "get_proxy_status", {
     group: "proxy",
-    writes: false,
+    level: "view",
     title: "Proxy status and connection details",
     description:
-      "Read a proxy's status, usage, expiry, auto-renew state, renewal and top-up prices, and ready-to-paste connection URLs. " +
+      "Read a proxy's status, usage, expiry, auto-renew state, renewal and top-up prices, ready-to-paste connection URLs and its lists " +
+      "(geo-targeted sub-pools with their own logins; ids for update_proxy_list and delete_proxy_list). " +
       "Shared proxies: the first call on an active proxy sets up its gateway login (free); country, sticky session and rotation are chosen per request " +
       "by appending parameters to the username - the output shows the syntax and examples. Dedicated proxies also show their location, carrier and SOCKS5 URL.",
     inputSchema: { proxy_id: ProxyId.describe("prx_... id from purchase_proxy or list_orders") },
     outputSchema: ProxyStatusOutput,
     // Not strictly read-only: for an active shared proxy without a gateway it
     // creates the gateway login once (get-or-create, free, idempotent), except
-    // in read-only mode. Hinted read-only so hosts can poll it without a
+    // below Manage access. Hinted read-only so hosts can poll it without a
     // confirmation prompt each time.
     annotations: READ_ONLY,
   }, getProxyStatusHandler(ctx));
 
   defineTool(server, ctx, "rotate_proxy_ip", {
     group: "proxy",
-    writes: true,
+    level: "manage",
     title: "Rotate dedicated proxy IP",
     description:
       "Force a new exit IP on a dedicated proxy; open connections drop. 60-second cooldown per proxy. " +
@@ -685,7 +692,7 @@ export function registerProxyTools(server: McpServer, ctx: ToolContext) {
 
   defineTool(server, ctx, "renew_proxy", {
     group: "proxy",
-    writes: true,
+    level: "buy",
     title: "Renew a proxy",
     description:
       "Extend a proxy by one more period of its plan, charged to your balance at its renewal price (next_renewal_price_cents in get_proxy_status); " +
@@ -699,28 +706,14 @@ export function registerProxyTools(server: McpServer, ctx: ToolContext) {
     annotations: SPENDS,
   }, renewProxyHandler(ctx));
 
-  defineTool(server, ctx, "set_proxy_auto_renew", {
-    group: "proxy",
-    writes: true,
-    title: "Set proxy auto-renew",
-    description:
-      "Turn auto-renew on or off for a Standard dedicated proxy. With it on, the proxy renews itself about 12 hours before expiry, charged to your balance at its renewal price. " +
-      "Ask the user before turning it on.",
-    inputSchema: {
-      proxy_id: ProxyId.describe("prx_... id of a dedicated proxy"),
-      enabled: z.boolean(),
-    },
-    outputSchema: ProxyOutput,
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-  }, setProxyAutoRenewHandler(ctx));
-
   defineTool(server, ctx, "topup_proxy", {
     group: "proxy",
-    writes: true,
+    level: "buy",
     title: "Add data to a shared proxy",
     description:
-      "Add GB to a shared proxy (dedicated proxies are unmetered), charged to your balance immediately. The price is about the plan's price per GB times additional_gb " +
-      "(get_proxy_status shows it; the exact total can differ by a few cents). Also re-activates a proxy that ran out of data or expired less than 7 days ago. " +
+      "Add GB to a shared proxy (dedicated proxies are unmetered), charged to your balance immediately. The price depends only on the size: get_proxy_status lists the exact " +
+      "price for 1, 10, 25, 50 and 100 GB; another size costs the per-GB rate of the largest listed size below it, never more than the next listed size. " +
+      "Each GB adds 3 days to the expiry (10 GB or more adds 30). Also re-activates a proxy that ran out of data or expired less than 7 days ago. " +
       "Requires max_price_cents: the total you showed the user and they approved; refused uncharged if the price is higher.",
     inputSchema: {
       proxy_id: ProxyId.describe("prx_... id of a shared proxy"),
@@ -733,7 +726,7 @@ export function registerProxyTools(server: McpServer, ctx: ToolContext) {
 
   defineTool(server, ctx, "regenerate_proxy_password", {
     group: "proxy",
-    writes: true,
+    level: "manage",
     title: "Reset proxy gateway or list password",
     description:
       "Rotate a shared proxy's gateway password (the gateway shown by get_proxy_status), or with list_id the login of one list. " +
@@ -746,20 +739,9 @@ export function registerProxyTools(server: McpServer, ctx: ToolContext) {
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   }, regenerateProxyPasswordHandler(ctx));
 
-  defineTool(server, ctx, "list_proxy_lists", {
-    group: "proxy",
-    writes: false,
-    title: "List proxy lists",
-    description:
-      "List the proxy lists on a shared proxy: geo-targeted sub-pools, each with its own login (or IP whitelist) and rotation settings, all sharing the proxy's data.",
-    inputSchema: { proxy_id: ProxyId.describe("prx_... id of a shared proxy") },
-    outputSchema: ListProxyListsOutput,
-    annotations: READ_ONLY,
-  }, listProxyListsHandler(ctx));
-
   defineTool(server, ctx, "create_proxy_list", {
     group: "proxy",
-    writes: true,
+    level: "manage",
     title: "Create proxy list",
     description:
       "Create a geo-targeted list on an active shared proxy (up to 100 lists, all sharing the proxy's data). " +
@@ -775,7 +757,8 @@ export function registerProxyTools(server: McpServer, ctx: ToolContext) {
       format: formatInput.default("login_pass_host_port"),
       network: z.string().max(120).optional().describe(
         "IP whitelist instead of a login: comma-separated IPv4 addresses and/or /24-/32 subnets, max 5 (e.g. '203.0.113.7,198.51.100.0/24'). " +
-        "Cannot be changed later; an address can be on one list at a time.",
+        "Cannot be changed later; an address can be on one list at a time. " +
+        "An app connection can never create an IP-whitelist list (refused, nothing changed); it can create login lists.",
       ),
     },
     outputSchema: ProxyListOutput,
@@ -784,14 +767,14 @@ export function registerProxyTools(server: McpServer, ctx: ToolContext) {
 
   defineTool(server, ctx, "update_proxy_list", {
     group: "proxy",
-    writes: true,
+    level: "manage",
     title: "Update proxy list",
     description:
       "Change an existing list's name, geo (country with region/city/isp/zip, or countries), rotation or format; omitted fields keep their values. " +
       "The login stays the same. The IP whitelist (network) cannot be changed: delete the list and create a new one for that.",
     inputSchema: {
       proxy_id: ProxyId.describe("prx_... id of an active shared proxy"),
-      list_id: ProxyListId.describe("list_... id from list_proxy_lists"),
+      list_id: ProxyListId.describe("list_... id from get_proxy_status"),
       name: z.string().min(1).max(60).optional(),
       ...listGeoInputs,
       rotation_period_seconds: rotationPeriodInput.optional(),
@@ -804,12 +787,12 @@ export function registerProxyTools(server: McpServer, ctx: ToolContext) {
 
   defineTool(server, ctx, "delete_proxy_list", {
     group: "proxy",
-    writes: true,
+    level: "manage",
     title: "Delete proxy list",
     description: "Delete a proxy list. The list's credentials stop working immediately.",
     inputSchema: {
       proxy_id: ProxyId.describe("prx_... id"),
-      list_id: ProxyListId.describe("list_... id from list_proxy_lists"),
+      list_id: ProxyListId.describe("list_... id from get_proxy_status"),
     },
     outputSchema: DeleteProxyListOutput,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },

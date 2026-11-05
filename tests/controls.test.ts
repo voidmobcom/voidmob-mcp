@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { ZodError } from "zod";
 import { SpendGuard, ToolRefusal, isDefinitelyNotCharged } from "../src/controls/spend-guard.js";
 import { HttpError, NetworkError } from "../src/client/http.js";
-import { parseEnv, parseControls, ConfigError, TOOLSETS } from "../src/config.js";
+import { parseEnv, parseControls, assertAutonomousLimit, ConfigError, TOOLSETS } from "../src/config.js";
 
 const post = (status: number, code: string) => new HttpError(status, code, "r", undefined, "x", { method: "POST" });
 
@@ -91,9 +91,9 @@ describe("isDefinitelyNotCharged", () => {
 });
 
 describe("owner controls from the environment", () => {
-  it("defaults: everything on, no limits", () => {
+  it("defaults: everything on, no limits, auto-mode off", () => {
     const c = parseControls({});
-    expect(c).toMatchObject({ readOnly: false, maxOrderCents: null, budgetCents: null });
+    expect(c).toMatchObject({ readOnly: false, maxOrderCents: null, budgetCents: null, autonomous: false });
     expect([...c.toolsets]).toEqual([...TOOLSETS]);
   });
 
@@ -133,6 +133,17 @@ describe("owner controls from the environment", () => {
     expect(() => parseControls({ VOIDMOB_BUDGET_CENTS: "$20" })).toThrow(/whole number of US cents/);
     expect(() => parseControls({ VOIDMOB_READ_ONLY: "yes" })).toThrow(ConfigError);
     expect(() => parseControls({ VOIDMOB_TOOLSETS: "sms,webhooks" })).toThrow(/unknown group 'webhooks'/);
+  });
+
+  it("VOIDMOB_AUTONOMOUS is a flag that needs a limit", () => {
+    expect(parseControls({ VOIDMOB_AUTONOMOUS: "1" }).autonomous).toBe(true);
+    expect(() => parseControls({ VOIDMOB_AUTONOMOUS: "yes" })).toThrow(ConfigError);
+    expect(() => assertAutonomousLimit(parseControls({ VOIDMOB_AUTONOMOUS: "1" }), null, false)).toThrow(/needs a spending limit/);
+    expect(() => assertAutonomousLimit(parseControls({ VOIDMOB_AUTONOMOUS: "1", VOIDMOB_BUDGET_CENTS: "0" }), null, false)).not.toThrow();
+    expect(() => assertAutonomousLimit(parseControls({ VOIDMOB_AUTONOMOUS: "1" }), 5000, true)).not.toThrow();
+    expect(() => assertAutonomousLimit(parseControls({}), null, true)).not.toThrow();
+    // A key's limit is only known after /v1/me, so a live config parses.
+    expect(parseEnv({ VOIDMOB_API_KEY: "vmk_live_" + "a".repeat(32), VOIDMOB_AUTONOMOUS: "1" }).controls.autonomous).toBe(true);
   });
 
   it("zero is a valid limit (nothing can be bought)", () => {

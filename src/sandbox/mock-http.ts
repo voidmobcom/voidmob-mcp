@@ -1,5 +1,9 @@
+import { randomUUID } from "node:crypto";
 import type { HttpClient, HttpResponse, HttpRequestOpts } from "../client/http.js";
 import type {
+  Deposit,
+  DepositCoin,
+  MeKey,
   MePayload,
   SmsService,
   Verification,
@@ -15,6 +19,7 @@ import type {
   DedicatedNumber,
 } from "../client/types.js";
 import { formatUsd } from "../utils/format.js";
+import { topupQuote, type TopupPrice } from "../utils/topup-price.js";
 
 // In-memory mock of the VoidMob v1 API. The sandbox registers the SAME live
 // tools (src/tools/*) but with this client injected instead of the real HTTP
@@ -109,6 +114,29 @@ const PROXY_PLANS: ProxyPlan[] = [
 
 const isDedicatedProxy = (p: Proxy): boolean => p.type === "dedicated_standard" || p.type === "dedicated_premium";
 
+// Shared top-ups are priced by size, like prod: the same list on every package.
+const TOPUP_PRICES: TopupPrice[] = [
+  { additional_gb: 1, price_cents: 399, days_added: 3 },
+  { additional_gb: 10, price_cents: 3500, days_added: 30 },
+  { additional_gb: 25, price_cents: 8125, days_added: 30 },
+  { additional_gb: 50, price_cents: 14950, days_added: 30 },
+  { additional_gb: 100, price_cents: 25000, days_added: 30 },
+];
+
+// Deposit coins, with a fake USD price per coin to work out the amount to send.
+const DEPOSIT_COINS: Array<DepositCoin & { usd: number; decimals: number; confirmations: number }> = [
+  { coin: "btc", asset: "BTC", network: "Bitcoin", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 60_000, decimals: 8, confirmations: 2 },
+  { coin: "eth", asset: "ETH", network: "Ethereum (ERC-20)", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 3_000, decimals: 6, confirmations: 12 },
+  { coin: "ltc", asset: "LTC", network: "Litecoin", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 80, decimals: 6, confirmations: 6 },
+  { coin: "sol", asset: "SOL", network: "Solana", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 150, decimals: 6, confirmations: 1 },
+  { coin: "usdt_trc20", asset: "USDT", network: "Tron (TRC-20)", min_amount_cents: 5000, max_amount_cents: 1_000_000, usd: 1, decimals: 2, confirmations: 20 },
+  { coin: "usdc_sol", asset: "USDC", network: "Solana", min_amount_cents: 2500, max_amount_cents: 1_000_000, usd: 1, decimals: 2, confirmations: 1 },
+];
+// Mirrors prod: a deposit's payment window is 60 minutes, and an account can
+// hold 8 deposits that still wait for a payment.
+const DEPOSIT_WINDOW_MS = 60 * MINUTE;
+const MAX_OPEN_DEPOSITS = 8;
+
 const GEO: Record<string, { name: string; available_nodes: number; code?: string }[]> = {
   countries: [
     { code: "US", name: "United States", available_nodes: 4200 },
@@ -132,15 +160,40 @@ const GEO: Record<string, { name: string; available_nodes: number; code?: string
 
 // ── state ────────────────────────────────────────────────────────────────────
 
+const START_BALANCE_CENTS = 50000; // $500 play-money balance; a sandbox deposit adds to it once credited
+
+// The hosted sandbox keeps a store per caller for an hour, and buy-then-cancel
+// loops refund the balance, so every collection is capped: the oldest orders
+// of a type and the oldest SMS of a verification are dropped. Lists stop at
+// prod's 100 per proxy.
+export const SANDBOX_MAX_ORDERS_PER_TYPE = 200;
+export const SANDBOX_MAX_MESSAGES = 20;
+export const SANDBOX_MAX_LISTS = 100;
+
 class Store {
-  balanceCents = 50000; // $500 play-money balance (sandbox has no deposit tool, so spend-only)
+  balanceCents = START_BALANCE_CENTS;
   verifications = new Map<string, Verification>();
   messages = new Map<string, VerificationMessage[]>(); // verification id -> SMS, newest first
   rentals = new Map<string, Rental>();
   esims = new Map<string, Esim>();
   proxies = new Map<string, Proxy>();
   dedicateds = new Map<string, DedicatedNumber>();
+  // A deposit and how many times it has been read: the first read sees the
+  // payment confirming, the second sees it credited.
+  deposits = new Map<string, { deposit: Deposit; reads: number }>();
+  depositedCents = 0; // credited by sandbox deposits
   createdAtMs = new Map<string, number>(); // entity id -> creation epoch ms
+
+  /** Store a new order, dropping the oldest of its type past the cap. */
+  add<T>(orders: Map<string, T>, id: string, order: T): void {
+    orders.set(id, order);
+    for (const old of orders.keys()) {
+      if (orders.size <= SANDBOX_MAX_ORDERS_PER_TYPE) break;
+      orders.delete(old);
+      this.messages.delete(old);
+      this.createdAtMs.delete(old);
+    }
+  }
 }
 
 // ── response envelope helpers ─────────────────────────────────────────────────
@@ -192,7 +245,16 @@ function makeFlexGateway(): NonNullable<Proxy["gateway"]> {
   };
 }
 
-export function createSandboxHttpClient(): HttpClient {
+export interface SandboxOptions {
+  /**
+   * Overrides for the key block GET /v1/me reports (default: Buy, no limits,
+   * auto-mode off), so tests can try other levels. Informational only: the
+   * mock does not enforce the level or the limits.
+   */
+  key?: Partial<MeKey>;
+}
+
+export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClient {
   const db = new Store();
 
   // One expired long-term rental whose number is still held, so re-renting
@@ -242,7 +304,7 @@ export function createSandboxHttpClient(): HttpClient {
     v.can_cancel = false;
     v.allow_reuse = true;
     const sms: VerificationMessage = { code: v.code, text: `Your ${v.service_name} verification code is ${v.code}. Do not share it.`, received_at: v.code_received_at };
-    db.messages.set(v.id, [sms, ...(db.messages.get(v.id) ?? [])]);
+    db.messages.set(v.id, [sms, ...(db.messages.get(v.id) ?? [])].slice(0, SANDBOX_MAX_MESSAGES));
     return v;
   };
 
@@ -253,7 +315,7 @@ export function createSandboxHttpClient(): HttpClient {
   };
 
   // A dedicated number "receives" its first SMS once ready, so the poll flow
-  // get_dedicated_number describes is demonstrable.
+  // get_rental describes for ded_ ids is demonstrable.
   const settleDedicated = (d: DedicatedNumber): DedicatedNumber => {
     if ((d.messages?.length ?? 0) === 0 && isReady(d.id)) {
       const code = smsCode();
@@ -283,6 +345,19 @@ export function createSandboxHttpClient(): HttpClient {
           proxies: { limit: 60, window_seconds: 60 },
           reads: { limit: 60, window_seconds: 60 },
         },
+        key: {
+          id: "key_sandbox",
+          kind: "key",
+          name: "Sandbox",
+          permission: "buy",
+          max_order_cents: null,
+          daily_limit_cents: null,
+          // Net spend: the sandbox spends, refunds and credits deposits, and lives well under 24h.
+          spent_24h_cents: Math.max(0, START_BALANCE_CENTS + db.depositedCents - db.balanceCents),
+          auto_mode: false,
+          ...options.key,
+        },
+        deposit_url: "https://dashboard.voidmob.com/wallet",
         created_at: iso(-90 * DAY),
       };
       return ok(me);
@@ -323,7 +398,7 @@ export function createSandboxHttpClient(): HttpClient {
         allow_paid_reuse: true,
         paid_reuse_price_cents: 50,
       };
-      db.verifications.set(id, v);
+      db.add(db.verifications, id, v);
       db.createdAtMs.set(id, Date.now());
       return ok({ verification: v }, 201);
     }
@@ -424,7 +499,7 @@ export function createSandboxHttpClient(): HttpClient {
         cancel_window_expires_at: iso(RENTAL_CANCEL_WINDOW_MS),
         messages: [],
       };
-      db.rentals.set(id, r);
+      db.add(db.rentals, id, r);
       db.createdAtMs.set(id, Date.now());
       return ok(r, 201);
     }
@@ -504,7 +579,7 @@ export function createSandboxHttpClient(): HttpClient {
         expires_at: iso(30 * DAY),
         messages: [],
       };
-      db.dedicateds.set(id, d);
+      db.add(db.dedicateds, id, d);
       db.createdAtMs.set(id, Date.now());
       return ok(d, 201);
     }
@@ -575,7 +650,7 @@ export function createSandboxHttpClient(): HttpClient {
         completed_at: iso(),
         expires_at: iso(product.validity_days * DAY),
       };
-      db.esims.set(id, esim);
+      db.add(db.esims, id, esim);
       return ok({ esim }, 201);
     }
     if (seg[1] === "esims" && seg[2]) {
@@ -650,7 +725,7 @@ export function createSandboxHttpClient(): HttpClient {
           completed_at: iso(),
           expires_at: esim.expires_at,
         };
-        db.esims.set(id, topup);
+        db.add(db.esims, id, topup);
         return ok({ esim: topup }, 201);
       }
     }
@@ -707,6 +782,7 @@ export function createSandboxHttpClient(): HttpClient {
         expires_at: iso(plan.duration_days * DAY),
         auto_renew: false,
         next_renewal_price_cents: plan.quoted_price_cents,
+        topup_prices: dedicated ? null : TOPUP_PRICES,
         gateway: dedicated
           // A modem's own endpoint (documentation-range IP), HTTP + SOCKS5 ports.
           ? { host: `203.0.113.${rnd(1, 254)}`, port: 8000 + rnd(0, 999), protocol: "http", username: `vm_${alnum(6)}`, password: alnum(12), socks_port: 9000 + rnd(0, 999) }
@@ -715,7 +791,7 @@ export function createSandboxHttpClient(): HttpClient {
         rotation_url: dedicated ? `https://dashboard.voidmob.com/api/proxy/rotate/${alnum(24)}` : null,
         created_at: iso(),
       };
-      db.proxies.set(id, proxy);
+      db.add(db.proxies, id, proxy);
       db.createdAtMs.set(id, Date.now());
       return ok({ proxy }, 202);
     }
@@ -760,15 +836,16 @@ export function createSandboxHttpClient(): HttpClient {
       }
       if (seg[3] === "topup" && method === "POST") {
         if (isDedicatedProxy(proxy)) return fail(422, "NOT_SUPPORTED", "Not supported for this proxy.");
-        // Priced from the plan's price per GB, like prod.
-        const plan = PROXY_PLANS.find((p) => p.id === proxy.plan_id);
+        // Priced by size and 3 days per GB (10 GB+ = 30), like prod.
         const gb = Number(body.additional_gb ?? 0);
-        const price = plan?.data_gb ? Math.round((plan.quoted_price_cents / plan.data_gb) * gb) : 0;
+        const price = topupQuote(TOPUP_PRICES, gb)?.cents ?? 0;
         if (body.max_price_cents === undefined) return fail(400, "VALIDATION_ERROR", "max_price_cents is required.");
         if (price > Number(body.max_price_cents)) return fail(409, "PRICE_MISMATCH", "Price exceeds the supplied max_price_cents.");
         const paid = charge(price);
         if (paid) return paid;
         proxy.data_gb_total += gb;
+        const base = Math.max(Date.parse(proxy.expires_at), Date.now());
+        proxy.expires_at = new Date(base + Math.min(gb * 3, 30) * DAY).toISOString();
         return ok({ proxy });
       }
       if (seg[3] === "regenerate_password" && method === "POST") {
@@ -778,6 +855,9 @@ export function createSandboxHttpClient(): HttpClient {
         return ok({ proxy });
       }
       if (seg[3] === "lists" && !seg[4] && method === "POST") {
+        if (proxy.lists.length >= SANDBOX_MAX_LISTS) {
+          return fail(409, "PROXY_LIST_LIMIT_EXCEEDED", "Maximum proxy lists per package reached.");
+        }
         if (settleProxy(proxy).status !== "active") return fail(409, "PROXY_NOT_READY", "Proxy is still provisioning. Retry shortly.");
         const id = uid("list_");
         const single = typeof body.country === "string" ? body.country.toUpperCase() : null;
@@ -841,6 +921,87 @@ export function createSandboxHttpClient(): HttpClient {
           return ok({ list });
         }
       }
+    }
+
+    // ── deposits ──
+    // A deposit nothing was paid to expires when its window ends, and then stops
+    // counting toward the open-deposit cap.
+    if (rawPath.startsWith("/v1/deposits")) {
+      const now = Date.now();
+      for (const { deposit } of db.deposits.values()) {
+        if (deposit.status === "awaiting_payment" && Date.parse(deposit.expires_at) <= now) deposit.status = "expired";
+      }
+    }
+    if (rawPath === "/v1/deposit_coins" && method === "GET") {
+      return ok({ coins: DEPOSIT_COINS.map(({ coin, asset, network, min_amount_cents, max_amount_cents }) => ({ coin, asset, network, min_amount_cents, max_amount_cents })) });
+    }
+    if (rawPath === "/v1/deposits" && method === "GET") {
+      const all = byStatus([...db.deposits.values()].map((e) => e.deposit).reverse(), query);
+      const { page, nextCursor } = paginate(all, query, 20);
+      return ok({ deposits: page, next_cursor: nextCursor });
+    }
+    if (rawPath === "/v1/deposits" && method === "POST") {
+      const coin = DEPOSIT_COINS.find((c) => c.coin === body.coin);
+      if (!coin) {
+        return fail(400, "VALIDATION_ERROR", `Unknown coin '${String(body.coin)}'. Choose one of: ${DEPOSIT_COINS.map((c) => c.coin).join(", ")}.`);
+      }
+      const amount = Number(body.amount_cents);
+      if (!Number.isInteger(amount) || amount < 1 || amount > coin.max_amount_cents) {
+        return fail(400, "VALIDATION_ERROR", `amount_cents must be a whole number from 1 to ${coin.max_amount_cents}.`);
+      }
+      if (amount < coin.min_amount_cents) {
+        return fail(400, "VALIDATION_ERROR", `The minimum deposit for ${coin.asset} on ${coin.network} is ${formatUsd(coin.min_amount_cents)}.`, {
+          min_amount_cents: coin.min_amount_cents,
+        });
+      }
+      const open = [...db.deposits.values()].filter((e) => e.deposit.status === "awaiting_payment").length;
+      if (open >= MAX_OPEN_DEPOSITS) {
+        return fail(429, "DEPOSIT_LIMIT_REACHED", "Too many open deposits.", { reason: "open_deposits", limit: MAX_OPEN_DEPOSITS });
+      }
+      const id = `dep_${randomUUID()}`;
+      const deposit: Deposit = {
+        id,
+        status: "awaiting_payment",
+        coin: coin.coin,
+        asset: coin.asset,
+        network: coin.network,
+        amount_cents: amount,
+        crypto_amount: (amount / 100 / coin.usd).toFixed(coin.decimals),
+        address: `SANDBOX-NOT-A-REAL-ADDRESS-${alnum(16).toUpperCase()}`,
+        payment_uri: null,
+        confirmations: 0,
+        required_confirmations: coin.confirmations,
+        received_cents: 0,
+        credited_cents: 0,
+        bonus_cents: 0,
+        top_up: null,
+        url: "https://voidmob.com/mcp",
+        expires_at: iso(DEPOSIT_WINDOW_MS),
+        created_at: iso(),
+        credited_at: null,
+      };
+      db.add(db.deposits, id, { deposit, reads: 0 });
+      return ok({ deposit }, 201);
+    }
+    if (seg[1] === "deposits" && seg[2] && !seg[3] && method === "GET") {
+      const entry = db.deposits.get(seg[2]);
+      if (!entry) return fail(404, "NOT_FOUND", "Deposit not found.");
+      // Each read of a deposit moves it on once: payment seen, then credited.
+      const d = entry.deposit;
+      entry.reads += 1;
+      if (entry.reads === 1 && d.status === "awaiting_payment") {
+        d.status = "confirming";
+        d.confirmations = 1;
+      } else if (entry.reads === 2 && d.status === "confirming") {
+        d.status = "credited";
+        d.confirmations = d.required_confirmations ?? d.confirmations;
+        d.received_cents = d.amount_cents;
+        d.credited_cents = d.amount_cents;
+        d.credited_at = iso();
+        db.balanceCents += d.amount_cents;
+        db.depositedCents += d.amount_cents;
+      }
+      return ok({ deposit: d });
     }
 
     // ── geo (cascading) ──

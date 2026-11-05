@@ -4,7 +4,7 @@
     "title": "VoidMob Public API",
     "version": "1.0.0",
     "summary": "SMS verifications, mobile proxies, and webhooks for programmatic use.",
-    "description": "The VoidMob Public API (`/api/v1`) exposes the same surface that powers the\ndashboard - SMS verifications, mobile/GB proxy provisioning, real-time\nbalance, and outbound webhooks - under a stable, programmatic contract.\n\nRunning higher volumes? Custom pricing is available -\n[contact us](https://voidmob.com/contact).\n\n## Conventions\n\n- **Base URL:** `https://dashboard.voidmob.com/api/v1`\n- **Authentication:** Bearer token. Issue keys from\n  [Developers - API Keys](https://dashboard.voidmob.com/developers/api-keys).\n  Live keys are prefixed `vmk_live_`.\n- **Money:** all monetary values are **USD cents** as integers. The API\n  never returns floats for money.\n- **Identifiers:** every public id has a stable prefix (`svc_`, `ver_`,\n  `ren_`, `prx_`, `plan_`, `pool_`, `list_`, `whep_`, `esim_`, `prod_`,\n  `evt_`). Treat them as opaque.\n- **Envelopes:** every JSON response is either\n  `{ \"success\": true, \"data\": ... }` or\n  `{ \"success\": false, \"error\": { code, message, docs_url, request_id, details? } }`.\n- **Idempotency:** order-creating and money-moving POST / PATCH / DELETE\n  requests require an `Idempotency-Key` header (any string up to 255\n  chars) - see each operation's parameters for whether it is required.\n  Lighter-weight management calls (webhook-endpoint create/delete,\n  auto-renew toggle, dedicated IP rotation) do not. Re-sending the same\n  key with the same body replays the original response; a different body\n  returns `409 IDEMPOTENCY_CONFLICT`.\n- **Rate limits:** every response carries `X-RateLimit-Limit`,\n  `X-RateLimit-Remaining`, and `X-RateLimit-Reset` (unix seconds). 429s\n  additionally carry `Retry-After`.\n- **Pricing:** SMS prices drift between catalog and create. Send\n  `max_price_cents` to cap how much you authorize; if the lowest\n  available price is above that cap, the API returns `409 PRICE_OVER_CAP`\n  with both your cap and the current price in the error details. No\n  partial state is created. See `verifications` and `rentals`.\n",
+    "description": "The VoidMob Public API (`/api/v1`) exposes the same surface that powers the\ndashboard - SMS verifications, mobile/GB proxy provisioning, real-time\nbalance, and outbound webhooks - under a stable, programmatic contract.\n\nRunning higher volumes? Custom pricing is available -\n[contact us](https://voidmob.com/contact).\n\n## Conventions\n\n- **Base URL:** `https://dashboard.voidmob.com/api/v1`\n- **Authentication:** Bearer token. Issue keys from\n  [Developers - API Keys](https://dashboard.voidmob.com/developers/api-keys).\n  Live keys are prefixed `vmk_live_`.\n- **Money:** all monetary values are **USD cents** as integers. The API\n  never returns floats for money.\n- **Identifiers:** every public id has a stable prefix (`svc_`, `ver_`,\n  `ren_`, `prx_`, `plan_`, `pool_`, `list_`, `whep_`, `esim_`, `prod_`,\n  `dep_`, `evt_`). Treat them as opaque.\n- **Envelopes:** every JSON response is either\n  `{ \"success\": true, \"data\": ... }` or\n  `{ \"success\": false, \"error\": { code, message, docs_url, request_id, details? } }`.\n- **Idempotency:** order-creating and money-moving POST / PATCH / DELETE\n  requests require an `Idempotency-Key` header (any string up to 255\n  chars) - see each operation's parameters for whether it is required.\n  Lighter-weight management calls (webhook-endpoint create/delete,\n  auto-renew toggle, dedicated IP rotation) do not. Re-sending the same\n  key with the same body replays the original response; a different body\n  returns `409 IDEMPOTENCY_CONFLICT`.\n- **Rate limits:** every response carries `X-RateLimit-Limit`,\n  `X-RateLimit-Remaining`, and `X-RateLimit-Reset` (unix seconds). 429s\n  additionally carry `Retry-After`.\n- **Pricing:** SMS prices drift between catalog and create. Send\n  `max_price_cents` to cap how much you authorize; if the lowest\n  available price is above that cap, the API returns `409 PRICE_OVER_CAP`\n  with both your cap and the current price in the error details. No\n  partial state is created. See `verifications` and `rentals`.\n- **Permission levels:** every key has a level - View (reads), Manage\n  (also changes that don't spend, and turning auto-renew off) or Buy\n  (also every purchase, and turning auto-renew on). A call above the\n  key's level returns `403 PERMISSION_DENIED` with `details.permission`,\n  `details.required_permission` and `details.settings_url`. Existing keys\n  are Buy.\n- **Optional spending limits:** the owner can set a maximum per order and\n  a daily limit (rolling 24 hours, net of refunds) on a key. Both are off\n  by default. A refused order returns `402 ORDER_LIMIT_EXCEEDED` or\n  `402 DAILY_SPEND_CAP_EXCEEDED` with `details.limit_cents`,\n  `details.remaining_cents` (the largest single order allowed right now)\n  and `details.settings_url`. Nothing is charged. Retry with a new\n  `Idempotency-Key`. Cron auto-renewals are never counted. `GET /v1/me`\n  returns the key's level, limits and spend.\n- **Connected apps:** people connect apps to their account through the\n  hosted MCP server (`https://mcp.voidmob.com/mcp`) with a VoidMob sign-in.\n  An app gets a connection with its own level and limits, and acts through\n  this API. A connection can never turn auto-renew on, create IP-whitelist\n  proxy lists or register webhook endpoints (`403 PERMISSION_DENIED`,\n  `details.reason: connection_not_allowed`). The authorization server\n  metadata is at `/.well-known/oauth-authorization-server`; MCP clients\n  handle the sign-in themselves.\n",
     "contact": {
       "name": "VoidMob",
       "url": "https://voidmob.com",
@@ -76,6 +76,10 @@
       "description": "Purchase and manage eSIM orders, browse the product catalog, and top up data."
     },
     {
+      "name": "Deposits",
+      "description": "Add funds to the balance with crypto. Create a deposit, send the exact amount to its address, and follow its status."
+    },
+    {
       "name": "System",
       "description": "Health and asset endpoints."
     }
@@ -88,7 +92,7 @@
           "Account"
         ],
         "summary": "Get the authenticated account snapshot",
-        "description": "Returns the caller's user id, wallet balance, per-endpoint-group\nrate-limit ceilings, and account-created timestamp. Cacheable for 5\nseconds with `ETag` / `If-None-Match`.\n",
+        "description": "Returns the caller's user id, wallet balance, per-endpoint-group\nrate-limit ceilings, and account-created timestamp. Cacheable for 5\nseconds with `ETag` / `If-None-Match`.\n\nThe `key` block describes the API key or connected app making the call:\nits permission level, optional spending limits and spend over the last\n24 hours. `deposit_url` is where the owner adds funds.\n",
         "parameters": [
           {
             "$ref": "#/components/parameters/IfNoneMatch"
@@ -652,11 +656,15 @@
           "500": {
             "$ref": "#/components/responses/INTERNAL_ERROR"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVIDER_ERROR"
-          },
           "503": {
-            "$ref": "#/components/responses/PRODUCT_UNAVAILABLE"
+            "description": "Service unavailable - PRODUCT_UNAVAILABLE or PROVIDER_ERROR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
@@ -883,11 +891,15 @@
           "500": {
             "$ref": "#/components/responses/INTERNAL_ERROR"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVIDER_ERROR"
-          },
           "503": {
-            "$ref": "#/components/responses/USAGE_UNAVAILABLE"
+            "description": "Service unavailable - USAGE_UNAVAILABLE or PROVIDER_ERROR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -1090,11 +1102,15 @@
           "500": {
             "$ref": "#/components/responses/INTERNAL_ERROR"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVIDER_ERROR"
-          },
           "503": {
-            "$ref": "#/components/responses/PRODUCT_UNAVAILABLE"
+            "description": "Service unavailable - PRODUCT_UNAVAILABLE or PROVIDER_ERROR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -1789,7 +1805,7 @@
           "Rentals"
         ],
         "summary": "Create a long-term rental",
-        "description": "Reserves a dedicated phone number for a fixed duration (3, 7, 14, or 30\ndays). All incoming SMS messages are collected and accessible via\n`GET /v1/rentals/{id}`. Idempotent by `Idempotency-Key`.\n\n## Price over cap\n\nLTR pricing can drift. If the lowest available price exceeds your\n`max_price_cents` ceiling at request time, the API returns\n**`409 PRICE_OVER_CAP`** with both values in the error details:\n\n```json\n{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"PRICE_OVER_CAP\",\n    \"details\": {\n      \"max_price_cents\": 1500,\n      \"available_price_cents\": 1750\n    }\n  }\n}\n```\n\nNo partial state is created and no funds are touched. Decide locally\nwhether to retry with a higher cap or surface the price to the user.\n\n## Duration\n\n`duration` must be one of `3D`, `7D`, `14D`, or `30D`. Only\n`country=\"us\"` is currently supported.\n\n## Auto-renew\n\nSet `auto_renew: true` to automatically charge the same duration at\nexpiry. Toggle at any time via `POST /v1/rentals/{id}/auto_renew`.\n",
+        "description": "Reserves a dedicated phone number for a fixed duration (3, 7, 14, or 30\ndays). All incoming SMS messages are collected and accessible via\n`GET /v1/rentals/{id}`. Idempotent by `Idempotency-Key`.\n\n## Price over cap\n\nLTR pricing can drift. If the lowest available price exceeds your\n`max_price_cents` ceiling at request time, the API returns\n**`409 PRICE_OVER_CAP`** with both values in the error details:\n\n```json\n{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"PRICE_OVER_CAP\",\n    \"details\": {\n      \"max_price_cents\": 1500,\n      \"available_price_cents\": 1750\n    }\n  }\n}\n```\n\nNo partial state is created and no funds are touched. Decide locally\nwhether to retry with a higher cap or surface the price to the user.\n\n## Duration\n\n`duration` must be one of `3D`, `7D`, `14D`, or `30D`. Only\n`country=\"us\"` is currently supported.\n\n## Auto-renew\n\nSet `auto_renew: true` to automatically charge the same duration\nshortly before `paid_until`. Toggle at any time via\n`POST /v1/rentals/{id}/auto_renew`. If the balance cannot cover the\nrenewal in time, auto-renew is turned off and\n`rental.auto_renew_disabled` fires.\n",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -1884,14 +1900,15 @@
           "500": {
             "$ref": "#/components/responses/INTERNAL_ERROR"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVIDER_ERROR"
-          },
           "503": {
-            "$ref": "#/components/responses/SERVICE_OUT_OF_STOCK"
-          },
-          "504": {
-            "$ref": "#/components/responses/PROVIDER_TIMEOUT"
+            "description": "Service unavailable - SERVICE_OUT_OF_STOCK, PROVIDER_ERROR or PROVIDER_TIMEOUT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
@@ -1996,7 +2013,7 @@
           "Rentals"
         ],
         "summary": "Get a long-term rental by id",
-        "description": "Returns the full rental resource including all received messages. Poll\nevery few seconds during active rentals; prefer webhooks for production\nuse.\n\nUse the `messages_limit` and `messages_before` query parameters to page\nthrough older messages when there are many.\n",
+        "description": "Returns the full rental resource including all received messages. Poll\nevery few seconds during active rentals; prefer webhooks for production\nuse.\n\nUse the `messages_limit` and `messages_before` query parameters to page\nthrough older messages when there are many.\n\nIf a renewal landed before it could be paid, `payment_due` shows the\namount owed. It is collected automatically as soon as the balance\ncovers it. SMS received meanwhile are stored but withheld (`text`/`code`\nnull, `content_withheld: true`) until it is paid, and stay withheld if\nthe term ends unpaid.\n",
         "parameters": [
           {
             "$ref": "#/components/parameters/RentalId"
@@ -2221,7 +2238,7 @@
           "500": {
             "$ref": "#/components/responses/INTERNAL_ERROR"
           },
-          "502": {
+          "503": {
             "$ref": "#/components/responses/PROVIDER_ERROR"
           }
         }
@@ -2234,7 +2251,7 @@
           "Rentals"
         ],
         "summary": "Enable or disable auto-renew on a rental",
-        "description": "Sets the `auto_renew` flag to an explicit state. Unlike a toggle,\ncalling with the same `enabled` value twice is safe (idempotent by\nconstruction). No `Idempotency-Key` header is required.\n\nWhen `enabled: true`, the rental will automatically renew for the same\nduration at expiry. When `enabled: false`, the rental expires normally\nwhen `expires_at` is reached.\n\nReturns `400 VALIDATION_ERROR` if the rental has already expired.\n",
+        "description": "Sets the `auto_renew` flag to an explicit state. Unlike a toggle,\ncalling with the same `enabled` value twice is safe (idempotent by\nconstruction). No `Idempotency-Key` header is required.\n\nWhen `enabled: true`, the rental will automatically renew for the same\nduration at expiry, charged to your balance shortly before\n`paid_until`. When `enabled: false`, the rental expires normally when\n`expires_at` is reached.\n\nTurning auto-renew off after the next term was already charged refunds\nthat charge to your balance. If the renewal is already under way, the\ncall returns `400 VALIDATION_ERROR` (\"This rental is already renewing\nand the next term is paid. Turn auto-renew off after it renews.\") and\nauto-renew stays on.\n\nReturns `400 VALIDATION_ERROR` if the rental has already expired.\n",
         "parameters": [
           {
             "$ref": "#/components/parameters/RentalId"
@@ -2310,7 +2327,7 @@
           "500": {
             "$ref": "#/components/responses/INTERNAL_ERROR"
           },
-          "502": {
+          "503": {
             "$ref": "#/components/responses/PROVIDER_ERROR"
           }
         }
@@ -2548,7 +2565,7 @@
           "Proxies"
         ],
         "summary": "Purchase a proxy package",
-        "description": "Buys a mobile/GB proxy package or a Standard dedicated proxy, either\nby `plan_id` (charged to the wallet) or by `pool_id` (a mobile/GB\nsub-order drawn from a reseller GB pool the caller owns - see the\n`Proxy pools` tag). Provide exactly one of `plan_id` or `pool_id`.\nReturns **`202 Accepted`**. A mobile/GB package comes back\n`status: provisioning` and becomes active within 1-2 minutes. A\nStandard dedicated proxy comes back `active` with its `gateway` when\nthe modem is issued immediately, otherwise `provisioning` (settled\nwithin about 5 minutes). The `proxy.ready` webhook fires when the\norder becomes active; `proxy.provisioning_failed` (with the refund)\nif it cannot be provisioned.\n\nFor a Standard dedicated plan, nothing is charged unless the plan is\nstill available: a sold-out plan returns `503 SERVICE_OUT_OF_STOCK`\nand a price above `max_price_cents` returns `409 PRICE_MISMATCH`,\nboth before any charge. Premium dedicated plans are not available\nover the API.\n\nWallet deduction and refund-on-failure are atomic for a `plan_id`\npurchase. A `pool_id` purchase never touches the wallet - GB is drawn\nfrom the pool's ledger and returned to it if provisioning fails.\n",
+        "description": "Buys a mobile/GB proxy package or a Standard dedicated proxy, either\nby `plan_id` (charged to the wallet) or by `pool_id` (a mobile/GB\nsub-order drawn from a reseller GB pool the caller owns - see the\n`Proxy pools` tag). Provide exactly one of `plan_id` or `pool_id`.\nReturns **`202 Accepted`**. A mobile/GB package comes back\n`status: provisioning` and becomes active within 1-2 minutes. A\nStandard dedicated proxy comes back `active` with its `gateway` when\nthe device is issued immediately, otherwise `provisioning` (settled\nwithin about 5 minutes). The `proxy.ready` webhook fires when the\norder becomes active; `proxy.provisioning_failed` (with the refund)\nif it cannot be provisioned.\n\nFor a Standard dedicated plan, nothing is charged unless the plan is\nstill available: a sold-out plan returns `503 SERVICE_OUT_OF_STOCK`\nand a price above `max_price_cents` returns `409 PRICE_MISMATCH`,\nboth before any charge. Premium dedicated plans are not available\nover the API.\n\nWallet deduction and refund-on-failure are atomic for a `plan_id`\npurchase. A `pool_id` purchase never touches the wallet - GB is drawn\nfrom the pool's ledger and returned to it if provisioning fails.\n",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -2627,14 +2644,15 @@
           "429": {
             "$ref": "#/components/responses/RATE_LIMITED"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVISIONING_FAILED"
-          },
           "503": {
-            "$ref": "#/components/responses/SERVICE_OUT_OF_STOCK"
-          },
-          "504": {
-            "$ref": "#/components/responses/PROVIDER_TIMEOUT"
+            "description": "Service unavailable - SERVICE_OUT_OF_STOCK or PROVISIONING_FAILED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
@@ -2916,7 +2934,7 @@
           "Proxies"
         ],
         "summary": "Re-buy the plan on a package (adds a full plan of GB and one period)",
-        "description": "Adds one full plan allocation of GB on top of whatever is left and\nextends `expires_at` by one plan period (from now if the package had\nalready lapsed). Accepted on `active`, `exhausted`, and `expired`\npackages within 7 days of expiry; the package is `active` afterwards\nand the traffic webhooks are re-armed. Charged at the plan's current\nprice; refunded automatically on failure.\n\nOn a pool-backed sub-order (`proxy.pool_id` set), renew instead\nre-allocates the sub-order's **original** GB and duration from the\npool - not one plan period - at no incremental wallet charge.\n`max_price_cents` is ignored. See the `Proxy pools` tag.\n\nOn a Standard dedicated proxy, renew extends an `active` proxy by one\nterm of its own plan, from the current `expires_at`, at the price it\nwas bought at with your current discount. `max_price_cents` is\nrequired and checked before charging. An expired dedicated proxy\ncannot be renewed (`409 PROXY_EXPIRED`); a Premium one returns\n`422 NOT_SUPPORTED`. `proxy.renewed` fires on success.\n",
+        "description": "Adds one full plan allocation of GB on top of whatever is left and\nextends `expires_at` by one plan period (from now if the package had\nalready lapsed). Accepted on `active`, `exhausted`, and `expired`\npackages within 7 days of expiry; the package is `active` afterwards\nand the traffic webhooks are re-armed. Charged at the plan's current\nprice; refunded automatically on failure.\n\nOn a pool-backed sub-order (`proxy.pool_id` set), renew instead\nre-allocates the sub-order's **original** GB and duration from the\npool - not one plan period - at no incremental wallet charge.\n`max_price_cents` is ignored. See the `Proxy pools` tag.\n\nOn a Standard dedicated proxy, renew extends an `active` proxy by one\nterm of its own plan, from the current `expires_at`, at the price it\nwas bought at with your current discount. `max_price_cents` is\nrequired and checked before charging. An expired dedicated proxy\ncannot be renewed (`409 PROXY_EXPIRED`); a Premium one returns\n`422 NOT_SUPPORTED`. `proxy.renewed` fires on success.\n\nOne renewal, extend or top-up runs at a time on a proxy, mobile/GB or\nStandard dedicated, an auto-renewal included: a request while another\nis in progress on it returns `409 PROXY_NOT_READY` (\"A renewal or\ntop-up is already in progress - try again in a moment.\") and charges\nnothing. A 4xx response is cached under its `Idempotency-Key`, so\nretry with a new key.\n",
         "parameters": [
           {
             "name": "id",
@@ -2985,7 +3003,7 @@
             "$ref": "#/components/responses/PROXY_NOT_FOUND"
           },
           "409": {
-            "description": "Conflict - PRICE_MISMATCH (catalog or dedicated), PROXY_EXPIRED / PROXY_NOT_READY, or POOL_LAPSED / POOL_INSUFFICIENT_GB (pool-backed).",
+            "description": "Conflict - PRICE_MISMATCH (catalog or dedicated), PROXY_EXPIRED / PROXY_NOT_READY (still provisioning, or another renewal, extend or top-up is in progress on this proxy - nothing charged, retry with a new Idempotency-Key), or POOL_LAPSED / POOL_INSUFFICIENT_GB (pool-backed).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2997,7 +3015,7 @@
           "422": {
             "$ref": "#/components/responses/NOT_SUPPORTED"
           },
-          "502": {
+          "503": {
             "$ref": "#/components/responses/PROVISIONING_FAILED"
           }
         }
@@ -3010,7 +3028,7 @@
           "Proxies"
         ],
         "summary": "Turn auto-renew on or off for a Standard dedicated proxy",
-        "description": "Sets auto-renew to the given state. With auto-renew on, the proxy is\nrenewed for one more term of its plan about 12 hours before\n`expires_at`, charged to your wallet at the same price a manual renew\nwould charge; `proxy.renewed` fires when it lands. If your balance is\ntoo low it retries until expiry, then the proxy expires and\n`proxy.expired` fires.\n\nSetting the current state again is a no-op, so the call is safe to\nretry and needs no `Idempotency-Key`. Turning auto-renew on requires\nan `active` proxy; turning it off always succeeds. Mobile/GB\npackages and Premium dedicated proxies return `422 NOT_SUPPORTED`.\n",
+        "description": "Sets auto-renew to the given state. With auto-renew on, the proxy is\nrenewed for one more term of its plan about 6 hours before\n`expires_at`, charged to your wallet at the same price a manual renew\nwould charge; `proxy.renewed` fires when it lands. If your balance is\ntoo low it retries until expiry, then the proxy expires and\n`proxy.expired` fires.\n\nSetting the current state again is a no-op, so the call is safe to\nretry and needs no `Idempotency-Key`. Turning auto-renew on requires\nan `active` proxy; turning it off always succeeds. Mobile/GB\npackages and Premium dedicated proxies return `422 NOT_SUPPORTED`.\n",
         "parameters": [
           {
             "name": "id",
@@ -3106,7 +3124,7 @@
           "Proxies"
         ],
         "summary": "Add GB to a proxy package",
-        "description": "Prorated from the plan's per-GB price. Accepted on `active`,\n`exhausted`, and `expired` packages within 7 days of expiry; a\nsuccessful top-up leaves the package `active` and re-arms the\n`proxy.traffic_low` / `proxy.traffic_exhausted` webhooks. Expiry grows\nin proportion to the GB added, from the current expiry or from now if\nthe package had lapsed.\n\nOn a pool-backed sub-order (`proxy.pool_id` set), the GB is drawn from\nthe pool instead of the wallet and `max_price_cents` is ignored. See\nthe `Proxy pools` tag.\n\nDedicated proxies are unmetered and return `422 NOT_SUPPORTED`.\n",
+        "description": "Priced by size, the same on every package whatever plan it was bought\non: 1 GB $3.99, 10 GB $35, 25 GB $81.25, 50 GB $149.50, 100 GB $250.\nAny other size is charged at the per-GB rate of the largest listed\nsize below it, but never more than the next listed size. Your discount\napplies; `proxy.topup_prices` has the exact charges. Accepted on\n`active`, `exhausted`, and `expired` packages within 7 days of expiry;\na successful top-up leaves the package `active` and re-arms the\n`proxy.traffic_low` / `proxy.traffic_exhausted` webhooks. Each GB adds\n3 days to the expiry (10 GB or more adds 30), from the current expiry\nor from now if the package had lapsed.\n\nOn a pool-backed sub-order (`proxy.pool_id` set), the GB is drawn from\nthe pool instead of the wallet and `max_price_cents` is ignored. See\nthe `Proxy pools` tag.\n\nDedicated proxies are unmetered and return `422 NOT_SUPPORTED`.\n\nOne renewal, extend or top-up runs at a time on a proxy, an\nauto-renewal included: a request while another is in progress on it\nreturns `409 PROXY_NOT_READY` (\"A renewal or top-up is already in\nprogress - try again in a moment.\") and charges nothing. A 4xx\nresponse is cached under its `Idempotency-Key`, so retry with a new\nkey.\n",
         "parameters": [
           {
             "name": "id",
@@ -3175,7 +3193,7 @@
             "$ref": "#/components/responses/PROXY_NOT_FOUND"
           },
           "409": {
-            "description": "Conflict - PRICE_MISMATCH (catalog), or POOL_LAPSED / POOL_INSUFFICIENT_GB (pool-backed).",
+            "description": "Conflict - PRICE_MISMATCH (catalog), PROXY_EXPIRED / PROXY_NOT_READY (still provisioning, or another renewal, extend or top-up is in progress on this proxy - nothing charged, retry with a new Idempotency-Key), or POOL_LAPSED / POOL_INSUFFICIENT_GB (pool-backed).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3186,6 +3204,9 @@
           },
           "422": {
             "$ref": "#/components/responses/NOT_SUPPORTED"
+          },
+          "503": {
+            "$ref": "#/components/responses/PROVISIONING_FAILED"
           }
         }
       }
@@ -3258,7 +3279,7 @@
           "Proxies"
         ],
         "summary": "Rotate the proxy's exit IP",
-        "description": "Triggers an IP rotation for a dedicated proxy. Each call requests a\nfresh exit IP; the modem typically reflects the new address within a\nfew seconds. Subsequent reads of `GET /v1/proxies/{id}` will show\nthe updated `current_ip` once the rotation lands.\n\nConstraints:\n- Only dedicated proxies support this endpoint. Calling it on a\n  shared (gb) proxy returns `422 NOT_SUPPORTED`.\n- The proxy must be `status: active`, else `409 PROXY_NOT_READY`.\n- Hard cooldown of 60 seconds per proxy, independent of the API\n  key's rate-limit bucket. Each proxy has its own cooldown bucket -\n  rotating proxy A does not block rotating proxy B. Excess calls\n  on the same proxy return `429 RATE_LIMITED`.\n\nThis endpoint is not idempotent by design; each successful call\nproduces a different IP. `Idempotency-Key` is not honored.\n",
+        "description": "Triggers an IP rotation for a dedicated proxy. Each call requests a\nfresh exit IP; the device typically reflects the new address within a\nfew seconds. Subsequent reads of `GET /v1/proxies/{id}` will show\nthe updated `current_ip` once the rotation lands.\n\nConstraints:\n- Only dedicated proxies support this endpoint. Calling it on a\n  shared (gb) proxy returns `422 NOT_SUPPORTED`.\n- The proxy must be `status: active`, else `409 PROXY_NOT_READY`.\n- Hard cooldown of 60 seconds per proxy, independent of the API\n  key's rate-limit bucket. Each proxy has its own cooldown bucket -\n  rotating proxy A does not block rotating proxy B. Excess calls\n  on the same proxy return `429 RATE_LIMITED`.\n\nThis endpoint is not idempotent by design; each successful call\nproduces a different IP. `Idempotency-Key` is not honored.\n",
         "parameters": [
           {
             "name": "id",
@@ -3271,7 +3292,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Rotation accepted. `current_ip` is best-effort and may be `null` if the modem hasn't reported the new address yet.",
+            "description": "Rotation accepted. `current_ip` is best-effort and may be `null` if the device hasn't reported the new address yet.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3325,7 +3346,7 @@
           "429": {
             "$ref": "#/components/responses/RATE_LIMITED"
           },
-          "502": {
+          "503": {
             "$ref": "#/components/responses/PROVIDER_ERROR"
           }
         }
@@ -4017,6 +4038,290 @@
         }
       }
     },
+    "/deposits": {
+      "post": {
+        "operationId": "createDeposit",
+        "tags": [
+          "Deposits"
+        ],
+        "summary": "Create a crypto deposit",
+        "description": "Opens a crypto deposit to the caller's own balance and returns the\naddress and exact amount to send. Nothing is charged. Needs Manage\naccess; app connections may create deposits too, and the money can only\nland in the account's own balance.\n\nSend exactly `crypto_amount` of `asset` on `network` to `address` before\n`expires_at`. Any extra is credited too. Don't send to an expired\ndeposit; create a new one. If a payment arrives anyway, it is credited\nonce it confirms. `url` opens the deposit's payment window in the\ndashboard (QR code, countdown, and the address to check against).\n\nLimits are per account and shared with the dashboard: a short\nper-minute limit (`429 RATE_LIMITED` with `Retry-After`), and a limit on\nopen deposits and on deposits created per day (`429\nDEPOSIT_LIMIT_REACHED`, with `details.reason` and `details.limit`, and\nno `Retry-After`). An amount under the coin's minimum is `400\nVALIDATION_ERROR` with `details.min_amount_cents`; see\n`GET /v1/deposit_coins`.\n\nIdempotent by `Idempotency-Key`: a replay returns the same deposit and\naddress, so a retry never opens a second one. A `429` or `503` created\nno deposit and is not kept under the key: retry with the same key\n(after `Retry-After` for `429 RATE_LIMITED`, once the limit clears for\n`DEPOSIT_LIMIT_REACHED`). A `500` may be retried with the same key too.\nA `400` is kept under the key: fix the request and send it with a new\nkey.\n",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDepositRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Deposit created. Poll `GET /v1/deposits/{id}` for its status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "required": [
+                            "deposit"
+                          ],
+                          "properties": {
+                            "deposit": {
+                              "$ref": "#/components/schemas/Deposit"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/VALIDATION_ERROR"
+          },
+          "401": {
+            "$ref": "#/components/responses/UNAUTHENTICATED"
+          },
+          "403": {
+            "$ref": "#/components/responses/PERMISSION_DENIED"
+          },
+          "409": {
+            "description": "Conflict - IDEMPOTENCY_CONFLICT or IDEMPOTENCY_REPLAY_IN_FLIGHT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests - RATE_LIMITED (the per-minute limit, with `Retry-After`) or DEPOSIT_LIMIT_REACHED (open or daily deposits, no `Retry-After`).",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/Retry-After"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/INTERNAL_ERROR"
+          },
+          "503": {
+            "$ref": "#/components/responses/SERVICE_UNAVAILABLE"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listDeposits",
+        "tags": [
+          "Deposits"
+        ],
+        "summary": "List the caller's deposits",
+        "description": "Deposits owned by the caller, newest first, including ones made in the\ndashboard. Up to 100 per page (default 20). Use `next_cursor` to fetch\nthe next page.\n\nWith `status`, a page can hold fewer than `limit` deposits and still\ncarry a `next_cursor`: keep paging until `next_cursor` is null.\n",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DepositStatus"
+            },
+            "description": "Only deposits in this status."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "description": "Maximum number of results per page."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "description": "Opaque pagination cursor from a previous response's `next_cursor`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of deposits.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/DepositList"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/VALIDATION_ERROR"
+          },
+          "401": {
+            "$ref": "#/components/responses/UNAUTHENTICATED"
+          },
+          "429": {
+            "$ref": "#/components/responses/RATE_LIMITED"
+          }
+        }
+      }
+    },
+    "/deposits/{id}": {
+      "get": {
+        "operationId": "getDeposit",
+        "tags": [
+          "Deposits"
+        ],
+        "summary": "Get a deposit by id",
+        "description": "One of the caller's deposits, including ones made in the dashboard.\nPoll it until `status` is `credited` (or `underpaid`), or subscribe to\nthe `deposit.credited` webhook event. An unknown id, or one that belongs\nto another account, is `404 NOT_FOUND`.\n",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DepositId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deposit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "required": [
+                            "deposit"
+                          ],
+                          "properties": {
+                            "deposit": {
+                              "$ref": "#/components/schemas/Deposit"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UNAUTHENTICATED"
+          },
+          "404": {
+            "$ref": "#/components/responses/NOT_FOUND"
+          },
+          "429": {
+            "$ref": "#/components/responses/RATE_LIMITED"
+          }
+        }
+      }
+    },
+    "/deposit_coins": {
+      "get": {
+        "operationId": "listDepositCoins",
+        "tags": [
+          "Deposits"
+        ],
+        "summary": "List the coins a deposit can be made in",
+        "description": "Every coin `POST /v1/deposits` accepts, with the smallest and largest\ndeposit in each, in USD cents. Read the limits from here: they differ\nper coin and can change.\n",
+        "responses": {
+          "200": {
+            "description": "The coins.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "required": [
+                            "coins"
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "coins": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/DepositCoin"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UNAUTHENTICATED"
+          },
+          "429": {
+            "$ref": "#/components/responses/RATE_LIMITED"
+          }
+        }
+      }
+    },
     "/geo": {
       "get": {
         "operationId": "listGeo",
@@ -4332,6 +4637,7 @@
                           "quoted_price_cents",
                           "charged_price_cents",
                           "next_renewal_price_cents",
+                          "payment_due",
                           "auto_renew",
                           "created_at",
                           "paid_until",
@@ -4402,6 +4708,17 @@
                             "description": "Price that will be charged on next renewal in USD cents.",
                             "example": 3499
                           },
+                          "payment_due": {
+                            "oneOf": [
+                              {
+                                "$ref": "#/components/schemas/PaymentDue"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Set while a renewal that landed unpaid is owed; null otherwise. `status` is unchanged."
+                          },
                           "auto_renew": {
                             "type": "boolean",
                             "description": "Whether this number auto-renews at period end."
@@ -4440,7 +4757,16 @@
                                   ]
                                 },
                                 "text": {
-                                  "type": "string"
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "content_withheld": {
+                                  "type": "boolean",
+                                  "enum": [
+                                    true
+                                  ]
                                 },
                                 "received_at": {
                                   "type": "string",
@@ -4575,6 +4901,7 @@
                             "quoted_price_cents",
                             "charged_price_cents",
                             "next_renewal_price_cents",
+                            "payment_due",
                             "auto_renew",
                             "created_at",
                             "paid_until",
@@ -4645,6 +4972,17 @@
                               "description": "Price that will be charged on next renewal in USD cents.",
                               "example": 3499
                             },
+                            "payment_due": {
+                              "oneOf": [
+                                {
+                                  "$ref": "#/components/schemas/PaymentDue"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Set while a renewal that landed unpaid is owed; null otherwise. `status` is unchanged."
+                            },
                             "auto_renew": {
                               "type": "boolean",
                               "description": "Whether this number auto-renews at period end."
@@ -4683,7 +5021,16 @@
                                     ]
                                   },
                                   "text": {
-                                    "type": "string"
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "content_withheld": {
+                                    "type": "boolean",
+                                    "enum": [
+                                      true
+                                    ]
                                   },
                                   "received_at": {
                                     "type": "string",
@@ -4719,14 +5066,15 @@
           "429": {
             "$ref": "#/components/responses/RATE_LIMITED"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVIDER_ERROR"
-          },
           "503": {
-            "$ref": "#/components/responses/SERVICE_OUT_OF_STOCK"
-          },
-          "504": {
-            "$ref": "#/components/responses/PROVIDER_TIMEOUT"
+            "description": "Service unavailable - SERVICE_OUT_OF_STOCK, PROVIDER_ERROR or PROVIDER_TIMEOUT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -4738,7 +5086,7 @@
           "Dedicated Numbers"
         ],
         "summary": "Get a dedicated number with its messages",
-        "description": "Returns a single dedicated number owned by the authenticated user, including\npaginated SMS messages received on the number. Use `messages_before` and\n`messages_limit` to page through message history (newest-first fetch, returned\nin ascending order).\n",
+        "description": "Returns a single dedicated number owned by the authenticated user, including\npaginated SMS messages received on the number. Use `messages_before` and\n`messages_limit` to page through message history (newest-first fetch, returned\nin ascending order).\n\nIf a renewal landed before it could be paid, `payment_due` shows the amount\nowed. It is collected automatically as soon as the balance covers it. SMS\nreceived meanwhile are stored but withheld (`text`/`code` null,\n`content_withheld: true`) until it is paid, and stay withheld if the\nperiod ends unpaid.\n",
         "parameters": [
           {
             "name": "id",
@@ -4807,6 +5155,7 @@
                             "quoted_price_cents",
                             "charged_price_cents",
                             "next_renewal_price_cents",
+                            "payment_due",
                             "auto_renew",
                             "created_at",
                             "paid_until",
@@ -4877,6 +5226,17 @@
                               "description": "Price that will be charged on next renewal in USD cents.",
                               "example": 3499
                             },
+                            "payment_due": {
+                              "oneOf": [
+                                {
+                                  "$ref": "#/components/schemas/PaymentDue"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Set while a renewal that landed unpaid is owed; null otherwise. `status` is unchanged."
+                            },
                             "auto_renew": {
                               "type": "boolean",
                               "description": "Whether this number auto-renews at period end."
@@ -4896,7 +5256,7 @@
                             },
                             "messages": {
                               "type": "array",
-                              "description": "SMS messages received on this number, in ascending order. Paginate with messages_before cursor.",
+                              "description": "SMS messages received on this number, in ascending order. Paginate with messages_before cursor. A message received while payment is due has `text` and `code` null and `content_withheld: true`.",
                               "items": {
                                 "type": "object",
                                 "required": [
@@ -4914,11 +5274,21 @@
                                       "string",
                                       "null"
                                     ],
-                                    "description": "Parsed OTP/verification code, if detected."
+                                    "description": "Parsed OTP/verification code, if detected. Null while the content is withheld."
                                   },
                                   "text": {
-                                    "type": "string",
-                                    "description": "Full message text."
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "description": "Full message text. Null only while the content is withheld."
+                                  },
+                                  "content_withheld": {
+                                    "type": "boolean",
+                                    "enum": [
+                                      true
+                                    ],
+                                    "description": "Present (always `true`) only on an SMS received while a renewal is unpaid (`payment_due`); its `text` and `code` are null until paid. Absent otherwise."
                                   },
                                   "received_at": {
                                     "type": "string",
@@ -4958,7 +5328,7 @@
           "Dedicated Numbers"
         ],
         "summary": "Toggle auto-renew for a dedicated number",
-        "description": "Sets auto-renew to the specified state for a dedicated number owned by the\nauthenticated user. Unlike a flip toggle, this is idempotent - calling with\nthe same `enabled` value twice is safe.\n",
+        "description": "Sets auto-renew to the specified state for a dedicated number owned by the\nauthenticated user. Unlike a flip toggle, this is idempotent - calling with\nthe same `enabled` value twice is safe.\n\nTurning auto-renew off after the next period was already charged refunds\nthat charge to your balance. If the renewal is already under way, the call\nreturns `400 VALIDATION_ERROR` (\"This number is already renewing and the\nnext term is paid. Turn auto-renew off after it renews.\") and auto-renew\nstays on.\n\nSome UK, Hong Kong and Indonesia renewals are locked in during the last\ndays of the period. Turning auto-renew off then returns\n`400 VALIDATION_ERROR` (\"Auto-renew can't be turned off this close to the\nrenewal. This term will renew.\"). Turning it on then renews the number\nright away, so the next period is charged first; without enough balance\nthe call returns `402 INSUFFICIENT_BALANCE` and nothing changes.\n",
         "parameters": [
           {
             "name": "id",
@@ -5027,6 +5397,7 @@
                             "quoted_price_cents",
                             "charged_price_cents",
                             "next_renewal_price_cents",
+                            "payment_due",
                             "auto_renew",
                             "created_at",
                             "paid_until",
@@ -5097,6 +5468,17 @@
                               "description": "Price that will be charged on next renewal in USD cents.",
                               "example": 3499
                             },
+                            "payment_due": {
+                              "oneOf": [
+                                {
+                                  "$ref": "#/components/schemas/PaymentDue"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Set while a renewal that landed unpaid is owed; null otherwise. `status` is unchanged."
+                            },
                             "auto_renew": {
                               "type": "boolean",
                               "description": "Whether this number auto-renews at period end."
@@ -5135,7 +5517,16 @@
                                     ]
                                   },
                                   "text": {
-                                    "type": "string"
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "content_withheld": {
+                                    "type": "boolean",
+                                    "enum": [
+                                      true
+                                    ]
                                   },
                                   "received_at": {
                                     "type": "string",
@@ -5159,17 +5550,24 @@
           "401": {
             "$ref": "#/components/responses/UNAUTHENTICATED"
           },
+          "402": {
+            "$ref": "#/components/responses/INSUFFICIENT_BALANCE"
+          },
           "404": {
             "$ref": "#/components/responses/NOT_FOUND"
           },
           "429": {
             "$ref": "#/components/responses/RATE_LIMITED"
           },
-          "502": {
-            "$ref": "#/components/responses/PROVIDER_ERROR"
-          },
           "503": {
-            "$ref": "#/components/responses/SERVICE_UNAVAILABLE"
+            "description": "Service unavailable - SERVICE_UNAVAILABLE or PROVIDER_ERROR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -5312,7 +5710,7 @@
     },
     "rental.message_received": {
       "post": {
-        "summary": "Fired once for every new SMS on an API-bought rental or dedicated number, with or without a detected code. A coded message fires this first, then rental.code_received.",
+        "summary": "Fired once for every new SMS on an API-bought rental or dedicated number, with or without a detected code. A coded message fires this first, then rental.code_received. An SMS received while a renewal is unpaid arrives with text and code null and content_withheld true.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5331,7 +5729,7 @@
     },
     "rental.code_received": {
       "post": {
-        "summary": "Fired when a new SMS with a detected code arrives on an API-bought rental or dedicated number.",
+        "summary": "Fired when a new SMS with a detected code arrives on an API-bought rental or dedicated number. Not fired for a code withheld while a renewal is unpaid.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5350,7 +5748,7 @@
     },
     "rental.renewed": {
       "post": {
-        "summary": "Fired when a rental successfully auto-renews.",
+        "summary": "Fired on every renewal that landed, including one that landed unpaid (then payment_due is set on the rental and rental.auto_renew_disabled also fires once auto-renew is stopped).",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5407,7 +5805,7 @@
     },
     "rental.auto_renew_disabled": {
       "post": {
-        "summary": "Fired when auto-renew is disabled on a rental (e.g. due to insufficient balance at renewal time).",
+        "summary": "Fired when auto-renew is turned off because the next term could not be paid or renewed - shortly before paid_until when the balance cannot cover it, or after a renewal landed unpaid.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5708,6 +6106,27 @@
           }
         }
       }
+    },
+    "deposit.credited": {
+      "post": {
+        "operationId": "depositCreditedWebhook",
+        "summary": "Fired each time money from a deposit is credited to the balance.",
+        "description": "One event per credit: the first payment, each later payment on the\nsame deposit, and credits added by support, on any of the account's\ndeposits (made through the API or the dashboard).\nNot sent when support records an off-platform balance adjustment, which\nhas no deposit to show.\n\n`data.credit.amount_cents` is this credit and `data.credit.bonus_cents`\nthe welcome or promo bonus paid with it (0 if none). A bonus paid on\nits own arrives with `amount_cents` 0. `data.deposit` is the deposit\nas `GET /v1/deposits/{id}` returns it. The event carries no balance:\nread `GET /v1/me`.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepositCreditedEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Acknowledged."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5788,6 +6207,12 @@
         "description": "Opaque long-term rental identifier.",
         "example": "ren_01HXYZ123ABC"
       },
+      "DepositId": {
+        "type": "string",
+        "pattern": "^dep_[A-Za-z0-9_-]{1,64}$",
+        "description": "Opaque crypto deposit identifier.",
+        "example": "dep_3f2b9d3a-1c4e-4a3b-9f0e-6c1d2b3a4f5e"
+      },
       "RequestId": {
         "type": "string",
         "description": "Server-assigned identifier for a single request.",
@@ -5844,6 +6269,8 @@
           "id",
           "balance",
           "rate_limits",
+          "key",
+          "deposit_url",
           "created_at"
         ],
         "additionalProperties": false,
@@ -5862,9 +6289,79 @@
               "$ref": "#/components/schemas/RateLimit"
             }
           },
+          "key": {
+            "$ref": "#/components/schemas/MeKey"
+          },
+          "deposit_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Where the user adds funds to their balance."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "MeKey": {
+        "type": "object",
+        "description": "The API key or app connection that made this request.",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "permission",
+          "max_order_cents",
+          "daily_limit_cents",
+          "spent_24h_cents",
+          "auto_mode"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "key",
+              "oauth"
+            ],
+            "description": "`key` for an API key, `oauth` for a connected app."
+          },
+          "name": {
+            "type": "string"
+          },
+          "permission": {
+            "type": "string",
+            "enum": [
+              "view",
+              "manage",
+              "buy"
+            ],
+            "description": "`view` reads only; `manage` also makes changes that don't spend\n(cancel, free reuse, rotate, lists, auto-renew off); `buy` also\nmakes purchases and turns auto-renew on.\n"
+          },
+          "max_order_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Per-order spending limit in cents, or null for no limit."
+          },
+          "daily_limit_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Spending limit over a rolling 24 hours, net of refunds, in cents. Null for no limit."
+          },
+          "spent_24h_cents": {
+            "type": "integer",
+            "description": "Spent by this key over the last 24 hours, net of refunds, in cents."
+          },
+          "auto_mode": {
+            "type": "boolean",
+            "description": "Whether the owner lets agents buy with this key without asking first."
           }
         }
       },
@@ -6362,6 +6859,27 @@
           "cancelled"
         ]
       },
+      "PaymentDue": {
+        "type": "object",
+        "description": "A renewal that landed before it could be paid. The term is renewed but\nowed; the amount is collected automatically as soon as the balance\ncovers it. SMS received meanwhile are withheld (`content_withheld`)\nuntil it is paid, and stay withheld if the term ends unpaid.\n",
+        "required": [
+          "amount_cents",
+          "since"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "amount_cents": {
+            "type": "integer",
+            "description": "Amount owed, in USD cents.",
+            "example": 1499
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the renewal landed unpaid."
+          }
+        }
+      },
       "RentalMessage": {
         "type": "object",
         "required": [
@@ -6381,13 +6899,23 @@
               "string",
               "null"
             ],
-            "description": "Extracted numeric code, if any. Null when the SMS is informational.",
+            "description": "Extracted numeric code, if any. Null when the SMS is informational or its content is withheld.",
             "example": "123456"
           },
           "text": {
-            "type": "string",
-            "description": "Full raw SMS text.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full raw SMS text. Null only while the content is withheld.",
             "example": "Your verification code is 123456."
+          },
+          "content_withheld": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "Present (always `true`) only on an SMS received while a renewal\nis unpaid (`payment_due`): stored, but `text` and `code` are null\nuntil the due is paid. Absent on every other message.\n"
           },
           "received_at": {
             "type": "string",
@@ -6413,8 +6941,11 @@
             "example": "msg_01HXYZ789GHI"
           },
           "text": {
-            "type": "string",
-            "description": "Full raw SMS text.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full raw SMS text. Null only while the content is withheld.",
             "example": "Your account was accessed from a new device."
           },
           "code": {
@@ -6422,8 +6953,15 @@
               "string",
               "null"
             ],
-            "description": "Detected OTP / verification code, or null when none was found.",
+            "description": "Detected OTP / verification code, or null when none was found or the content is withheld.",
             "example": null
+          },
+          "content_withheld": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "Present (always `true`) only on an SMS received while a renewal\nis unpaid (`payment_due` on the rental). Its `text` and `code` are\nnull, and it fires no `rental.code_received`.\n"
           },
           "sender": {
             "type": [
@@ -6453,6 +6991,7 @@
           "charged_price_cents",
           "auto_renew",
           "next_renewal_price_cents",
+          "payment_due",
           "re_rent_available",
           "re_rent_price_cents",
           "re_rent_blocked_at",
@@ -6548,6 +7087,17 @@
             "description": "Estimated cost of the next auto-renewal at current pricing.",
             "example": 2500
           },
+          "payment_due": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentDue"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set while a renewal that landed unpaid is owed; null otherwise\n(paid, or the term ended unpaid). `status` is unchanged.\n"
+          },
           "re_rent_available": {
             "type": "boolean",
             "description": "Whether this rental is eligible for re-rent on the same number after\nit expires. `true` only when the rental is `expired` and the number\nhas not yet been released. `false` for all non-expired rentals and\nfor expired rentals that are no longer eligible.\n",
@@ -6600,7 +7150,7 @@
             "items": {
               "$ref": "#/components/schemas/RentalMessage"
             },
-            "description": "SMS messages received on this number, sorted oldest-first."
+            "description": "SMS messages received on this number, sorted oldest-first. A\nmessage received while payment is due has `text` and `code` null\nand `content_withheld: true`.\n"
           }
         }
       },
@@ -6727,15 +7277,15 @@
       },
       "ProxyFormat": {
         "type": "string",
-        "description": "Saved credential-format preference for the dashboard's list export. API `entries` are always `login:pass@host:port`.",
+        "description": "Saved credential-format preference for the dashboard's list export.\nAPI `entries` are always `login:pass@host:port`. Each value names the\nexported line:\n\n- `login_pass_host_port`: `login:pass@host:port`\n- `http_url`: `http://login:pass@host:port`\n- `socks5_url`: `socks5://login:pass@host:port`\n- `host_port_login_pass_colon`: `host:port:login:pass`\n- `login_pass_host_port_colon`: `login:pass:host:port`\n- `host_port_login_pass_comma`: `host,port,login,pass`\n- `login_pass_host_port_at`: `login@pass@host@port`\n\nDeprecated names are still accepted on input but never returned:\n`host_port_login_pass` (= `host_port_login_pass_comma`), `host_port`\n(= `login_pass_host_port_colon`), `login_pass_at_host_port`\n(= `host_port_login_pass_colon`), `json` (= `login_pass_host_port_at`).\n",
         "enum": [
           "login_pass_host_port",
-          "host_port_login_pass",
           "http_url",
           "socks5_url",
-          "host_port",
-          "login_pass_at_host_port",
-          "json"
+          "host_port_login_pass_colon",
+          "login_pass_host_port_colon",
+          "host_port_login_pass_comma",
+          "login_pass_host_port_at"
         ]
       },
       "ProxyCredentials": {
@@ -6781,7 +7331,7 @@
           "password"
         ],
         "additionalProperties": false,
-        "description": "Connection details. For a mobile/GB package this is the\npackage-level Flex gateway: geo, session stickiness, and rotation\nare controlled per request via underscore-prefixed parameters\nappended to `username` (see the proxies docs reference), and\n`username_geo_hint` is present. For an active Standard dedicated\nproxy it is the modem's own connection: `username` is used as-is,\n`port` is the HTTP port and `socks_port` is present.\n",
+        "description": "Connection details. For a mobile/GB package this is the\npackage-level Flex gateway: geo, session stickiness, and rotation\nare controlled per request via underscore-prefixed parameters\nappended to `username` (see the proxies docs reference), and\n`username_geo_hint` is present. For an active Standard dedicated\nproxy it is the device's own connection: `username` is used as-is,\n`port` is the HTTP port and `socks_port` is present.\n",
         "properties": {
           "host": {
             "type": "string",
@@ -6915,7 +7465,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Ready-to-paste connection strings in `login:pass@host:port` form, regardless of the saved `format` (which applies to the dashboard's list export). For IP-whitelist lists these are bare `host:port` strings. For SOCKS5, use the same host, port and credentials with a `socks5://` scheme."
+            "description": "Ready-to-paste connection strings in `login:pass@host:port` form, regardless of the saved `format` (which applies to the dashboard's list export). For IP-whitelist lists these are bare `host:port` strings. For SOCKS5, use the same host, port and credentials with a `socks5://` scheme; SOCKS5 also relays UDP, for QUIC (HTTP/3) to the target."
           },
           "network": {
             "type": [
@@ -7038,6 +7588,16 @@
             ],
             "description": "What a renewal (manual or auto-renew) charges right now, with\nyour current discount - pass it as `max_price_cents` to\n`POST /v1/proxies/{id}/renew`. Null when the proxy cannot be\nrenewed over the API at the moment (pool sub-order, Premium\ndedicated, dedicated not active or its plan no longer sold,\npackage past its renewal window).\n"
           },
+          "topup_prices": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ProxyTopupPrice"
+            },
+            "description": "Mobile/GB packages: what `POST /v1/proxies/{id}/topup` charges\nright now for the listed sizes (1, 10, 25, 50, 100 GB), with your\ncurrent discount, and the days each adds to the expiry. Pass a\nsize's `price_cents` as `max_price_cents`. Null when the package\ncannot take a paid top-up at the moment (dedicated, pool sub-order,\ncustom plan, still provisioning, or past its 7-day window).\n"
+          },
           "gateway": {
             "oneOf": [
               {
@@ -7155,14 +7715,14 @@
               "string",
               "null"
             ],
-            "description": "Standard dedicated plans only. Mobile carrier of the modem."
+            "description": "Standard dedicated plans only. Mobile carrier of the device."
           },
           "region": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Standard dedicated plans only. Region the modem sits in; null if the plan takes any region."
+            "description": "Standard dedicated plans only. Region the device sits in; null if the plan takes any region."
           },
           "data_gb": {
             "type": [
@@ -7188,7 +7748,7 @@
           },
           "available": {
             "type": "boolean",
-            "description": "Always true for mobile/GB plans. For a Standard dedicated plan,\nwhether its own region has a modem free right now. Refreshes\nevery 10 minutes; a purchase re-checks before charging.\n"
+            "description": "Always true for mobile/GB plans. For a Standard dedicated plan,\nwhether its own region has a device free right now. Refreshes\nevery 10 minutes; a purchase re-checks before charging.\n"
           }
         }
       },
@@ -7354,6 +7914,31 @@
             "type": "integer",
             "minimum": 0,
             "description": "Required for a catalog (plan-backed) package; ignored for a pool-backed sub-order, where GB is drawn from the pool instead."
+          }
+        }
+      },
+      "ProxyTopupPrice": {
+        "type": "object",
+        "required": [
+          "additional_gb",
+          "price_cents",
+          "days_added"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "additional_gb": {
+            "type": "integer",
+            "example": 10
+          },
+          "price_cents": {
+            "type": "integer",
+            "description": "The exact charge for this size, after your discount.",
+            "example": 3500
+          },
+          "days_added": {
+            "type": "integer",
+            "description": "Days the top-up adds to the current expiry (3 per GB, at most 30).",
+            "example": 30
           }
         }
       },
@@ -7569,7 +8154,8 @@
           "esim.topup_added",
           "esim.expired",
           "esim.cancelled",
-          "esim.refunded"
+          "esim.refunded",
+          "deposit.credited"
         ]
       },
       "WebhookEndpoint": {
@@ -7676,7 +8262,8 @@
           "supports_topup",
           "phone_number_prefix",
           "call_minutes",
-          "calls_unlimited"
+          "calls_unlimited",
+          "voice_note"
         ],
         "additionalProperties": false,
         "properties": {
@@ -7714,6 +8301,42 @@
           "calls_unlimited": {
             "type": "boolean",
             "description": "True when the plan includes unlimited calls."
+          },
+          "voice_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the included number and calls work. Null for data-only plans.",
+            "example": "Minutes cover calls to UK numbers. Receiving calls is free. SMS is not included."
+          }
+        }
+      },
+      "EsimProductNetwork": {
+        "type": "object",
+        "required": [
+          "country",
+          "name",
+          "has_4g",
+          "has_5g"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "country": {
+            "type": "string",
+            "description": "ISO-3166-1 alpha-2 country code (uppercase) where the carrier serves this plan.",
+            "example": "GB"
+          },
+          "name": {
+            "type": "string",
+            "description": "Carrier name.",
+            "example": "Vodafone"
+          },
+          "has_4g": {
+            "type": "boolean"
+          },
+          "has_5g": {
+            "type": "boolean"
           }
         }
       },
@@ -7722,6 +8345,7 @@
         "required": [
           "id",
           "title",
+          "full_title",
           "countries",
           "region",
           "country_count",
@@ -7729,6 +8353,11 @@
           "data_limit_gb",
           "data_unlimited",
           "validity_days",
+          "network_type",
+          "speed",
+          "speed_note",
+          "activation_policy",
+          "networks",
           "features",
           "price_cents",
           "currency"
@@ -7742,8 +8371,13 @@
           },
           "title": {
             "type": "string",
-            "description": "Human-readable product name.",
-            "example": "Europe 10GB 30 Days"
+            "description": "Plan name as the VoidMob dashboard shows it. Data and validity are not repeated in the name; read them from `data_limit_gb` / `data_unlimited` and `validity_days`.",
+            "example": "Europe"
+          },
+          "full_title": {
+            "type": "string",
+            "description": "Plan name with its data allowance and validity, for listings that show one line per plan. Built from `title`, so the two always agree.",
+            "example": "Europe 10 GB - 30 Days"
           },
           "countries": {
             "type": "array",
@@ -7782,7 +8416,7 @@
               "number",
               "null"
             ],
-            "description": "Data allowance in GB. Null when `data_unlimited` is true.",
+            "description": "Data allowance in GB. Plans sold as 1 TB report 1024. Null when `data_unlimited` is true.",
             "example": 10
           },
           "data_unlimited": {
@@ -7794,6 +8428,36 @@
             "type": "integer",
             "description": "Plan validity in days from activation.",
             "example": 30
+          },
+          "network_type": {
+            "type": "string",
+            "description": "Network generations the plan uses.",
+            "example": "5G/4G/LTE"
+          },
+          "speed": {
+            "type": "string",
+            "description": "Speed policy, e.g. \"Unrestricted\", \"Limited\" or \"Total 30 GB at full speed, 2Mbps speed cap afterwards\".",
+            "example": "Unrestricted"
+          },
+          "speed_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Plain-language explanation of a capped speed. Null when the speed needs no explanation.",
+            "example": "1GB/day at high speed, then 512 Kbps for the rest of the day"
+          },
+          "activation_policy": {
+            "type": "string",
+            "description": "When the plan's validity starts.",
+            "example": "Package activates upon first data usage."
+          },
+          "networks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EsimProductNetwork"
+            },
+            "description": "Carrier networks the plan uses, one entry per country and carrier, sorted by country then name. Names are the network the eSIM attaches to, not a retail brand. A territory with no network of its own (Vatican City, San Marino) lists the carriers of the host country it is covered by. Refreshed about weekly. A covered country has no entry when its carriers are not published, and the list is empty for a plan added since the last refresh and for top-up packages (a top-up runs on its eSIM's networks)."
           },
           "features": {
             "$ref": "#/components/schemas/EsimProductFeatures"
@@ -7886,7 +8550,7 @@
               "null"
             ],
             "description": "SM-DP+ matching ID used by the device to install the profile. Combine\nwith `smdp_address` to form the full LPA URI: `LPA:1$<smdp_address>$<activation_code>`.\nThe PNG returned from `qr_code_url` already encodes the full URI for direct\nscanning. Null for topups and processing orders.\n",
-            "example": "K2-2VOZBJ-22QT3D"
+            "example": "ACTIVATION-CODE"
           },
           "qr_code_url": {
             "type": [
@@ -7902,7 +8566,7 @@
               "null"
             ],
             "description": "SM-DP+ server hostname. Combine with `activation_code` to build the LPA URI for manual activation. Null for topups and processing orders.",
-            "example": "smdp.io"
+            "example": "smdp.example.com"
           },
           "data_limit_gb": {
             "type": [
@@ -8159,17 +8823,23 @@
         "properties": {
           "name": {
             "type": "string",
-            "description": "Data package name.",
-            "example": "Europe 10GB"
+            "description": "Plan name, as the catalog's `full_title`.",
+            "example": "Europe 10 GB - 30 Days"
           },
           "total_mb": {
-            "type": "number",
-            "description": "Total data allocation in megabytes.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Total data allocation in megabytes (1 GB = 1024 MB). Null on unlimited plans.",
             "example": 10240
           },
           "total_gb": {
-            "type": "number",
-            "description": "Total data allocation in gigabytes.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Total data allocation in gigabytes. Plans sold as 1 TB report 1024. Null on unlimited plans.",
             "example": 10
           },
           "used_mb": {
@@ -8183,18 +8853,27 @@
             "example": 1
           },
           "remaining_mb": {
-            "type": "number",
-            "description": "Remaining data in megabytes.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Remaining data in megabytes. Null on unlimited plans.",
             "example": 9216
           },
           "remaining_gb": {
-            "type": "number",
-            "description": "Remaining data in gigabytes.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Remaining data in gigabytes. Null on unlimited plans.",
             "example": 9
           },
           "percent_used": {
-            "type": "number",
-            "description": "Percentage of allocation consumed (0-100).",
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Percentage of allocation consumed (0-100). Null on unlimited plans.",
             "example": 10
           },
           "activation_date": {
@@ -8253,13 +8932,11 @@
                   "esim_status": {
                     "type": "string",
                     "enum": [
-                      "processing",
-                      "completed",
-                      "cancelled",
-                      "refunded",
-                      "expired"
+                      "available",
+                      "in_use",
+                      "unknown"
                     ],
-                    "description": "Current status of the eSIM order at time of query."
+                    "description": "The eSIM's install state at time of query, separate from the order `status`.\n`available`: ready to install, not yet on a device. `in_use`: installed on a device, or data has been used.\n`unknown`: this plan does not report install state and no data has been used yet; it becomes `in_use` with the first data use.\n"
                   },
                   "packages": {
                     "type": "array",
@@ -8311,6 +8988,288 @@
           }
         }
       },
+      "DepositCoinId": {
+        "type": "string",
+        "enum": [
+          "sol",
+          "ltc",
+          "eth",
+          "bnb",
+          "trx",
+          "btc",
+          "xmr",
+          "usdc_sol",
+          "usdc_erc20",
+          "usdt_sol",
+          "usdt_bep20",
+          "usdt_trc20"
+        ],
+        "description": "A coin a new deposit can be made in. `GET /v1/deposit_coins` lists each with its asset, network and limits.",
+        "example": "ltc"
+      },
+      "DepositStatus": {
+        "type": "string",
+        "enum": [
+          "awaiting_payment",
+          "confirming",
+          "underpaid",
+          "credited",
+          "expired"
+        ],
+        "description": "- `awaiting_payment`: open, nothing seen yet.\n- `confirming`: a payment was seen and waits for network confirmations.\n- `underpaid`: what arrived was credited, and it is less than the\n  deposit's amount. While more can still be sent, `top_up` says how\n  much and until when. It stays `underpaid` if nothing follows.\n- `credited`: paid in full and credited to the balance; any extra is\n  credited too.\n- `expired`: the payment window ended with nothing received. Don't\n  send to an expired deposit; create a new one. If a payment arrives\n  anyway, it is credited once it confirms.\n"
+      },
+      "CreateDepositRequest": {
+        "type": "object",
+        "required": [
+          "coin",
+          "amount_cents"
+        ],
+        "properties": {
+          "coin": {
+            "$ref": "#/components/schemas/DepositCoinId"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000,
+            "description": "The deposit in USD cents. At least the coin's `min_amount_cents` from `GET /v1/deposit_coins`.",
+            "example": 2500
+          }
+        }
+      },
+      "Deposit": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "coin",
+          "asset",
+          "network",
+          "amount_cents",
+          "crypto_amount",
+          "address",
+          "payment_uri",
+          "confirmations",
+          "required_confirmations",
+          "received_cents",
+          "credited_cents",
+          "bonus_cents",
+          "top_up",
+          "url",
+          "expires_at",
+          "created_at",
+          "credited_at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/DepositId"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DepositStatus"
+          },
+          "coin": {
+            "type": "string",
+            "enum": [
+              "sol",
+              "ltc",
+              "eth",
+              "bnb",
+              "trx",
+              "btc",
+              "xmr",
+              "usdc_sol",
+              "usdc_erc20",
+              "usdt_sol",
+              "usdt_bep20",
+              "usdt_trc20",
+              "ton"
+            ],
+            "description": "The deposit's coin: one of the `DepositCoinId` values, or `ton`.\n`ton` is retired: it appears only on deposits made before Toncoin\nwas withdrawn, and a new deposit can't use it.\n",
+            "example": "ltc"
+          },
+          "asset": {
+            "type": "string",
+            "description": "What to send, e.g. `USDT`.",
+            "example": "LTC"
+          },
+          "network": {
+            "type": "string",
+            "description": "The network to send it on. Sending on another network loses the payment.",
+            "example": "Litecoin"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "description": "The deposit's amount in USD cents."
+          },
+          "crypto_amount": {
+            "type": "string",
+            "description": "The exact amount of `asset` to send, as a decimal string.",
+            "example": "0.31822817"
+          },
+          "address": {
+            "type": "string",
+            "description": "The address to send to."
+          },
+          "payment_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A payment link that opens a wallet app with the address and amount\nfilled in, while something is still to send: the full amount while\n`awaiting_payment`, the rest with `top_up`. Bitcoin, Litecoin,\nMonero and Solana only; null otherwise.\n",
+            "example": "litecoin:ltc1qexampleaddress?amount=0.31822817"
+          },
+          "confirmations": {
+            "type": "integer",
+            "description": "Network confirmations of the payment seen so far."
+          },
+          "required_confirmations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Confirmations the payment needs, when known."
+          },
+          "received_cents": {
+            "type": "integer",
+            "description": "What arrived, in USD cents at the deposit's rate, and at least what was credited. 0 until a payment confirms or is credited."
+          },
+          "credited_cents": {
+            "type": "integer",
+            "description": "Everything credited to the balance for this deposit, in USD cents."
+          },
+          "bonus_cents": {
+            "type": "integer",
+            "description": "Bonus credited for this deposit (welcome or promo), in USD cents."
+          },
+          "top_up": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "While an underpaid deposit can still take the rest, how much more to send and until when. Null otherwise.",
+            "required": [
+              "crypto_amount",
+              "until"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "crypto_amount": {
+                "type": "string",
+                "description": "The rest to send, in `asset`, to the same address."
+              },
+              "until": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Send it before this time."
+              }
+            }
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "The deposit's payment window in the dashboard (QR code, countdown, and the address to check against).",
+            "example": "https://dashboard.voidmob.com/wallet?deposit=dep_3f2b9d3a-1c4e-4a3b-9f0e-6c1d2b3a4f5e"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the payment window ends."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "credited_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the deposit was first credited to the balance. Null until then."
+          }
+        }
+      },
+      "DepositList": {
+        "type": "object",
+        "required": [
+          "deposits",
+          "next_cursor"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "deposits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Deposit"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` in the next request to advance the page. Null on the last page."
+          }
+        }
+      },
+      "DepositCredit": {
+        "type": "object",
+        "description": "The credit that triggered a `deposit.credited` event.",
+        "required": [
+          "amount_cents",
+          "bonus_cents"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "This credit to the balance, in USD cents. 0 when the event is for a bonus paid on its own.",
+            "example": 2500
+          },
+          "bonus_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The welcome or promo bonus credited with it, in USD cents. 0 if none.",
+            "example": 0
+          }
+        }
+      },
+      "DepositCoin": {
+        "type": "object",
+        "required": [
+          "coin",
+          "asset",
+          "network",
+          "min_amount_cents",
+          "max_amount_cents"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "coin": {
+            "$ref": "#/components/schemas/DepositCoinId"
+          },
+          "asset": {
+            "type": "string",
+            "example": "USDT"
+          },
+          "network": {
+            "type": "string",
+            "example": "Tron (TRC-20)"
+          },
+          "min_amount_cents": {
+            "type": "integer",
+            "description": "The smallest deposit in this coin, in USD cents.",
+            "example": 5000
+          },
+          "max_amount_cents": {
+            "type": "integer",
+            "description": "The largest deposit, in USD cents.",
+            "example": 1000000
+          }
+        }
+      },
       "PublicErrorCode": {
         "type": "string",
         "description": "Stable enum of all public error codes. Each code maps to a fixed HTTP status; see the per-response components for status/body shape.",
@@ -8318,6 +9277,7 @@
           "UNAUTHENTICATED",
           "IP_NOT_ALLOWED",
           "FORBIDDEN",
+          "PERMISSION_DENIED",
           "NOT_FOUND",
           "RATE_LIMITED",
           "IDEMPOTENCY_CONFLICT",
@@ -8328,6 +9288,7 @@
           "SERVICE_OUT_OF_STOCK",
           "INSUFFICIENT_BALANCE",
           "DAILY_SPEND_CAP_EXCEEDED",
+          "ORDER_LIMIT_EXCEEDED",
           "VERIFICATION_NOT_FOUND",
           "WEBHOOK_ENDPOINT_NOT_FOUND",
           "CANCEL_NOT_ALLOWED",
@@ -8371,7 +9332,8 @@
           "PRODUCT_UNAVAILABLE",
           "USAGE_UNAVAILABLE",
           "ESIM_GONE",
-          "ESIM_NOT_ACTIVE"
+          "ESIM_NOT_ACTIVE",
+          "DEPOSIT_LIMIT_REACHED"
         ]
       },
       "ErrorEnvelope": {
@@ -8408,7 +9370,7 @@
               "docs_url": {
                 "type": "string",
                 "format": "uri",
-                "description": "Deep link to the docs anchor for this error code."
+                "description": "Link to this error code in the developer docs (dashboard sign-in required)."
               },
               "request_id": {
                 "type": "string",
@@ -8416,7 +9378,7 @@
               },
               "details": {
                 "type": "object",
-                "description": "Optional structured payload. Present for PRICE_OVER_CAP (available_price_cents, max_price_cents), VALIDATION_ERROR (issues[]), and PROXY_GEO_CONFLICT (issues[]).",
+                "description": "Optional structured payload. Present for PRICE_OVER_CAP (available_price_cents, max_price_cents), VALIDATION_ERROR (issues[], or min_amount_cents on a deposit under the coin's minimum), PROXY_GEO_CONFLICT (issues[]), PERMISSION_DENIED (permission, required_permission, settings_url, or reason: connection_not_allowed), ORDER_LIMIT_EXCEEDED and DAILY_SPEND_CAP_EXCEEDED (limit_cents, remaining_cents, settings_url), DEPOSIT_LIMIT_REACHED (reason: open_deposits or daily_deposits, limit), and SERVICE_UNAVAILABLE (reason: connected_app_purchases_paused).",
                 "additionalProperties": true
               }
             }
@@ -8649,6 +9611,33 @@
             }
           }
         ]
+      },
+      "DepositCreditedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventBase"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "data": {
+                "type": "object",
+                "required": [
+                  "deposit",
+                  "credit"
+                ],
+                "properties": {
+                  "deposit": {
+                    "$ref": "#/components/schemas/Deposit"
+                  },
+                  "credit": {
+                    "$ref": "#/components/schemas/DepositCredit"
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "headers": {
@@ -8757,7 +9746,7 @@
               "error": {
                 "code": "UNAUTHENTICATED",
                 "message": "Authentication required.",
-                "docs_url": "https://docs.voidmob.com/api/errors#unauthenticated",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#unauthenticated",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8787,7 +9776,7 @@
               "error": {
                 "code": "IP_NOT_ALLOWED",
                 "message": "Request source IP is not permitted for this key.",
-                "docs_url": "https://docs.voidmob.com/api/errors#ip_not_allowed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#ip_not_allowed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8817,8 +9806,64 @@
               "error": {
                 "code": "FORBIDDEN",
                 "message": "Your account cannot perform this action.",
-                "docs_url": "https://docs.voidmob.com/api/errors#forbidden",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#forbidden",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
+              }
+            }
+          }
+        }
+      },
+      "PERMISSION_DENIED": {
+        "description": "403 - This key's permission level does not allow this action.",
+        "headers": {
+          "X-RateLimit-Limit": {
+            "$ref": "#/components/headers/X-RateLimit-Limit"
+          },
+          "X-RateLimit-Remaining": {
+            "$ref": "#/components/headers/X-RateLimit-Remaining"
+          },
+          "X-RateLimit-Reset": {
+            "$ref": "#/components/headers/X-RateLimit-Reset"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "permission_level": {
+                "summary": "The key's level is below what the call needs",
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "PERMISSION_DENIED",
+                    "message": "This API key has View access. This action needs Buy access.",
+                    "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#permission_denied",
+                    "request_id": "req_01HXYZ123456789ABCDEFG",
+                    "details": {
+                      "permission": "view",
+                      "required_permission": "buy",
+                      "settings_url": "https://dashboard.voidmob.com/developers/api-keys"
+                    }
+                  }
+                }
+              },
+              "connection_not_allowed": {
+                "summary": "A connected app tried something apps can never do",
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "PERMISSION_DENIED",
+                    "message": "App connections can't turn auto-renew on. Do this in the VoidMob dashboard or with an API key.",
+                    "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#permission_denied",
+                    "request_id": "req_01HXYZ123456789ABCDEFG",
+                    "details": {
+                      "reason": "connection_not_allowed",
+                      "settings_url": "https://dashboard.voidmob.com/account/connected-apps"
+                    }
+                  }
+                }
               }
             }
           }
@@ -8847,7 +9892,7 @@
               "error": {
                 "code": "NOT_FOUND",
                 "message": "The requested resource was not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8880,7 +9925,7 @@
               "error": {
                 "code": "RATE_LIMITED",
                 "message": "Rate limit exceeded. Retry after the indicated interval.",
-                "docs_url": "https://docs.voidmob.com/api/errors#rate_limited",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#rate_limited",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8910,7 +9955,7 @@
               "error": {
                 "code": "IDEMPOTENCY_CONFLICT",
                 "message": "Idempotency key reused with a different request body.",
-                "docs_url": "https://docs.voidmob.com/api/errors#idempotency_conflict",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#idempotency_conflict",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8940,7 +9985,7 @@
               "error": {
                 "code": "IDEMPOTENCY_REPLAY_IN_FLIGHT",
                 "message": "Original request is still processing. Retry shortly.",
-                "docs_url": "https://docs.voidmob.com/api/errors#idempotency_replay_in_flight",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#idempotency_replay_in_flight",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8970,7 +10015,7 @@
               "error": {
                 "code": "VALIDATION_ERROR",
                 "message": "Request failed validation.",
-                "docs_url": "https://docs.voidmob.com/api/errors#validation_error",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#validation_error",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -8995,13 +10040,33 @@
             "schema": {
               "$ref": "#/components/schemas/ErrorEnvelope"
             },
-            "example": {
-              "success": false,
-              "error": {
-                "code": "SERVICE_UNAVAILABLE",
-                "message": "Service is currently unavailable.",
-                "docs_url": "https://docs.voidmob.com/api/errors#service_unavailable",
-                "request_id": "req_01HXYZ123456789ABCDEFG"
+            "examples": {
+              "default": {
+                "summary": "Generic",
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "Service is currently unavailable.",
+                    "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#service_unavailable",
+                    "request_id": "req_01HXYZ123456789ABCDEFG"
+                  }
+                }
+              },
+              "connected_app_purchases_paused": {
+                "summary": "Purchases through connected apps are paused",
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "Purchases through connected apps are paused right now. Try again later.",
+                    "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#service_unavailable",
+                    "request_id": "req_01HXYZ123456789ABCDEFG",
+                    "details": {
+                      "reason": "connected_app_purchases_paused"
+                    }
+                  }
+                }
               }
             }
           }
@@ -9030,7 +10095,7 @@
               "error": {
                 "code": "SERVICE_NOT_FOUND",
                 "message": "Unknown service id.",
-                "docs_url": "https://docs.voidmob.com/api/errors#service_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#service_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9060,7 +10125,7 @@
               "error": {
                 "code": "SERVICE_OUT_OF_STOCK",
                 "message": "This service is temporarily unavailable. Please try again shortly.",
-                "docs_url": "https://docs.voidmob.com/api/errors#service_out_of_stock",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#service_out_of_stock",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9090,7 +10155,7 @@
               "error": {
                 "code": "INSUFFICIENT_BALANCE",
                 "message": "Your wallet balance is too low for this purchase.",
-                "docs_url": "https://docs.voidmob.com/api/errors#insufficient_balance",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#insufficient_balance",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9098,7 +10163,7 @@
         }
       },
       "DAILY_SPEND_CAP_EXCEEDED": {
-        "description": "402 - This key has reached its daily spend cap.",
+        "description": "402 - This key has reached its daily spending limit.",
         "headers": {
           "X-RateLimit-Limit": {
             "$ref": "#/components/headers/X-RateLimit-Limit"
@@ -9115,13 +10180,63 @@
             "schema": {
               "$ref": "#/components/schemas/ErrorEnvelope"
             },
-            "example": {
-              "success": false,
-              "error": {
-                "code": "DAILY_SPEND_CAP_EXCEEDED",
-                "message": "This key has reached its daily spend cap.",
-                "docs_url": "https://docs.voidmob.com/api/errors#daily_spend_cap_exceeded",
-                "request_id": "req_01HXYZ123456789ABCDEFG"
+            "examples": {
+              "default": {
+                "summary": "The order would take the last 24 hours over the daily limit",
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "DAILY_SPEND_CAP_EXCEEDED",
+                    "message": "This order ($5.00) would go over this API key's daily limit of $10.00 - $3.00 left in the last 24 hours.",
+                    "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#daily_spend_cap_exceeded",
+                    "request_id": "req_01HXYZ123456789ABCDEFG",
+                    "details": {
+                      "limit_cents": 1000,
+                      "remaining_cents": 300,
+                      "settings_url": "https://dashboard.voidmob.com/developers/api-keys"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "ORDER_LIMIT_EXCEEDED": {
+        "description": "402 - This order is over this key's per-order spending limit.",
+        "headers": {
+          "X-RateLimit-Limit": {
+            "$ref": "#/components/headers/X-RateLimit-Limit"
+          },
+          "X-RateLimit-Remaining": {
+            "$ref": "#/components/headers/X-RateLimit-Remaining"
+          },
+          "X-RateLimit-Reset": {
+            "$ref": "#/components/headers/X-RateLimit-Reset"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "default": {
+                "summary": "The order is over the per-order limit",
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "ORDER_LIMIT_EXCEEDED",
+                    "message": "This order ($5.00) is over this API key's per-order limit of $2.00.",
+                    "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#order_limit_exceeded",
+                    "request_id": "req_01HXYZ123456789ABCDEFG",
+                    "details": {
+                      "limit_cents": 200,
+                      "remaining_cents": 200,
+                      "settings_url": "https://dashboard.voidmob.com/developers/api-keys"
+                    }
+                  }
+                }
               }
             }
           }
@@ -9150,7 +10265,7 @@
               "error": {
                 "code": "VERIFICATION_NOT_FOUND",
                 "message": "Verification not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#verification_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#verification_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9180,7 +10295,7 @@
               "error": {
                 "code": "WEBHOOK_ENDPOINT_NOT_FOUND",
                 "message": "Webhook endpoint not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#webhook_endpoint_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#webhook_endpoint_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9210,7 +10325,7 @@
               "error": {
                 "code": "CANCEL_NOT_ALLOWED",
                 "message": "This verification can no longer be cancelled.",
-                "docs_url": "https://docs.voidmob.com/api/errors#cancel_not_allowed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#cancel_not_allowed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9243,7 +10358,7 @@
               "error": {
                 "code": "CANCEL_RATE_LIMITED",
                 "message": "Too many cancellations recently. Try again later.",
-                "docs_url": "https://docs.voidmob.com/api/errors#cancel_rate_limited",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#cancel_rate_limited",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9273,7 +10388,7 @@
               "error": {
                 "code": "COMPLETE_NOT_ALLOWED",
                 "message": "This verification can no longer be completed - it is already in a terminal state.",
-                "docs_url": "https://docs.voidmob.com/api/errors#complete_not_allowed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#complete_not_allowed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9303,7 +10418,7 @@
               "error": {
                 "code": "REUSE_NOT_ALLOWED",
                 "message": "Reuse is not available for this verification. Check allow_reuse / allow_paid_reuse on the verification before calling.",
-                "docs_url": "https://docs.voidmob.com/api/errors#reuse_not_allowed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#reuse_not_allowed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9336,7 +10451,7 @@
               "error": {
                 "code": "REUSE_RATE_LIMITED",
                 "message": "Too many reuse attempts on this verification. Try again shortly.",
-                "docs_url": "https://docs.voidmob.com/api/errors#reuse_rate_limited",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#reuse_rate_limited",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9366,7 +10481,7 @@
               "error": {
                 "code": "INTERNAL_ERROR",
                 "message": "An unexpected error occurred. Please try again.",
-                "docs_url": "https://docs.voidmob.com/api/errors#internal_error",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#internal_error",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9396,7 +10511,7 @@
               "error": {
                 "code": "PROXY_PLAN_NOT_FOUND",
                 "message": "Unknown proxy plan id.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_plan_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_plan_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9426,7 +10541,7 @@
               "error": {
                 "code": "PROXY_NOT_FOUND",
                 "message": "Proxy not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9456,7 +10571,7 @@
               "error": {
                 "code": "PROXY_LIST_NOT_FOUND",
                 "message": "Proxy list not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_list_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_list_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9486,7 +10601,7 @@
               "error": {
                 "code": "PROXY_NOT_READY",
                 "message": "Proxy is still provisioning. Retry shortly.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_not_ready",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_not_ready",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9516,7 +10631,7 @@
               "error": {
                 "code": "PROXY_EXPIRED",
                 "message": "Proxy has expired.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_expired",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_expired",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9546,7 +10661,7 @@
               "error": {
                 "code": "PROXY_EXHAUSTED",
                 "message": "Proxy traffic allocation is exhausted.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_exhausted",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_exhausted",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9576,7 +10691,7 @@
               "error": {
                 "code": "PROXY_LIST_LIMIT_EXCEEDED",
                 "message": "Maximum proxy lists per package reached.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_list_limit_exceeded",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_list_limit_exceeded",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9606,7 +10721,7 @@
               "error": {
                 "code": "PROXY_GEO_CONFLICT",
                 "message": "Geo targeting is invalid - subfilters require a single country.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_geo_conflict",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_geo_conflict",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9636,7 +10751,7 @@
               "error": {
                 "code": "PROXY_NETWORK_UNAVAILABLE",
                 "message": "One or more of these IPs is not available for whitelisting.",
-                "docs_url": "https://docs.voidmob.com/api/errors#proxy_network_unavailable",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#proxy_network_unavailable",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9644,7 +10759,7 @@
         }
       },
       "PROVISIONING_FAILED": {
-        "description": "502 - Proxy provisioning failed. Funds have been refunded.",
+        "description": "503 - Proxy provisioning failed. Funds have been refunded.",
         "headers": {
           "X-RateLimit-Limit": {
             "$ref": "#/components/headers/X-RateLimit-Limit"
@@ -9666,7 +10781,7 @@
               "error": {
                 "code": "PROVISIONING_FAILED",
                 "message": "Proxy provisioning failed. Funds have been refunded.",
-                "docs_url": "https://docs.voidmob.com/api/errors#provisioning_failed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#provisioning_failed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9674,7 +10789,7 @@
         }
       },
       "PROVIDER_TIMEOUT": {
-        "description": "504 - Request timed out. Funds have been refunded.",
+        "description": "503 - Request timed out. Funds have been refunded.",
         "headers": {
           "X-RateLimit-Limit": {
             "$ref": "#/components/headers/X-RateLimit-Limit"
@@ -9696,7 +10811,7 @@
               "error": {
                 "code": "PROVIDER_TIMEOUT",
                 "message": "Request timed out. Funds have been refunded.",
-                "docs_url": "https://docs.voidmob.com/api/errors#provider_timeout",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#provider_timeout",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9726,7 +10841,7 @@
               "error": {
                 "code": "PRICE_MISMATCH",
                 "message": "Price exceeds the supplied max_price_cents.",
-                "docs_url": "https://docs.voidmob.com/api/errors#price_mismatch",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#price_mismatch",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9756,7 +10871,7 @@
               "error": {
                 "code": "POOL_NOT_FOUND",
                 "message": "Pool not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#pool_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#pool_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9786,7 +10901,7 @@
               "error": {
                 "code": "POOL_LAPSED",
                 "message": "Pool validity has ended. Extend the pool to continue.",
-                "docs_url": "https://docs.voidmob.com/api/errors#pool_lapsed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#pool_lapsed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9816,7 +10931,7 @@
               "error": {
                 "code": "POOL_INSUFFICIENT_GB",
                 "message": "Not enough GB left in the pool.",
-                "docs_url": "https://docs.voidmob.com/api/errors#pool_insufficient_gb",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#pool_insufficient_gb",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9846,7 +10961,7 @@
               "error": {
                 "code": "POOL_SELF_EXTEND_DISABLED",
                 "message": "Self-serve extension is not enabled for this pool.",
-                "docs_url": "https://docs.voidmob.com/api/errors#pool_self_extend_disabled",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#pool_self_extend_disabled",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9876,7 +10991,7 @@
               "error": {
                 "code": "POOL_MIN_EXTEND",
                 "message": "Extension is below the pool's minimum GB.",
-                "docs_url": "https://docs.voidmob.com/api/errors#pool_min_extend",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#pool_min_extend",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9906,7 +11021,7 @@
               "error": {
                 "code": "OUT_OF_STOCK_AT_PRICE",
                 "message": "No stock available at or below the supplied max_price_cents.",
-                "docs_url": "https://docs.voidmob.com/api/errors#out_of_stock_at_price",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#out_of_stock_at_price",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9936,7 +11051,7 @@
               "error": {
                 "code": "PRICE_OVER_CAP",
                 "message": "Current price exceeds the supplied max_price_cents.",
-                "docs_url": "https://docs.voidmob.com/api/errors#price_over_cap",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#price_over_cap",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9966,7 +11081,7 @@
               "error": {
                 "code": "BAD_SERVICE",
                 "message": "Unknown or unsupported service.",
-                "docs_url": "https://docs.voidmob.com/api/errors#bad_service",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#bad_service",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -9996,7 +11111,7 @@
               "error": {
                 "code": "ALREADY_COMPLETED",
                 "message": "Verification has already received a code and cannot be cancelled.",
-                "docs_url": "https://docs.voidmob.com/api/errors#already_completed",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#already_completed",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10026,7 +11141,7 @@
               "error": {
                 "code": "CANCEL_WINDOW_NOT_OPEN",
                 "message": "Cancellation is not yet available. Please retry after the cooldown.",
-                "docs_url": "https://docs.voidmob.com/api/errors#cancel_window_not_open",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#cancel_window_not_open",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10056,7 +11171,7 @@
               "error": {
                 "code": "NOT_SUPPORTED",
                 "message": "This action is not supported.",
-                "docs_url": "https://docs.voidmob.com/api/errors#not_supported",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#not_supported",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10064,7 +11179,7 @@
         }
       },
       "PROVIDER_ERROR": {
-        "description": "502 - Service error. Please retry shortly.",
+        "description": "503 - Service error. Please retry shortly.",
         "headers": {
           "X-RateLimit-Limit": {
             "$ref": "#/components/headers/X-RateLimit-Limit"
@@ -10086,7 +11201,7 @@
               "error": {
                 "code": "PROVIDER_ERROR",
                 "message": "Service error. Please retry shortly.",
-                "docs_url": "https://docs.voidmob.com/api/errors#provider_error",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#provider_error",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10116,7 +11231,7 @@
               "error": {
                 "code": "LTR_NOT_AVAILABLE",
                 "message": "Long-term rental is not available for this service or duration.",
-                "docs_url": "https://docs.voidmob.com/api/errors#ltr_not_available",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#ltr_not_available",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10146,7 +11261,7 @@
               "error": {
                 "code": "RE_RENT_NOT_AVAILABLE",
                 "message": "This number is no longer available for re-rent - it has been released. Start a fresh rental instead.",
-                "docs_url": "https://docs.voidmob.com/api/errors#re_rent_not_available",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#re_rent_not_available",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10176,7 +11291,7 @@
               "error": {
                 "code": "DEDICATED_NOT_AVAILABLE",
                 "message": "Dedicated numbers are not available for this country.",
-                "docs_url": "https://docs.voidmob.com/api/errors#dedicated_not_available",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#dedicated_not_available",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10206,7 +11321,7 @@
               "error": {
                 "code": "PRODUCT_NOT_FOUND",
                 "message": "Product not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#product_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#product_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10236,7 +11351,7 @@
               "error": {
                 "code": "ESIM_NOT_FOUND",
                 "message": "eSIM not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#esim_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#esim_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10266,7 +11381,7 @@
               "error": {
                 "code": "PARENT_ORDER_NOT_FOUND",
                 "message": "Parent eSIM order not found.",
-                "docs_url": "https://docs.voidmob.com/api/errors#parent_order_not_found",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#parent_order_not_found",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10296,7 +11411,7 @@
               "error": {
                 "code": "PARENT_ORDER_NOT_ACTIVE",
                 "message": "Parent eSIM is not in an active state for topups.",
-                "docs_url": "https://docs.voidmob.com/api/errors#parent_order_not_active",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#parent_order_not_active",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10326,7 +11441,7 @@
               "error": {
                 "code": "TOPUP_INCOMPATIBLE",
                 "message": "This topup is not compatible with the parent eSIM.",
-                "docs_url": "https://docs.voidmob.com/api/errors#topup_incompatible",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#topup_incompatible",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10356,7 +11471,7 @@
               "error": {
                 "code": "PRODUCT_UNAVAILABLE",
                 "message": "Product is temporarily unavailable.",
-                "docs_url": "https://docs.voidmob.com/api/errors#product_unavailable",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#product_unavailable",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10386,7 +11501,7 @@
               "error": {
                 "code": "USAGE_UNAVAILABLE",
                 "message": "Usage data is not currently available. Please try again later.",
-                "docs_url": "https://docs.voidmob.com/api/errors#usage_unavailable",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#usage_unavailable",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10416,7 +11531,7 @@
               "error": {
                 "code": "ESIM_GONE",
                 "message": "This eSIM has been cancelled or refunded.",
-                "docs_url": "https://docs.voidmob.com/api/errors#esim_gone",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#esim_gone",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }
@@ -10446,7 +11561,37 @@
               "error": {
                 "code": "ESIM_NOT_ACTIVE",
                 "message": "eSIM is not in an active state.",
-                "docs_url": "https://docs.voidmob.com/api/errors#esim_not_active",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#esim_not_active",
+                "request_id": "req_01HXYZ123456789ABCDEFG"
+              }
+            }
+          }
+        }
+      },
+      "DEPOSIT_LIMIT_REACHED": {
+        "description": "429 - This account has reached its deposit limit. Pay or wait out an open deposit, or try again later.",
+        "headers": {
+          "X-RateLimit-Limit": {
+            "$ref": "#/components/headers/X-RateLimit-Limit"
+          },
+          "X-RateLimit-Remaining": {
+            "$ref": "#/components/headers/X-RateLimit-Remaining"
+          },
+          "X-RateLimit-Reset": {
+            "$ref": "#/components/headers/X-RateLimit-Reset"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "success": false,
+              "error": {
+                "code": "DEPOSIT_LIMIT_REACHED",
+                "message": "This account has reached its deposit limit. Pay or wait out an open deposit, or try again later.",
+                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#deposit_limit_reached",
                 "request_id": "req_01HXYZ123456789ABCDEFG"
               }
             }

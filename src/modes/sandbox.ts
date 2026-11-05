@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { DEFAULT_CONTROLS, type OwnerControls } from "../config.js";
 import { createSandboxHttpClient } from "../sandbox/mock-http.js";
 import { createVoidmobServer } from "../server.js";
@@ -8,5 +8,5 @@ import { createVoidmobServer } from "../server.js";
 // identical to live by construction - it cannot drift. Owner controls apply
 // here exactly as in live mode.
 export function buildSandboxServer(controls: OwnerControls = DEFAULT_CONTROLS): McpServer {
-  return createVoidmobServer(createSandboxHttpClient(), controls);
+  return createVoidmobServer(createSandboxHttpClient(), controls, null, { sandbox: true });
 }

@@ -8,11 +8,11 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { HttpClient } from "../src/client/http.js";
 import { createSandboxHttpClient, READY_AFTER_MS } from "../src/sandbox/mock-http.js";
 import { createVoidmobServer } from "../src/server.js";
+import { LIST_FORMATS } from "../src/tools/proxy.js";
+import { connect } from "./connect.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -100,6 +100,17 @@ describe("contract: src/ against the OpenAPI spec", () => {
     const missing = [...found].filter((p) => !templates.some((t) => t.re.test(p.replace(/^\/v1/, "").replace(/\{x\}/g, "x"))));
     expect(missing).toEqual([]);
   });
+
+  it("offers exactly the spec's proxy list formats", () => {
+    const proxyFormat = deref<{ enum?: string[] }>({ $ref: "#/components/schemas/ProxyFormat" });
+    expect([...LIST_FORMATS].sort()).toEqual([...(proxyFormat.enum ?? [])].sort());
+  });
+
+  it("the proxy object carries topup_prices with the fields the top-up tools read", () => {
+    const proxy = deref<{ properties?: Record<string, { items?: { $ref?: string } }> }>({ $ref: "#/components/schemas/Proxy" });
+    const item = deref<{ required?: string[] }>(proxy.properties?.topup_prices?.items ?? {});
+    expect([...(item.required ?? [])].sort()).toEqual(["additional_gb", "days_added", "price_cents"]);
+  });
 });
 
 describe("contract: every request the tools make", () => {
@@ -112,9 +123,7 @@ describe("contract: every request the tools make", () => {
         return sandbox.request(method, path, opts);
       },
     };
-    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: "contract", version: "0" });
-    await Promise.all([createVoidmobServer(http).connect(serverSide), client.connect(clientSide)]);
+    const client = await connect(createVoidmobServer(http), "contract");
     const call = async (name: string, args: Record<string, unknown> = {}) =>
       (await client.callTool({ name, arguments: args })).structuredContent as Record<string, any>;
 
@@ -134,20 +143,20 @@ describe("contract: every request the tools make", () => {
     await call("re_rent_rental", { rental_id: "ren_sandboxexpired1", max_price_cents: 600 });
     await call("search_dedicated_countries");
     const ded = (await call("purchase_dedicated_number", { country: "uk", max_price_cents: 1699, auto_renew: true })).dedicated_number.id;
-    await call("get_dedicated_number", { number_id: ded });
+    await call("get_rental", { rental_id: ded });
     await call("toggle_auto_renew", { rental_id: ded, auto_renew: false });
     await call("search_esim_plans", { country: "us", min_data_gb: 1, min_days: 5, has_5g: true, query: "USA", limit: 5, cursor: "x" });
     const esim = (await call("purchase_esim", { plan_id: "prod_us_5gb_30d", max_price_cents: 1500 })).esim.id;
     await call("get_esim_status", { esim_id: esim });
     await call("topup_esim", { esim_id: esim });
     await call("topup_esim", { esim_id: esim, topup_product_id: "prod_topup_5gb", max_price_cents: 1400 });
-    await call("get_esim_qr", { esim_id: esim });
+    await call("get_esim_status", { esim_id: esim, include_qr: true });
     await call("search_proxies", { type: "dedicated", country: "US", min_data_gb: 0, available_only: true, cursor: "x" });
     await call("purchase_proxy", { plan_id: "plan_US5GB30D", max_price_cents: 100 }); // PRICE_MISMATCH -> plan lookup
     const prx = (await call("purchase_proxy", { plan_id: "plan_US5GB30D", max_price_cents: 1800 })).proxy.id;
     await new Promise((r) => setTimeout(r, READY_AFTER_MS + 100));
     await call("get_proxy_status", { proxy_id: prx });
-    await call("topup_proxy", { proxy_id: prx, additional_gb: 1, max_price_cents: 1 }); // PRICE_MISMATCH -> proxy + plan lookup
+    await call("topup_proxy", { proxy_id: prx, additional_gb: 1, max_price_cents: 1 }); // PRICE_MISMATCH -> proxy lookup
     await call("topup_proxy", { proxy_id: prx, additional_gb: 1, max_price_cents: 400 });
     await call("renew_proxy", { proxy_id: prx, max_price_cents: 1 }); // PRICE_MISMATCH -> proxy lookup
     await call("renew_proxy", { proxy_id: prx, max_price_cents: 1800 });
@@ -159,14 +168,14 @@ describe("contract: every request the tools make", () => {
     await call("create_proxy_list", { proxy_id: prx, name: "b", countries: ["US", "CA"], network: "203.0.113.7" });
     await call("update_proxy_list", {
       proxy_id: prx, list_id: list, name: "a2", country: "DE", region: "Berlin", city: "Berlin", isp: "x", zip: "10115",
-      rotation_period_seconds: -1, rotation_mode: "instant", format: "json",
+      rotation_period_seconds: -1, rotation_mode: "instant", format: "login_pass_host_port_at",
     });
     await call("update_proxy_list", { proxy_id: prx, list_id: list, countries: ["DE", "FR"] });
     await call("regenerate_proxy_password", { proxy_id: prx, list_id: list });
-    await call("list_proxy_lists", { proxy_id: prx });
+    await call("get_proxy_status", { proxy_id: prx });
     await call("delete_proxy_list", { proxy_id: prx, list_id: list });
     const dedPrx = (await call("purchase_proxy", { plan_id: "plan_DEDUSNY30D", max_price_cents: 6900 })).proxy.id;
-    await call("set_proxy_auto_renew", { proxy_id: dedPrx, enabled: true });
+    await call("toggle_auto_renew", { rental_id: dedPrx, auto_renew: true });
     await call("rotate_proxy_ip", { proxy_id: dedPrx });
     await call("get_geo", {});
     await call("get_geo", { country: "US", region: "California", city: "Los Angeles" });
@@ -175,6 +184,9 @@ describe("contract: every request the tools make", () => {
       await call("list_orders", { kind, limit: 2, cursor: "x" });
     }
     await call("list_orders", { kind: "verification", status: "cancelled" });
+    await call("get_deposit");
+    const dep = (await call("create_deposit", { coin: "ltc", amount_cents: 1000 })).deposit.id;
+    await call("get_deposit", { deposit_id: dep });
 
     const problems: string[] = [];
     for (const req of seen) {
@@ -200,6 +212,9 @@ describe("contract: every request the tools make", () => {
     // The drive reached every endpoint the tools use (a guard against a
     // silently shrinking drive).
     const endpoints = new Set(seen.map((r) => `${r.method} ${findOperation(r.method, r.path.split("?")[0])?.template}`));
-    expect(endpoints.size).toBeGreaterThanOrEqual(38);
+    expect(endpoints.size).toBeGreaterThanOrEqual(42);
+    for (const re of [/^POST \/deposits$/, /^GET \/deposits$/, /^GET \/deposits\/\{[^}]+\}$/, /^GET \/deposit_coins$/]) {
+      expect([...endpoints].some((e) => re.test(e)), String(re)).toBe(true);
+    }
   }, 15_000);
 });

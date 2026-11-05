@@ -4,8 +4,8 @@ import {
   purchaseEsimHandler,
   getEsimStatusHandler,
   topupEsimHandler,
-  getEsimQrHandler,
 } from "../../src/tools/esim.js";
+import { HttpError, type HttpClient } from "../../src/client/http.js";
 import { createMockHttpClient } from "../mock-http.js";
 import { toolContext } from "../../src/tools/context.js";
 
@@ -426,40 +426,87 @@ describe("topup_esim", () => {
   });
 });
 
-// ── get_esim_qr ─────────────────────────────────────────────────────────────
+// ── get_esim_status include_qr ──────────────────────────────────────────────
 
-describe("get_esim_qr", () => {
-  it("returns content with both text + image blocks; structuredContent has esim_id", async () => {
+describe("get_esim_status include_qr", () => {
+  // Minimal PNG magic bytes
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const statusAndUsage = (http: ReturnType<typeof createMockHttpClient>, esim = esimFixture()) => {
+    http.expect("GET", `/v1/esims/${esim.id}`, { status: 200, headers: new Headers(), body: { success: true, data: { esim } } });
+    http.expect("GET", `/v1/esims/${esim.id}/usage`, { status: 200, headers: new Headers(), body: { success: true, data: { usage: usageFixture() } } });
+  };
+  const textOf = (res: Awaited<ReturnType<ReturnType<typeof getEsimStatusHandler>>>) => {
+    const t = res.content[0];
+    if (t.type !== "text") throw new Error("text");
+    return t.text;
+  };
+
+  it("without include_qr: no QR request and no image", async () => {
     const http = createMockHttpClient();
-    // Minimal PNG magic bytes
-    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    http.expect("GET", "/v1/esims/esim_abc/qr.png", {
-      status: 200,
-      headers: new Headers(),
-      binary: png,
-    });
-    const res = await getEsimQrHandler(toolContext(http))({ esim_id: "esim_abc" });
+    statusAndUsage(http);
+    const res = await getEsimStatusHandler(toolContext(http))({ esim_id: "esim_abc" });
+    expect(res.content).toHaveLength(1);
+    expect(http.history.map((h) => h.path)).not.toContain("/v1/esims/esim_abc/qr.png");
+    expect(textOf(res)).toContain("include_qr=true");
+  });
+
+  it("returns the status text plus the QR as an image block; structuredContent keeps esim and usage", async () => {
+    const http = createMockHttpClient();
+    statusAndUsage(http);
+    http.expect("GET", "/v1/esims/esim_abc/qr.png", { status: 200, headers: new Headers(), binary: png });
+    const res = await getEsimStatusHandler(toolContext(http))({ esim_id: "esim_abc", include_qr: true });
     expect(res.isError).toBeFalsy();
     expect(res.content).toHaveLength(2);
-    expect(res.content[0].type).toBe("text");
+    expect(textOf(res)).toContain("Usage (1 package)");
+    expect(textOf(res)).toContain("QR code:     attached as an image");
     const img = res.content[1];
     if (img.type !== "image") throw new Error("expected image block");
     expect(img.mimeType).toBe("image/png");
     expect(img.data).toBe(png.toString("base64"));
-    expect(res.structuredContent?.esim_id).toBe("esim_abc");
+    expect(res.structuredContent?.esim).toMatchObject({ id: "esim_abc" });
+    expect(res.structuredContent?.usage).toMatchObject({ esim_id: "esim_abc" });
   });
 
-  it("returns toolError when server returns no binary payload", async () => {
+  it("a processing eSIM or a top-up has no QR: says why and does not ask the API", async () => {
+    for (const [esim, why] of [
+      [esimFixture({ status: "processing", activation_code: null, smdp_address: null, iccid: null }), "not ready yet"],
+      [esimFixture({ id: "esim_top", is_topup: true, parent_order_id: "esim_abc", activation_code: null }), "none for a top-up"],
+    ] as const) {
+      const http = createMockHttpClient();
+      statusAndUsage(http, esim);
+      const res = await getEsimStatusHandler(toolContext(http))({ esim_id: esim.id, include_qr: true });
+      expect(res.isError).toBeFalsy();
+      expect(res.content).toHaveLength(1);
+      expect(textOf(res)).toContain(why);
+      expect(http.history).toHaveLength(2);
+    }
+  });
+
+  it("a failed QR read keeps the status result and says so", async () => {
+    const mock = createMockHttpClient();
+    statusAndUsage(mock);
+    // The live client throws on a non-2xx; the queue mock only returns responses.
+    const http: HttpClient = {
+      request: (method, path, opts) =>
+        path.endsWith("/qr.png")
+          ? Promise.reject(new HttpError(404, "ESIM_NOT_FOUND", "req_qr", undefined, "eSIM not found.", { method }))
+          : mock.request(method, path, opts),
+    };
+    const res = await getEsimStatusHandler(toolContext(http))({ esim_id: "esim_abc", include_qr: true });
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toHaveLength(1);
+    expect(textOf(res)).toContain("QR code:     could not be read");
+    expect(textOf(res)).toContain("req_qr");
+    expect(textOf(res)).toContain("LPA string:");
+    expect(res.structuredContent?.esim).toMatchObject({ id: "esim_abc" });
+  });
+
+  it("a 2xx with no image body is reported, not crashed on", async () => {
     const http = createMockHttpClient();
-    // Edge case: 2xx with neither binary nor a parseable body (server bug)
-    http.expect("GET", "/v1/esims/esim_abc/qr.png", {
-      status: 200,
-      headers: new Headers(),
-    });
-    const res = await getEsimQrHandler(toolContext(http))({ esim_id: "esim_abc" });
-    expect(res.isError).toBe(true);
-    const t = res.content[0];
-    if (t.type !== "text") throw new Error("text");
-    expect(t.text).toMatch(/no binary payload/i);
+    statusAndUsage(http);
+    http.expect("GET", "/v1/esims/esim_abc/qr.png", { status: 200, headers: new Headers() });
+    const res = await getEsimStatusHandler(toolContext(http))({ esim_id: "esim_abc", include_qr: true });
+    expect(res.isError).toBeFalsy();
+    expect(textOf(res)).toContain("no image came back");
   });
 });

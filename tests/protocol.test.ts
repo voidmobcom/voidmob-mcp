@@ -3,21 +3,13 @@
 // owner controls shape the tool list and refuse spending, and the guides and
 // prompts are served.
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Client } from "@modelcontextprotocol/client";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
 import { buildSandboxServer } from "../src/modes/sandbox.js";
 import { buildLiveServer } from "../src/modes/live.js";
 import { DEFAULT_CONTROLS, parseControls, type OwnerControls } from "../src/config.js";
 import { READY_AFTER_MS } from "../src/sandbox/mock-http.js";
-
-async function connect(server: McpServer) {
-  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test", version: "0.0.0" });
-  await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
-  return client;
-}
+import { connect } from "./connect.js";
 
 const sandbox = (controls: Partial<OwnerControls> = {}) => connect(buildSandboxServer({ ...DEFAULT_CONTROLS, ...controls }));
 type Result = Awaited<ReturnType<Client["callTool"]>>;
@@ -27,8 +19,9 @@ const sc = (r: Result) => r.structuredContent as Record<string, any>;
 const WRITE_TOOLS = [
   "rent_number", "cancel_rental", "reuse_number", "re_rent_rental", "toggle_auto_renew",
   "purchase_dedicated_number", "purchase_esim", "topup_esim",
-  "purchase_proxy", "rotate_proxy_ip", "renew_proxy", "set_proxy_auto_renew", "topup_proxy",
+  "purchase_proxy", "rotate_proxy_ip", "renew_proxy", "topup_proxy",
   "regenerate_proxy_password", "create_proxy_list", "update_proxy_list", "delete_proxy_list",
+  "create_deposit",
 ];
 
 afterEach(() => {
@@ -37,7 +30,7 @@ afterEach(() => {
 });
 
 describe("structuredContent matches outputSchema for every tool (sandbox)", () => {
-  it("drives all 30 tools over the protocol and validates each result against its declared schema", async () => {
+  it("drives all 28 tools over the protocol and validates each result against its declared schema", async () => {
     const fetchSpy = vi.fn(() => Promise.reject(new Error("network must not be touched")));
     vi.stubGlobal("fetch", fetchSpy);
     const client = await sandbox();
@@ -67,31 +60,35 @@ describe("structuredContent matches outputSchema for every tool (sandbox)", () =
     await call("re_rent_rental", { rental_id: "ren_sandboxexpired1", max_price_cents: 600 });
     await call("search_dedicated_countries");
     const ded = sc(await call("purchase_dedicated_number", { country: "uk", max_price_cents: 1699 })).dedicated_number.id;
-    await call("get_dedicated_number", { number_id: ded });
+    await call("get_rental", { rental_id: ded });
     await call("search_esim_plans", { country: "us" });
     const esim = sc(await call("purchase_esim", { plan_id: "prod_us_5gb_30d", max_price_cents: 1500 })).esim.id;
     await call("get_esim_status", { esim_id: esim });
     await call("topup_esim", { esim_id: esim });
     await call("topup_esim", { esim_id: esim, topup_product_id: "prod_topup_5gb", max_price_cents: 1400 });
-    await call("get_esim_qr", { esim_id: esim });
+    await call("get_esim_status", { esim_id: esim, include_qr: true });
     await call("search_proxies", { type: "all" });
     const prx = sc(await call("purchase_proxy", { plan_id: "plan_US5GB30D", max_price_cents: 1800 })).proxy.id;
     await new Promise((r) => setTimeout(r, READY_AFTER_MS + 100));
     await call("get_proxy_status", { proxy_id: prx });
-    await call("topup_proxy", { proxy_id: prx, additional_gb: 2, max_price_cents: 720 });
+    await call("topup_proxy", { proxy_id: prx, additional_gb: 2, max_price_cents: 798 });
     await call("renew_proxy", { proxy_id: prx, max_price_cents: 1800 });
     await call("regenerate_proxy_password", { proxy_id: prx });
     const list = sc(await call("create_proxy_list", { proxy_id: prx, name: "la", country: "US", city: "Los Angeles" })).list.id;
     await call("update_proxy_list", { proxy_id: prx, list_id: list, rotation_period_seconds: -1 });
     await call("regenerate_proxy_password", { proxy_id: prx, list_id: list });
-    await call("list_proxy_lists", { proxy_id: prx });
+    await call("get_proxy_status", { proxy_id: prx });
     await call("delete_proxy_list", { proxy_id: prx, list_id: list });
     const dedPrx = sc(await call("purchase_proxy", { plan_id: "plan_DEDUSNY30D", max_price_cents: 6900 })).proxy.id;
-    await call("set_proxy_auto_renew", { proxy_id: dedPrx, enabled: true });
+    await call("toggle_auto_renew", { rental_id: dedPrx, auto_renew: true });
     await call("rotate_proxy_ip", { proxy_id: dedPrx });
     await call("get_geo", { country: "US" });
     await call("list_orders");
     await call("list_orders", { kind: "verification", status: "cancelled", limit: 5 });
+    await call("get_deposit");
+    const dep = sc(await call("create_deposit", { coin: "ltc", amount_cents: 2000 })).deposit.id;
+    await call("get_deposit", { deposit_id: dep }); // confirming
+    await call("get_deposit", { deposit_id: dep }); // credited
 
     expect([...called].sort()).toEqual(tools.map((t) => t.name).sort());
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -133,28 +130,29 @@ describe("owner controls (sandbox behaves like live)", () => {
   it("read-only: no tool that spends or changes anything is registered, and no buying prompts", async () => {
     const client = await sandbox({ readOnly: true });
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toHaveLength(13);
+    expect(names).toHaveLength(11);
     for (const w of WRITE_TOOLS) expect(names).not.toContain(w);
     expect(client.getServerCapabilities()?.prompts).toBeUndefined();
-    expect(client.getInstructions()).toContain("read-only");
+    expect(client.getInstructions()).toContain("This server has View access");
+    expect(client.getInstructions()).toContain("VOIDMOB_READ_ONLY");
     const acct = await client.callTool({ name: "get_account", arguments: {} });
-    expect(sc(acct).owner_limits).toMatchObject({ read_only: true });
-    expect(text(acct)).toContain("Read-only:");
+    expect(sc(acct).access).toMatchObject({ permission: "view", auto_mode: false });
+    expect(text(acct)).toContain("Access:          View (VOIDMOB_READ_ONLY");
   });
 
-  it("toolsets: only the chosen groups plus account, orders and geo", async () => {
+  it("toolsets: only the chosen groups plus account, deposits, orders and geo", async () => {
     const counts: Array<[string, number, string[]]> = [
-      ["sms", 10, ["get_verification_code"]],
-      ["numbers", 7, []],
-      ["esim", 8, ["buy_travel_esim"]],
-      ["proxy", 15, ["setup_mobile_proxy"]],
+      ["sms", 12, ["get_verification_code"]],
+      ["numbers", 9, []],
+      ["esim", 9, ["buy_travel_esim"]],
+      ["proxy", 16, ["setup_mobile_proxy"]],
       ["sms,proxy", 22, ["get_verification_code", "setup_mobile_proxy"]],
     ];
     for (const [sets, n, prompts] of counts) {
       const client = await sandbox(parseControls({ VOIDMOB_TOOLSETS: sets }));
       const names = (await client.listTools()).tools.map((t) => t.name);
       expect(names, sets).toHaveLength(n);
-      expect(names, sets).toEqual(expect.arrayContaining(["get_account", "list_orders", "get_geo"]));
+      expect(names, sets).toEqual(expect.arrayContaining(["get_account", "create_deposit", "get_deposit", "list_orders", "get_geo"]));
       const listed = client.getServerCapabilities()?.prompts ? (await client.listPrompts()).prompts.map((p) => p.name).sort() : [];
       expect(listed, sets).toEqual([...prompts].sort());
     }

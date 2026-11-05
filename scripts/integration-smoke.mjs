@@ -32,7 +32,6 @@ import {
   purchaseProxyHandler,
   getProxyStatusHandler,
   createProxyListHandler,
-  listProxyListsHandler,
   deleteProxyListHandler,
 } from "../dist/tools/proxy.js";
 import { getGeoHandler } from "../dist/tools/geo.js";
@@ -165,7 +164,7 @@ async function purchases() {
             rotation_period_seconds: 0,
           }),
         );
-        await check(`list_proxy_lists(${proxyId})`, () => listProxyListsHandler(ctx)({ proxy_id: proxyId }));
+        await check(`get_proxy_status(${proxyId}) lists`, () => getProxyStatusHandler(ctx)({ proxy_id: proxyId }));
         const listId = created?.structuredContent?.list?.id;
         if (listId) {
           await check(`delete_proxy_list(${proxyId}, ${listId})`, () =>

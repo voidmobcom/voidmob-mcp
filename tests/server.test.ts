@@ -4,23 +4,15 @@
 // "provider". Runs against live (fetch stubbed to throw), sandbox and
 // unconfigured servers so all three stay consistent.
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { buildLiveServer } from "../src/modes/live.js";
 import { buildSandboxServer } from "../src/modes/sandbox.js";
 import { buildUnconfiguredServer } from "../src/modes/unconfigured.js";
 import { DEFAULT_CONTROLS } from "../src/config.js";
+import { connect } from "./connect.js";
 
 const FORBIDDEN =
   /provider|coronium|cyber ?yozh|infatica|pva ?deals|hero-?sms|sms-?man|text ?verified|quackr|mobimatter|esim ?go|plisio/i;
-
-async function connect(server: McpServer) {
-  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "test", version: "0.0.0" });
-  await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
-  return client;
-}
 
 const modes: Array<[string, () => McpServer]> = [
   ["live", () => buildLiveServer({ sandbox: false, apiKey: "vmk_live_" + "a".repeat(32), baseUrl: "https://x", debug: false, controls: DEFAULT_CONTROLS })],
@@ -31,10 +23,10 @@ const modes: Array<[string, () => McpServer]> = [
 afterEach(() => vi.restoreAllMocks());
 
 describe.each(modes)("%s server over MCP", (_mode, build) => {
-  it("lists 30 tools, each with a title, an output schema and explicit annotation booleans", async () => {
+  it("lists 28 tools, each with a title, an output schema and explicit annotation booleans", async () => {
     const client = await connect(build());
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(30);
+    expect(tools).toHaveLength(28);
     for (const tool of tools) {
       expect(tool.title, tool.name).toBeTruthy();
       for (const hint of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const) {
@@ -91,9 +83,12 @@ describe("spending tools are flagged for confirmation", () => {
     for (const name of ["reuse_number", "topup_esim"]) {
       expect(Object.keys(schemas.get(name)?.properties ?? {}), name).toContain("max_price_cents");
     }
-    for (const name of ["get_account", "search_sms_services", "get_rental", "list_orders", "search_esim_plans", "get_esim_status", "get_esim_qr", "search_proxies", "get_geo", "list_proxy_lists", "search_dedicated_countries", "get_dedicated_number"]) {
+    for (const name of ["get_account", "search_sms_services", "get_rental", "list_orders", "search_esim_plans", "get_esim_status", "search_proxies", "get_proxy_status", "get_geo", "search_dedicated_countries", "get_deposit"]) {
       expect(byName.get(name)).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     }
+    // A deposit spends nothing: neither a read nor destructive, and it takes no price commitment.
+    expect(byName.get("create_deposit")).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    expect(Object.keys(schemas.get("create_deposit")?.properties ?? {})).not.toContain("max_price_cents");
   });
 });
 
@@ -105,7 +100,9 @@ describe("input validation at the protocol boundary", () => {
     const bad = [
       { name: "get_esim_status", arguments: { esim_id: "../me" } },
       { name: "delete_proxy_list", arguments: { proxy_id: "prx_1", list_id: "../../../rentals/ren_x" } },
-      { name: "get_rental", arguments: { rental_id: "ded_1" } },
+      { name: "get_rental", arguments: { rental_id: "prx_1" } },
+      { name: "toggle_auto_renew", arguments: { rental_id: "ver_1", auto_renew: false } },
+      { name: "toggle_auto_renew", arguments: { rental_id: "prx_1/../x", auto_renew: false } },
       { name: "cancel_rental", arguments: { rental_id: "ver_x#" } },
       { name: "purchase_proxy", arguments: { plan_id: "plan_1/../x" } },
     ];

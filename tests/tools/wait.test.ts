@@ -43,13 +43,18 @@ function scripted(opts: { before?: Record<string, unknown>; after?: Record<strin
   return { http, calls, reads: () => calls.filter((c) => !c.path.endsWith("/messages")) };
 }
 
-function extra(overrides: Partial<{ signal: AbortSignal; progressToken: string | number; sendNotification: ToolExtra["sendNotification"] }> = {}): ToolExtra {
+type Notify = ToolExtra["mcpReq"]["notify"];
+
+function extra(overrides: Partial<{ signal: AbortSignal; progressToken: string | number; notify: Notify }> = {}): ToolExtra {
   return {
-    signal: overrides.signal ?? new AbortController().signal,
-    _meta: overrides.progressToken !== undefined ? { progressToken: overrides.progressToken } : undefined,
-    sendNotification: overrides.sendNotification ?? (async () => undefined),
-    sendRequest: async () => { throw new Error("unused"); },
-    requestId: 1,
+    mcpReq: {
+      id: 1,
+      method: "tools/call",
+      signal: overrides.signal ?? new AbortController().signal,
+      _meta: overrides.progressToken !== undefined ? { progressToken: overrides.progressToken } : undefined,
+      notify: overrides.notify ?? (async () => undefined),
+      send: async () => { throw new Error("unused"); },
+    },
   } as unknown as ToolExtra;
 }
 
@@ -133,11 +138,11 @@ describe("get_rental wait_seconds", () => {
 
   it("sends progress notifications only when the request carries a progress token", async () => {
     const sent: Array<{ method: string; params: Record<string, unknown> }> = [];
-    const sendNotification = vi.fn(async (n: { method: string; params: Record<string, unknown> }) => { sent.push(n); });
+    const notify = vi.fn(async (n: { method: string; params: Record<string, unknown> }) => { sent.push(n); });
     const s = scripted({ after: { status: "code_received", code: "1", code_received_at: new Date(T0 + 5_000).toISOString() }, flipAtMs: 5_000 });
     const pending = getRentalHandler(toolContext(s.http))(
       { rental_id: "ver_wait", wait_seconds: 60 },
-      extra({ progressToken: "tok-1", sendNotification: sendNotification as unknown as ToolExtra["sendNotification"] }),
+      extra({ progressToken: "tok-1", notify: notify as unknown as Notify }),
     );
     await vi.advanceTimersByTimeAsync(10_000);
     await pending;
@@ -148,7 +153,7 @@ describe("get_rental wait_seconds", () => {
 
     const quiet = vi.fn();
     const s2 = scripted({ after: { status: "code_received", code: "1" }, flipAtMs: 2_000 });
-    const p2 = getRentalHandler(toolContext(s2.http))({ rental_id: "ver_wait", wait_seconds: 60 }, extra({ sendNotification: quiet as unknown as ToolExtra["sendNotification"] }));
+    const p2 = getRentalHandler(toolContext(s2.http))({ rental_id: "ver_wait", wait_seconds: 60 }, extra({ notify: quiet as unknown as Notify }));
     await vi.advanceTimersByTimeAsync(5_000);
     await p2;
     expect(quiet).not.toHaveBeenCalled();

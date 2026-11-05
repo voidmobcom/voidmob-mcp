@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSandboxServer } from "../src/modes/sandbox.js";
+import { toolNames } from "./connect.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const json = (file: string) => JSON.parse(readFileSync(join(root, file), "utf8"));
@@ -16,13 +17,12 @@ const pkg = json("package.json");
 // Every env var src/config.ts reads.
 const ENV_VARS = [
   "VOIDMOB_API_KEY", "VOIDMOB_SANDBOX", "VOIDMOB_READ_ONLY", "VOIDMOB_MAX_ORDER_CENTS",
-  "VOIDMOB_BUDGET_CENTS", "VOIDMOB_TOOLSETS", "VOIDMOB_BASE_URL", "VOIDMOB_DEBUG",
+  "VOIDMOB_BUDGET_CENTS", "VOIDMOB_AUTONOMOUS", "VOIDMOB_TOOLSETS", "VOIDMOB_BASE_URL", "VOIDMOB_DEBUG",
 ];
 
 describe("manifest.json (Claude Desktop bundle)", () => {
-  it("lists exactly the registered tools, at the package version", () => {
-    // @ts-expect-error - reach into internal map for the registered tool set
-    const registered = Object.keys(buildSandboxServer()._registeredTools).sort();
+  it("lists exactly the registered tools, at the package version", async () => {
+    const registered = await toolNames(buildSandboxServer());
     expect(manifest.tools.map((t: { name: string }) => t.name).sort()).toEqual(registered);
     expect(manifest.version).toBe(pkg.version);
     expect(manifest.server.entry_point).toBe(pkg.main.replace(/^\.\//, ""));
@@ -46,9 +46,13 @@ describe("server.json", () => {
   it("declares the owner controls and only env vars the server reads", () => {
     const declared = serverJson.packages[0].environmentVariables.map((e: { name: string }) => e.name);
     expect(declared).toEqual(expect.arrayContaining([
-      "VOIDMOB_API_KEY", "VOIDMOB_SANDBOX", "VOIDMOB_READ_ONLY", "VOIDMOB_MAX_ORDER_CENTS", "VOIDMOB_BUDGET_CENTS", "VOIDMOB_TOOLSETS",
+      "VOIDMOB_API_KEY", "VOIDMOB_SANDBOX", "VOIDMOB_READ_ONLY", "VOIDMOB_MAX_ORDER_CENTS", "VOIDMOB_BUDGET_CENTS", "VOIDMOB_AUTONOMOUS", "VOIDMOB_TOOLSETS",
     ]));
     for (const name of declared) expect(ENV_VARS).toContain(name);
+  });
+
+  it("lists the hosted server as a streamable-http remote", () => {
+    expect(serverJson.remotes).toEqual([{ type: "streamable-http", url: "https://mcp.voidmob.com/mcp" }]);
   });
 
   it("ships the skill that the resources read", () => {

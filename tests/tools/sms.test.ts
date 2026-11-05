@@ -570,5 +570,7 @@ describe("reuse_number, re_rent_rental, toggle_auto_renew", () => {
     const http = createMockHttpClient();
     const res = await toggleAutoRenewHandler(toolContext(http))({ rental_id: "ver_abc", auto_renew: true });
     expect(res.isError).toBe(true);
+    expect((res.content[0] as { text: string }).text).toContain("prx_xxx");
+    expect(http.history).toHaveLength(0);
   });
 });

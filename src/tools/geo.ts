@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { callApi } from "../client/call-api.js";
 import { GeoCountry, GeoRegion, GeoCity, GeoIsp } from "../client/types.js";
@@ -49,7 +49,7 @@ export const GetGeoOutput = outputObject({
 });
 
 export const getGeoHandler = (ctx: ToolContext) =>
-  wrapToolErrors(async (args: { country?: string; region?: string; city?: string }): Promise<ToolResult> => {
+  wrapToolErrors(ctx, async (args: { country?: string; region?: string; city?: string }): Promise<ToolResult> => {
     const q = new URLSearchParams();
     if (args.country) q.set("country", args.country);
     if (args.region) q.set("region", args.region);
@@ -72,7 +72,7 @@ export const getGeoHandler = (ctx: ToolContext) =>
 export function registerGeoTools(server: McpServer, ctx: ToolContext) {
   defineTool(server, ctx, "get_geo", {
     group: "core",
-    writes: false,
+    level: "view",
     title: "Proxy geo targets",
     description:
       "Cascading geo discovery for shared-proxy list targeting (create_proxy_list, update_proxy_list). No params -> countries; country=US -> regions; " +
