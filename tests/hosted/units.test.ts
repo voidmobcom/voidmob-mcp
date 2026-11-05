@@ -77,6 +77,18 @@ describe("SandboxStore", () => {
 });
 
 describe("RateLimiter", () => {
+  it("peek reports the wait without counting, and agrees with hit", () => {
+    let now = 0;
+    const limiter = new RateLimiter(2, 60_000, 100, () => now);
+    expect(limiter.peek("a")).toBe(0);
+    expect(limiter.peek("a")).toBe(0);
+    expect(limiter.hit("a")).toBe(0);
+    expect(limiter.hit("a")).toBe(0);
+    expect(limiter.peek("a")).toBe(60);
+    now = 60_000;
+    expect(limiter.peek("a")).toBe(0);
+  });
+
   it("allows the limit per minute per key, then says how long to wait", () => {
     let now = 0;
     const limiter = new RateLimiter(2, 60_000, 100, () => now);

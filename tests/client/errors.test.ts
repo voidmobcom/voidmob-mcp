@@ -233,12 +233,12 @@ describe("app connection refusals", () => {
     expect(mapApiError(err, { depositUrl: links.depositUrl, hosted: true })).toBe(expected);
   });
 
-  it("paused connected-app purchases without the reason (an older API): matched by shape", () => {
+  it("a write 503 on a connected app without the reason is not taken for the pause", () => {
     const err = new HttpError(503, "SERVICE_UNAVAILABLE", "req_3", undefined,
       "Purchases through connected apps are paused right now. Try again later.", { method: "POST", retryAfterSeconds: 300 });
     const text = mapApiError(err, links);
-    expect(text).toBe("Purchases through connected apps are paused right now, so nothing was charged. Try again later (in about 5 minutes) (request_id: req_3)");
-    expect(text).not.toMatch(/provider|Retry-After/i);
+    expect(text).toBe("Purchases through connected apps are paused right now. Try again later. (request_id: req_3)");
+    expect(text).not.toContain("nothing was charged");
   });
 
   it("a short throttle (retry_after_seconds) keeps the API's own message", () => {

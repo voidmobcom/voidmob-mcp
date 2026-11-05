@@ -234,13 +234,9 @@ export function mapApiError(err: unknown, links: ErrorLinks = DEFAULT_LINKS): st
       return `The order could not be completed, and its charge was refunded to your balance. You can retry${reqLine}`;
     case "SERVICE_UNAVAILABLE":
       // VoidMob paused buying through app connections: refused before
-      // anything ran. Matched by its reason; an API without the reason is
-      // matched by shape (the other 503, a short throttle, carries
-      // retry_after_seconds and keeps the API's own message).
-      if (
-        err.details?.reason === "connected_app_purchases_paused" ||
-        (write && links.connection?.kind === "oauth" && err.details?.retry_after_seconds === undefined)
-      ) {
+      // anything ran. Matched by its reason only; any other 503 keeps the
+      // API's own message.
+      if (err.details?.reason === "connected_app_purchases_paused") {
         const minutes = wait ? Math.max(1, Math.round(wait / 60)) : undefined;
         return (
           `Purchases through connected apps are paused right now, so nothing was charged. ` +

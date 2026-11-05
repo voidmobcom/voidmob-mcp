@@ -115,12 +115,12 @@ const isDedicatedProxy = (p: Proxy): boolean => p.type === "dedicated_standard" 
 
 // Deposit coins, with a fake USD price per coin to work out the amount to send.
 const DEPOSIT_COINS: Array<DepositCoin & { usd: number; decimals: number; confirmations: number }> = [
-  { coin: "btc", asset: "BTC", network: "Bitcoin", min_amount_cents: 1000, max_amount_cents: 1_000_000, usd: 60_000, decimals: 8, confirmations: 2 },
-  { coin: "eth", asset: "ETH", network: "Ethereum (ERC-20)", min_amount_cents: 1000, max_amount_cents: 1_000_000, usd: 3_000, decimals: 6, confirmations: 12 },
+  { coin: "btc", asset: "BTC", network: "Bitcoin", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 60_000, decimals: 8, confirmations: 2 },
+  { coin: "eth", asset: "ETH", network: "Ethereum (ERC-20)", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 3_000, decimals: 6, confirmations: 12 },
   { coin: "ltc", asset: "LTC", network: "Litecoin", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 80, decimals: 6, confirmations: 6 },
   { coin: "sol", asset: "SOL", network: "Solana", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 150, decimals: 6, confirmations: 1 },
-  { coin: "usdt_trc20", asset: "USDT", network: "Tron (TRC-20)", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 1, decimals: 2, confirmations: 20 },
-  { coin: "usdc_sol", asset: "USDC", network: "Solana", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 1, decimals: 2, confirmations: 1 },
+  { coin: "usdt_trc20", asset: "USDT", network: "Tron (TRC-20)", min_amount_cents: 5000, max_amount_cents: 1_000_000, usd: 1, decimals: 2, confirmations: 20 },
+  { coin: "usdc_sol", asset: "USDC", network: "Solana", min_amount_cents: 2500, max_amount_cents: 1_000_000, usd: 1, decimals: 2, confirmations: 1 },
 ];
 // Mirrors prod: a deposit's payment window is 60 minutes, and an account can
 // hold 8 deposits that still wait for a payment.
@@ -912,6 +912,14 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
     }
 
     // ── deposits ──
+    // A deposit nothing was paid to expires when its window ends, and then stops
+    // counting toward the open-deposit cap.
+    if (rawPath.startsWith("/v1/deposits")) {
+      const now = Date.now();
+      for (const { deposit } of db.deposits.values()) {
+        if (deposit.status === "awaiting_payment" && Date.parse(deposit.expires_at) <= now) deposit.status = "expired";
+      }
+    }
     if (rawPath === "/v1/deposit_coins" && method === "GET") {
       return ok({ coins: DEPOSIT_COINS.map(({ coin, asset, network, min_amount_cents, max_amount_cents }) => ({ coin, asset, network, min_amount_cents, max_amount_cents })) });
     }
@@ -955,7 +963,7 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
         credited_cents: 0,
         bonus_cents: 0,
         top_up: null,
-        url: `https://dashboard.voidmob.com/wallet?deposit=${id}`,
+        url: "https://voidmob.com/mcp",
         expires_at: iso(DEPOSIT_WINDOW_MS),
         created_at: iso(),
         credited_at: null,

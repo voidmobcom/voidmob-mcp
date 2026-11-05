@@ -15,6 +15,8 @@ export class RateLimiter {
    * Returns 0 when they fit, else the seconds to wait (nothing is counted).
    */
   hit(key: string, cost = 1): number {
+    const wait = this.peek(key, cost);
+    if (wait > 0) return wait;
     const t = this.now();
     let w = this.windows.get(key);
     if (!w || t - w.start >= this.windowMs) {
@@ -26,8 +28,16 @@ export class RateLimiter {
       w = { start: t, count: 0 };
       this.windows.set(key, w);
     }
-    if (w.count + cost > this.limit) return Math.max(1, Math.ceil((w.start + this.windowMs - t) / 1000));
     w.count += cost;
+    return 0;
+  }
+
+  /** Like `hit`, but counts nothing: the seconds to wait, or 0 when `cost` would fit. */
+  peek(key: string, cost = 1): number {
+    const t = this.now();
+    const w = this.windows.get(key);
+    const count = w && t - w.start < this.windowMs ? w.count : 0;
+    if (count + cost > this.limit) return Math.max(1, Math.ceil(((w?.start ?? t) + this.windowMs - t) / 1000));
     return 0;
   }
 }

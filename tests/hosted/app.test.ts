@@ -604,6 +604,34 @@ describe("OAuth forwards", () => {
     expect((await app.fetch(mcpPost(null, ip))).status).toBe(429);
   });
 
+  it("a forward the IP's /mcp ceiling refuses does not use up the path's budget, and the reverse", async () => {
+    stubUpstream({ oauth: () => Response.json({ ok: true }) });
+    const ip = "203.0.113.70";
+    const headers = { "cf-connecting-ip": ip };
+    const token = () => app.fetch(req("/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: "a=b" }));
+
+    const tokenLimiter = new RateLimiter(2);
+    const ceiling = new RateLimiter(2);
+    const { app } = makeApp({}, { forwardLimiters: { "/token": tokenLimiter }, mcpIpLimiter: ceiling });
+    expect((await app.fetch(mcpPost(null, headers))).status).not.toBe(429);
+    expect((await app.fetch(mcpPost(null, headers))).status).not.toBe(429);
+    for (let i = 0; i < 3; i++) expect((await token()).status).toBe(429);
+    // Nothing was counted on /token: both of its slots are still free.
+    expect(tokenLimiter.peek(ip)).toBe(0);
+    expect(tokenLimiter.peek(ip, 2)).toBe(0);
+    expect(tokenLimiter.peek(ip, 3)).toBeGreaterThan(0);
+
+    const tight = new RateLimiter(1);
+    const roomy = new RateLimiter(3);
+    const second = makeApp({}, { forwardLimiters: { "/token": tight }, mcpIpLimiter: roomy });
+    const call = () => second.app.fetch(req("/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: "a=b" }));
+    expect((await call()).status).toBe(200);
+    expect((await call()).status).toBe(429);
+    // Only the first forward counted on the ceiling.
+    expect(roomy.peek(ip, 2)).toBe(0);
+    expect(roomy.peek(ip, 3)).toBeGreaterThan(0);
+  });
+
   it("answers 503 when the dashboard cannot be reached, and 405 for the wrong method", async () => {
     vi.stubGlobal("fetch", async () => {
       throw new TypeError("fetch failed");

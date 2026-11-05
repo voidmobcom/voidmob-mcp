@@ -1,7 +1,7 @@
 // create_deposit and get_deposit: the request (body, a new Idempotency-Key per
 // call, the 45 s timeout), the text for each deposit status, the coins and
 // newest deposits, the deposit-specific error texts, and the sandbox flow.
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import type { HttpClient } from "../../src/client/http.js";
 import { HttpError, NetworkError } from "../../src/client/http.js";
 import type { Deposit } from "../../src/client/types.js";
@@ -190,6 +190,30 @@ describe("get_deposit with a deposit_id", () => {
     expect(closed).not.toContain("Payment link");
   });
 
+  it("underpaid with nothing credited yet never says the money arrived on the balance", async () => {
+    const until = "2026-11-03T13:30:00.000Z";
+    const open = await read(deposit({
+      status: "underpaid", received_cents: 1500, credited_cents: 0, top_up: { crypto_amount: "0.06250000", until },
+    }));
+    expect(open).toContain("Less arrived than the deposit asked for, and nothing is credited yet. To complete it, send 0.06250000 LTC more");
+    expect(open).not.toContain("was credited");
+    const closed = await read(deposit({ status: "underpaid", received_cents: 1500, credited_cents: 0, top_up: null, payment_uri: null }));
+    expect(closed).toContain("Less arrived than the deposit asked for, and nothing is credited yet. This deposit takes no more payments: for the rest, create a new deposit.");
+    expect(closed).not.toContain("was credited");
+  });
+
+  it("underpaid with something credited says how much", async () => {
+    const closed = await read(deposit({ status: "underpaid", received_cents: 1500, credited_cents: 1500, top_up: null, payment_uri: null }));
+    expect(closed).toContain("Less arrived than the deposit asked for, and what arrived was credited ($15.00). This deposit takes no more payments");
+  });
+
+  it("a deadline already past says it ended, not that time is left", async () => {
+    const past = "2020-01-01T00:00:00.000Z";
+    const text = await read(deposit({ status: "awaiting_payment", expires_at: past }));
+    expect(text).toContain(`Pay before:     ${past} (ended)`);
+    expect(text).not.toContain("left)");
+  });
+
   it("credited: the credited amount and any bonus", async () => {
     const text = await read(deposit({
       status: "credited", received_cents: 2000, credited_cents: 2000, bonus_cents: 1000, credited_at: "2026-11-03T12:20:00.000Z",
@@ -277,6 +301,10 @@ describe("get_deposit without a deposit_id", () => {
   });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("sandbox deposit flow", () => {
   it("a fake address and no payment link; the first read says confirming, the second credited and the balance goes up", async () => {
     const http = createSandboxHttpClient();
@@ -284,7 +312,7 @@ describe("sandbox deposit flow", () => {
     const balance = async () => ((await http.request("GET", "/v1/me")).body as any).data;
     const before = await balance();
 
-    const created = await createDepositHandler(ctx)({ coin: "usdt_trc20", amount_cents: 2500 });
+    const created = await createDepositHandler(ctx)({ coin: "usdc_sol", amount_cents: 2500 });
     expect(created.isError ?? false, textOf(created)).toBe(false);
     const d = sc(created).deposit;
     expect(d.id).toMatch(/^dep_[0-9a-f-]{36}$/);
@@ -322,11 +350,53 @@ describe("sandbox deposit flow", () => {
   it("refuses an unknown coin, an amount under the coin's minimum and a ninth open deposit like the API", async () => {
     const ctx = toolContext(createSandboxHttpClient());
     expect(textOf(await createDepositHandler(ctx)({ coin: "doge", amount_cents: 2000 }))).toContain("Unknown coin 'doge'.");
-    expect(textOf(await createDepositHandler(ctx)({ coin: "btc", amount_cents: 500 }))).toContain("minimum deposit of $10.00 (amount_cents 1000)");
+    expect(textOf(await createDepositHandler(ctx)({ coin: "btc", amount_cents: 499 }))).toContain("minimum deposit of $5.00 (amount_cents 500)");
+    expect(textOf(await createDepositHandler(ctx)({ coin: "usdt_trc20", amount_cents: 2000 }))).toContain("minimum deposit of $50.00 (amount_cents 5000)");
+    expect(textOf(await createDepositHandler(ctx)({ coin: "usdc_sol", amount_cents: 2499 }))).toContain("minimum deposit of $25.00 (amount_cents 2500)");
     for (let i = 0; i < 8; i++) {
       expect((await createDepositHandler(ctx)({ coin: "ltc", amount_cents: 1000 })).isError ?? false).toBe(false);
     }
     expect(textOf(await createDepositHandler(ctx)({ coin: "ltc", amount_cents: 1000 }))).toContain("already has 8 open deposits");
+  });
+});
+
+describe("sandbox deposit details", () => {
+  it("carries a non-wallet url and the coin minimums of prod", async () => {
+    const ctx = toolContext(createSandboxHttpClient());
+    const created = await createDepositHandler(ctx)({ coin: "ltc", amount_cents: 2000 });
+    expect(sc(created).deposit.url).toBe("https://voidmob.com/mcp");
+    const coins: Record<string, number> = Object.fromEntries(sc(await getDepositHandler(ctx)({})).coins.map((c: any) => [c.coin, c.min_amount_cents]));
+    expect(coins).toMatchObject({ btc: 500, eth: 500, sol: 500, ltc: 500, usdc_sol: 2500, usdt_trc20: 5000 });
+  });
+
+  it("an unpaid deposit expires when its window ends and stops counting toward the open cap", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-05T12:00:00.000Z"));
+    const ctx = toolContext(createSandboxHttpClient());
+    const ids: string[] = [];
+    for (let i = 0; i < 8; i++) ids.push(sc(await createDepositHandler(ctx)({ coin: "ltc", amount_cents: 1000 })).deposit.id);
+    expect(textOf(await createDepositHandler(ctx)({ coin: "ltc", amount_cents: 1000 }))).toContain("already has 8 open deposits");
+
+    vi.setSystemTime(new Date("2026-11-05T13:00:01.000Z"));
+    const read = await getDepositHandler(ctx)({ deposit_id: ids[0] });
+    expect(sc(read).deposit.status).toBe("expired");
+    expect(textOf(read)).toContain("The payment window ended with nothing received.");
+    // The cap frees up, and the listing agrees.
+    expect((await createDepositHandler(ctx)({ coin: "ltc", amount_cents: 1000 })).isError ?? false).toBe(false);
+    const listed = sc(await getDepositHandler(ctx)({})).deposits as Deposit[];
+    expect(listed.filter((d) => d.status === "awaiting_payment")).toHaveLength(1);
+    expect(listed.filter((d) => d.status === "expired").length).toBeGreaterThan(0);
+    expect(listed.every((d) => d.status === "awaiting_payment" || d.status === "expired")).toBe(true);
+  });
+
+  it("a deposit already being confirmed does not expire", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-05T12:00:00.000Z"));
+    const ctx = toolContext(createSandboxHttpClient());
+    const id = sc(await createDepositHandler(ctx)({ coin: "ltc", amount_cents: 1000 })).deposit.id;
+    expect(sc(await getDepositHandler(ctx)({ deposit_id: id })).deposit.status).toBe("confirming");
+    vi.setSystemTime(new Date("2026-11-05T14:00:00.000Z"));
+    expect(sc(await getDepositHandler(ctx)({ deposit_id: id })).deposit.status).toBe("credited");
   });
 });
 

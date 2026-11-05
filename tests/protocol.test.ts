@@ -86,7 +86,7 @@ describe("structuredContent matches outputSchema for every tool (sandbox)", () =
     await call("list_orders");
     await call("list_orders", { kind: "verification", status: "cancelled", limit: 5 });
     await call("get_deposit");
-    const dep = sc(await call("create_deposit", { coin: "usdt_trc20", amount_cents: 2000 })).deposit.id;
+    const dep = sc(await call("create_deposit", { coin: "ltc", amount_cents: 2000 })).deposit.id;
     await call("get_deposit", { deposit_id: dep }); // confirming
     await call("get_deposit", { deposit_id: dep }); // credited
 

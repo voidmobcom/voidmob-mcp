@@ -44,14 +44,16 @@ export const IP_MESSAGES_PER_MINUTE = 600;
  */
 export const CREDENTIAL_MESSAGES_PER_MINUTE = 600;
 /**
- * Per-IP limits on the OAuth steps the MCP host forwards, at or below the
- * dashboard's own: it sees this server's address for every forwarded call, so
- * one flood here must not use up its buckets for everyone else.
+ * Per-IP limits on the OAuth steps the MCP host forwards, at the dashboard's
+ * own for /token and /register (300 a minute, 300 an hour): it sees this
+ * server's address for every forwarded call, so one flood here must not use up
+ * its buckets for everyone else, and honest users behind one egress address
+ * are not throttled harder than they would be directly.
  */
 export const FORWARD_LIMITS = {
   "/authorize": { limit: 120, windowMs: 60_000 },
-  "/token": { limit: 60, windowMs: 60_000 },
-  "/register": { limit: 30, windowMs: 3_600_000 },
+  "/token": { limit: 300, windowMs: 60_000 },
+  "/register": { limit: 300, windowMs: 3_600_000 },
 } as const;
 type ForwardPath = keyof typeof FORWARD_LIMITS;
 
@@ -319,11 +321,16 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
     ]),
   ) as Record<ForwardPath, RateLimiter>;
   // Each forward counts once on its own limit and once on the IP's /mcp
-  // ceiling. No client-IP header goes upstream: the dashboard trusts none.
+  // ceiling, and only when both have room: a refusal by one leaves the other
+  // untouched. No client-IP header goes upstream: the dashboard trusts none.
   const forwardRefused = (path: ForwardPath, request: Request): Response | undefined => {
     const ip = clientIp(request);
-    const wait = forwardLimiters[path].hit(ip) || mcpIpLimiter.hit(ip);
-    if (wait === 0) return undefined;
+    const wait = Math.max(forwardLimiters[path].peek(ip), mcpIpLimiter.peek(ip));
+    if (wait === 0) {
+      forwardLimiters[path].hit(ip);
+      mcpIpLimiter.hit(ip);
+      return undefined;
+    }
     return json(
       429,
       { error: "temporarily_unavailable", error_description: "Too many requests. Try again later." },

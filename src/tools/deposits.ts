@@ -50,7 +50,10 @@ const STATUS_LABEL: Record<DepositStatus, string> = {
 const takesPayment = (d: DepositT): boolean => d.status === "awaiting_payment" || (d.status === "underpaid" && d.top_up !== null);
 
 const sendLine = (d: DepositT): string => `${d.crypto_amount} ${d.asset} on the ${d.network} network`;
-const deadline = (iso: string): string => `${iso} (${formatTimeRemaining(new Date(iso).getTime())} left)`;
+const deadline = (iso: string): string => {
+  const at = new Date(iso).getTime();
+  return at > Date.now() ? `${iso} (${formatTimeRemaining(at)} left)` : `${iso} (ended)`;
+};
 
 /** The lines that say where and how much to pay, for a deposit awaiting payment. */
 function payLines(d: DepositT): string[] {
@@ -91,7 +94,10 @@ export function renderDeposit(d: DepositT, sandbox = false): string {
       lines.push(``, `A payment was seen and is being confirmed${count}. The balance goes up once it confirms; check again in a few minutes.`);
       break;
     }
-    case "underpaid":
+    case "underpaid": {
+      const shortfall = d.credited_cents > 0
+        ? `Less arrived than the deposit asked for, and what arrived was credited (${formatUsd(d.credited_cents)}).`
+        : `Less arrived than the deposit asked for, and nothing is credited yet.`;
       lines.push(`  Received:       ${formatUsd(d.received_cents)}`, `  Credited:       ${credited}`);
       if (d.top_up) {
         lines.push(
@@ -102,12 +108,13 @@ export function renderDeposit(d: DepositT, sandbox = false): string {
           ...(d.payment_uri ? [`  Payment link:   ${d.payment_uri}`] : []),
           `  Until:          ${deadline(d.top_up.until)}`,
           ``,
-          `Less arrived than the deposit asked for, and what arrived was credited. To complete it, send ${d.top_up.crypto_amount} ${d.asset} more on the ${d.network} network to the same address until ${d.top_up.until}.`,
+          `${shortfall} To complete it, send ${d.top_up.crypto_amount} ${d.asset} more on the ${d.network} network to the same address until ${d.top_up.until}.`,
         );
       } else {
-        lines.push(``, `Less arrived than the deposit asked for, and what arrived was credited. This deposit takes no more payments: for the rest, create a new deposit.`);
+        lines.push(``, `${shortfall} This deposit takes no more payments: for the rest, create a new deposit.`);
       }
       break;
+    }
     case "credited":
       lines.push(`  Credited:       ${credited}`, `  First credit:   ${d.credited_at ?? "-"}`, ``, `Paid in full: the amount is on the balance (any extra was credited too).`);
       break;
@@ -259,7 +266,7 @@ export function registerDepositTools(server: McpServer, ctx: ToolContext) {
       "Keep at most one open deposit: check get_deposit first and reuse one that still takes payments. " +
       "After a purchase is refused for a low balance, offer a deposit rather than creating one.",
     inputSchema: {
-      coin: z.string().min(2).max(40).describe("Coin id from get_deposit (e.g. 'usdt_trc20', 'btc', 'ltc')"),
+      coin: z.string().min(2).max(40).describe("Coin id from get_deposit (e.g. 'ltc', 'btc', 'usdt_trc20')"),
       amount_cents: z.number().int().min(1).max(1_000_000).describe(
         "Amount to add in US cents (2000 = $20.00). Each coin has a minimum (get_deposit lists them).",
       ),
