@@ -8,5 +8,5 @@ import { createVoidmobServer } from "../server.js";
 // identical to live by construction - it cannot drift. Owner controls apply
 // here exactly as in live mode.
 export function buildSandboxServer(controls: OwnerControls = DEFAULT_CONTROLS): McpServer {
-  return createVoidmobServer(createSandboxHttpClient(), controls);
+  return createVoidmobServer(createSandboxHttpClient(), controls, null, { sandbox: true });
 }

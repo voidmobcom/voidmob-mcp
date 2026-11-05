@@ -524,7 +524,7 @@ describe("OAuth forwards", () => {
   it("POST /token and /register pass body, content type and client auth through, and return the upstream answer", async () => {
     const up = stubUpstream({
       oauth: (url) => url.endsWith("/oauth/token")
-        ? Response.json({ error: "invalid_grant" }, { status: 400, headers: { "www-authenticate": "Basic" } })
+        ? Response.json({ error: "invalid_grant" }, { status: 400, headers: { "www-authenticate": "Basic", pragma: "no-cache" } })
         : Response.json({ client_id: "c_new" }, { status: 201 }),
     });
     const { app, lines } = makeApp();
@@ -537,6 +537,7 @@ describe("OAuth forwards", () => {
     expect(token.status).toBe(400);
     expect(token.headers.get("content-type")).toContain("application/json");
     expect(token.headers.get("cache-control")).toBe("no-store");
+    expect(token.headers.get("pragma")).toBe("no-cache");
     expect(token.headers.get("www-authenticate")).toBe("Basic");
     expect(await token.json()).toEqual({ error: "invalid_grant" });
 

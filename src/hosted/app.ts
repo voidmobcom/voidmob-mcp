@@ -258,7 +258,7 @@ async function forward(request: Request, target: string, cors = false): Promise<
     return json(503, { error: "temporarily_unavailable", error_description: "Sign-in is unavailable right now. Try again shortly." });
   }
   const out = new Headers({ "Cache-Control": "no-store", ...(cors ? CORS : {}) });
-  for (const name of ["content-type", "www-authenticate", "retry-after"]) {
+  for (const name of ["content-type", "www-authenticate", "retry-after", "pragma"]) {
     const value = upstream.headers.get(name);
     if (value) out.set(name, value);
   }
@@ -394,8 +394,8 @@ export function createHostedApp(cfg: HostedConfig, deps: HostedDeps = {}): Hoste
     if (!requestInfo) throw new Error("no request on a sandbox request");
     const token = sandboxToken(requestInfo);
     return token
-      ? createVoidmobServer(sandboxes.get(token), DEFAULT_CONTROLS, null, { hosted: true })
-      : createVoidmobServer(createSandboxHttpClient(), DEFAULT_CONTROLS, null, { hosted: true, statelessSandbox: { playgroundUrl } });
+      ? createVoidmobServer(sandboxes.get(token), DEFAULT_CONTROLS, null, { hosted: true, sandbox: true })
+      : createVoidmobServer(createSandboxHttpClient(), DEFAULT_CONTROLS, null, { hosted: true, sandbox: true, statelessSandbox: { playgroundUrl } });
   };
 
   // Stateless: 2025-era clients are served per request (legacy: "stateless"),

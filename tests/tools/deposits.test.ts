@@ -280,7 +280,7 @@ describe("get_deposit without a deposit_id", () => {
 describe("sandbox deposit flow", () => {
   it("a fake address and no payment link; the first read says confirming, the second credited and the balance goes up", async () => {
     const http = createSandboxHttpClient();
-    const ctx = toolContext(http);
+    const ctx = createToolContext(http, DEFAULT_CONTROLS, null, { sandbox: true });
     const balance = async () => ((await http.request("GET", "/v1/me")).body as any).data;
     const before = await balance();
 
@@ -292,8 +292,14 @@ describe("sandbox deposit flow", () => {
     expect(d.payment_uri).toBeNull();
     expect(d.status).toBe("awaiting_payment");
     expect(textOf(created)).not.toContain("Payment link");
+    // No payment window to send anyone to: the address is fake and the dashboard has no such deposit
+    expect(textOf(created)).toContain("Payment window: none in the sandbox (the address is fake and nothing can be paid).");
+    expect(textOf(created)).not.toContain("wallet?deposit=");
+    expect(textOf(created)).not.toContain("check the address here");
 
     const first = await getDepositHandler(ctx)({ deposit_id: d.id });
+    expect(textOf(first)).toContain("Payment window: none in the sandbox");
+    expect(textOf(first)).not.toContain("wallet?deposit=");
     expect(sc(first).deposit.status).toBe("confirming");
     expect((await balance()).balance.amount_cents).toBe(before.balance.amount_cents);
 
@@ -321,5 +327,17 @@ describe("sandbox deposit flow", () => {
       expect((await createDepositHandler(ctx)({ coin: "ltc", amount_cents: 1000 })).isError ?? false).toBe(false);
     }
     expect(textOf(await createDepositHandler(ctx)({ coin: "ltc", amount_cents: 1000 }))).toContain("already has 8 open deposits");
+  });
+});
+
+describe("sandbox servers say there is no payment window", () => {
+  it("the local sandbox server (VOIDMOB_SANDBOX) marks its tool context as sandbox", async () => {
+    const { buildSandboxServer } = await import("../../src/modes/sandbox.js");
+    const { connect } = await import("../connect.js");
+    const client = await connect(buildSandboxServer());
+    const res = (await client.callTool({ name: "create_deposit", arguments: { coin: "ltc", amount_cents: 1000 } })) as ToolResult;
+    expect(textOf(res)).toContain("Payment window: none in the sandbox");
+    expect(textOf(res)).not.toContain("wallet?deposit=");
+    await client.close();
   });
 });

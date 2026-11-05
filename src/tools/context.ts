@@ -41,6 +41,8 @@ export interface ToolContext {
   hosted: boolean;
   /** The hosted bare /sandbox, which keeps no state between calls; null everywhere else. */
   statelessSandbox: { playgroundUrl: string } | null;
+  /** Mock data (local VOIDMOB_SANDBOX or the hosted /sandbox): nothing real to pay or open. */
+  sandbox: boolean;
 }
 
 /** How the server is run. */
@@ -49,6 +51,8 @@ export interface ServeOptions {
   hosted?: boolean;
   /** The hosted bare /sandbox, which keeps no state between calls; the instructions point at a persistent playground URL. */
   statelessSandbox?: { playgroundUrl: string };
+  /** Mock data: deposit addresses are fake and have no payment window. */
+  sandbox?: boolean;
 }
 
 export function createToolContext(
@@ -75,6 +79,7 @@ export function createToolContext(
     settingsUrl: settingsUrlFor(connection),
     hosted: options.hosted === true,
     statelessSandbox: options.statelessSandbox ?? null,
+    sandbox: options.sandbox === true,
   };
 }
 

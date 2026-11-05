@@ -63,8 +63,17 @@ function payLines(d: DepositT): string[] {
   ];
 }
 
+/**
+ * Where the user checks the address. The sandbox has no payment window: its
+ * addresses are fake and the dashboard holds no such deposit.
+ */
+function windowLine(d: DepositT, sandbox: boolean): string {
+  if (sandbox) return "Payment window: none in the sandbox (the address is fake and nothing can be paid).";
+  return `Payment window: ${d.url}${takesPayment(d) ? " (you can check the address here)" : ""}`;
+}
+
 /** A deposit's details and what to do next, by status. */
-export function renderDeposit(d: DepositT): string {
+export function renderDeposit(d: DepositT, sandbox = false): string {
   const lines = [
     `Deposit ${d.id}: ${STATUS_LABEL[d.status]}`,
     ``,
@@ -106,7 +115,7 @@ export function renderDeposit(d: DepositT): string {
       lines.push(``, `The payment window ended with nothing received. Don't send to this deposit; create a new one. If a payment arrives anyway, it is credited once it confirms.`);
       break;
   }
-  lines.push(``, `Payment window: ${d.url}${takesPayment(d) ? " (you can check the address here)" : ""}`);
+  lines.push(``, windowLine(d, sandbox));
   return lines.join("\n");
 }
 
@@ -166,7 +175,7 @@ export const createDepositHandler = (ctx: ToolContext) =>
       ...payLines(d),
       ``,
       `Any extra is credited to your balance. Nothing is charged: the balance goes up once the payment confirms.`,
-      `Payment window: ${d.url} (you can check the address here)`,
+      windowLine(d, ctx.sandbox),
       `Check progress with get_deposit (deposit_id ${d.id}).`,
     ].join("\n");
     return structuredOk(text, { deposit: d });
@@ -212,7 +221,7 @@ export const getDepositHandler = (ctx: ToolContext) =>
         throw e;
       }
       const d = Deposit.parse(raw.deposit);
-      return structuredOk(renderDeposit(d), { deposit: d });
+      return structuredOk(renderDeposit(d, ctx.sandbox), { deposit: d });
     }
 
     let coins: z.infer<typeof Coins>;
