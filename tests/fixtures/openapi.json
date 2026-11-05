@@ -4,7 +4,7 @@
     "title": "VoidMob Public API",
     "version": "1.0.0",
     "summary": "SMS verifications, mobile proxies, and webhooks for programmatic use.",
-    "description": "The VoidMob Public API (`/api/v1`) exposes the same surface that powers the\ndashboard - SMS verifications, mobile/GB proxy provisioning, real-time\nbalance, and outbound webhooks - under a stable, programmatic contract.\n\nRunning higher volumes? Custom pricing is available -\n[contact us](https://voidmob.com/contact).\n\n## Conventions\n\n- **Base URL:** `https://dashboard.voidmob.com/api/v1`\n- **Authentication:** Bearer token. Issue keys from\n  [Developers - API Keys](https://dashboard.voidmob.com/developers/api-keys).\n  Live keys are prefixed `vmk_live_`.\n- **Money:** all monetary values are **USD cents** as integers. The API\n  never returns floats for money.\n- **Identifiers:** every public id has a stable prefix (`svc_`, `ver_`,\n  `ren_`, `prx_`, `plan_`, `pool_`, `list_`, `whep_`, `esim_`, `prod_`,\n  `dep_`, `evt_`). Treat them as opaque.\n- **Envelopes:** every JSON response is either\n  `{ \"success\": true, \"data\": ... }` or\n  `{ \"success\": false, \"error\": { code, message, docs_url, request_id, details? } }`.\n- **Idempotency:** order-creating and money-moving POST / PATCH / DELETE\n  requests require an `Idempotency-Key` header (any string up to 255\n  chars) - see each operation's parameters for whether it is required.\n  Lighter-weight management calls (webhook-endpoint create/delete,\n  auto-renew toggle, dedicated IP rotation) do not. Re-sending the same\n  key with the same body replays the original response; a different body\n  returns `409 IDEMPOTENCY_CONFLICT`.\n- **Rate limits:** every response carries `X-RateLimit-Limit`,\n  `X-RateLimit-Remaining`, and `X-RateLimit-Reset` (unix seconds). 429s\n  additionally carry `Retry-After`.\n- **Pricing:** SMS prices drift between catalog and create. Send\n  `max_price_cents` to cap how much you authorize; if the lowest\n  available price is above that cap, the API returns `409 PRICE_OVER_CAP`\n  with both your cap and the current price in the error details. No\n  partial state is created. See `verifications` and `rentals`.\n",
+    "description": "The VoidMob Public API (`/api/v1`) exposes the same surface that powers the\ndashboard - SMS verifications, mobile/GB proxy provisioning, real-time\nbalance, and outbound webhooks - under a stable, programmatic contract.\n\nRunning higher volumes? Custom pricing is available -\n[contact us](https://voidmob.com/contact).\n\n## Conventions\n\n- **Base URL:** `https://dashboard.voidmob.com/api/v1`\n- **Authentication:** Bearer token. Issue keys from\n  [Developers - API Keys](https://dashboard.voidmob.com/developers/api-keys).\n  Live keys are prefixed `vmk_live_`.\n- **Money:** all monetary values are **USD cents** as integers. The API\n  never returns floats for money.\n- **Identifiers:** every public id has a stable prefix (`svc_`, `ver_`,\n  `ren_`, `prx_`, `plan_`, `pool_`, `list_`, `whep_`, `esim_`, `prod_`,\n  `dep_`, `evt_`). Treat them as opaque.\n- **Envelopes:** every JSON response is either\n  `{ \"success\": true, \"data\": ... }` or\n  `{ \"success\": false, \"error\": { code, message, docs_url, request_id, details? } }`.\n- **Idempotency:** order-creating and money-moving POST / PATCH / DELETE\n  requests require an `Idempotency-Key` header (any string up to 255\n  chars) - see each operation's parameters for whether it is required.\n  Lighter-weight management calls (webhook-endpoint create/delete,\n  auto-renew toggle, dedicated IP rotation) do not. Re-sending the same\n  key with the same body replays the original response; a different body\n  returns `409 IDEMPOTENCY_CONFLICT`.\n- **Rate limits:** every response carries `X-RateLimit-Limit`,\n  `X-RateLimit-Remaining`, and `X-RateLimit-Reset` (unix seconds). 429s\n  additionally carry `Retry-After`.\n- **Pricing:** SMS prices drift between catalog and create. Send\n  `max_price_cents` to cap how much you authorize; if the lowest\n  available price is above that cap, the API returns `409 PRICE_OVER_CAP`\n  with both your cap and the current price in the error details. No\n  partial state is created. See `verifications` and `rentals`.\n- **Permission levels:** every key has a level - View (reads), Manage\n  (also changes that don't spend, and turning auto-renew off) or Buy\n  (also every purchase, and turning auto-renew on). A call above the\n  key's level returns `403 PERMISSION_DENIED` with `details.permission`,\n  `details.required_permission` and `details.settings_url`. Existing keys\n  are Buy.\n- **Optional spending limits:** the owner can set a maximum per order and\n  a daily limit (rolling 24 hours, net of refunds) on a key. Both are off\n  by default. A refused order returns `402 ORDER_LIMIT_EXCEEDED` or\n  `402 DAILY_SPEND_CAP_EXCEEDED` with `details.limit_cents`,\n  `details.remaining_cents` (the largest single order allowed right now)\n  and `details.settings_url`. Nothing is charged. Retry with a new\n  `Idempotency-Key`. Cron auto-renewals are never counted. `GET /v1/me`\n  returns the key's level, limits and spend.\n- **Connected apps:** people connect apps to their account through the\n  hosted MCP server (`https://mcp.voidmob.com/mcp`) with a VoidMob sign-in.\n  An app gets a connection with its own level and limits, and acts through\n  this API. A connection can never turn auto-renew on, create IP-whitelist\n  proxy lists or register webhook endpoints (`403 PERMISSION_DENIED`,\n  `details.reason: connection_not_allowed`). The authorization server\n  metadata is at `/.well-known/oauth-authorization-server`; MCP clients\n  handle the sign-in themselves.\n",
     "contact": {
       "name": "VoidMob",
       "url": "https://voidmob.com",
@@ -92,7 +92,7 @@
           "Account"
         ],
         "summary": "Get the authenticated account snapshot",
-        "description": "Returns the caller's user id, wallet balance, per-endpoint-group\nrate-limit ceilings, and account-created timestamp. Cacheable for 5\nseconds with `ETag` / `If-None-Match`.\n",
+        "description": "Returns the caller's user id, wallet balance, per-endpoint-group\nrate-limit ceilings, and account-created timestamp. Cacheable for 5\nseconds with `ETag` / `If-None-Match`.\n\nThe `key` block describes the API key or connected app making the call:\nits permission level, optional spending limits and spend over the last\n24 hours. `deposit_url` is where the owner adds funds.\n",
         "parameters": [
           {
             "$ref": "#/components/parameters/IfNoneMatch"
@@ -2934,7 +2934,7 @@
           "Proxies"
         ],
         "summary": "Re-buy the plan on a package (adds a full plan of GB and one period)",
-        "description": "Adds one full plan allocation of GB on top of whatever is left and\nextends `expires_at` by one plan period (from now if the package had\nalready lapsed). Accepted on `active`, `exhausted`, and `expired`\npackages within 7 days of expiry; the package is `active` afterwards\nand the traffic webhooks are re-armed. Charged at the plan's current\nprice; refunded automatically on failure.\n\nOn a pool-backed sub-order (`proxy.pool_id` set), renew instead\nre-allocates the sub-order's **original** GB and duration from the\npool - not one plan period - at no incremental wallet charge.\n`max_price_cents` is ignored. See the `Proxy pools` tag.\n\nOn a Standard dedicated proxy, renew extends an `active` proxy by one\nterm of its own plan, from the current `expires_at`, at the price it\nwas bought at with your current discount. `max_price_cents` is\nrequired and checked before charging. An expired dedicated proxy\ncannot be renewed (`409 PROXY_EXPIRED`); a Premium one returns\n`422 NOT_SUPPORTED`. `proxy.renewed` fires on success.\n\nOne renewal or top-up runs at a time on a mobile/GB package: a second\nrequest while one is in progress returns `409 PROXY_NOT_READY` (\"A\nrenewal or top-up is already in progress - try again in a moment.\")\nand charges nothing. A 4xx response is cached under its\n`Idempotency-Key`, so retry with a new key.\n",
+        "description": "Adds one full plan allocation of GB on top of whatever is left and\nextends `expires_at` by one plan period (from now if the package had\nalready lapsed). Accepted on `active`, `exhausted`, and `expired`\npackages within 7 days of expiry; the package is `active` afterwards\nand the traffic webhooks are re-armed. Charged at the plan's current\nprice; refunded automatically on failure.\n\nOn a pool-backed sub-order (`proxy.pool_id` set), renew instead\nre-allocates the sub-order's **original** GB and duration from the\npool - not one plan period - at no incremental wallet charge.\n`max_price_cents` is ignored. See the `Proxy pools` tag.\n\nOn a Standard dedicated proxy, renew extends an `active` proxy by one\nterm of its own plan, from the current `expires_at`, at the price it\nwas bought at with your current discount. `max_price_cents` is\nrequired and checked before charging. An expired dedicated proxy\ncannot be renewed (`409 PROXY_EXPIRED`); a Premium one returns\n`422 NOT_SUPPORTED`. `proxy.renewed` fires on success.\n\nOne renewal, extend or top-up runs at a time on a proxy, mobile/GB or\nStandard dedicated, an auto-renewal included: a request while another\nis in progress on it returns `409 PROXY_NOT_READY` (\"A renewal or\ntop-up is already in progress - try again in a moment.\") and charges\nnothing. A 4xx response is cached under its `Idempotency-Key`, so\nretry with a new key.\n",
         "parameters": [
           {
             "name": "id",
@@ -3003,7 +3003,7 @@
             "$ref": "#/components/responses/PROXY_NOT_FOUND"
           },
           "409": {
-            "description": "Conflict - PRICE_MISMATCH (catalog or dedicated), PROXY_EXPIRED / PROXY_NOT_READY (still provisioning, or another renewal or top-up on a mobile/GB package is in progress - nothing charged, retry with a new Idempotency-Key), or POOL_LAPSED / POOL_INSUFFICIENT_GB (pool-backed).",
+            "description": "Conflict - PRICE_MISMATCH (catalog or dedicated), PROXY_EXPIRED / PROXY_NOT_READY (still provisioning, or another renewal, extend or top-up is in progress on this proxy - nothing charged, retry with a new Idempotency-Key), or POOL_LAPSED / POOL_INSUFFICIENT_GB (pool-backed).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3028,7 +3028,7 @@
           "Proxies"
         ],
         "summary": "Turn auto-renew on or off for a Standard dedicated proxy",
-        "description": "Sets auto-renew to the given state. With auto-renew on, the proxy is\nrenewed for one more term of its plan about 12 hours before\n`expires_at`, charged to your wallet at the same price a manual renew\nwould charge; `proxy.renewed` fires when it lands. If your balance is\ntoo low it retries until expiry, then the proxy expires and\n`proxy.expired` fires.\n\nSetting the current state again is a no-op, so the call is safe to\nretry and needs no `Idempotency-Key`. Turning auto-renew on requires\nan `active` proxy; turning it off always succeeds. Mobile/GB\npackages and Premium dedicated proxies return `422 NOT_SUPPORTED`.\n",
+        "description": "Sets auto-renew to the given state. With auto-renew on, the proxy is\nrenewed for one more term of its plan about 6 hours before\n`expires_at`, charged to your wallet at the same price a manual renew\nwould charge; `proxy.renewed` fires when it lands. If your balance is\ntoo low it retries until expiry, then the proxy expires and\n`proxy.expired` fires.\n\nSetting the current state again is a no-op, so the call is safe to\nretry and needs no `Idempotency-Key`. Turning auto-renew on requires\nan `active` proxy; turning it off always succeeds. Mobile/GB\npackages and Premium dedicated proxies return `422 NOT_SUPPORTED`.\n",
         "parameters": [
           {
             "name": "id",
@@ -3124,7 +3124,7 @@
           "Proxies"
         ],
         "summary": "Add GB to a proxy package",
-        "description": "Priced by size, the same on every package whatever plan it was bought\non: 1 GB $3.99, 10 GB $35, 25 GB $81.25, 50 GB $149.50, 100 GB $250.\nAny other size is charged at the per-GB rate of the largest listed\nsize below it, but never more than the next listed size. Your discount\napplies; `proxy.topup_prices` has the exact charges. Accepted on\n`active`, `exhausted`, and `expired` packages within 7 days of expiry;\na successful top-up leaves the package `active` and re-arms the\n`proxy.traffic_low` / `proxy.traffic_exhausted` webhooks. Each GB adds\n3 days to the expiry (10 GB or more adds 30), from the current expiry\nor from now if the package had lapsed.\n\nOn a pool-backed sub-order (`proxy.pool_id` set), the GB is drawn from\nthe pool instead of the wallet and `max_price_cents` is ignored. See\nthe `Proxy pools` tag.\n\nDedicated proxies are unmetered and return `422 NOT_SUPPORTED`.\n\nOne renewal or top-up runs at a time on a mobile/GB package: a second\nrequest while one is in progress returns `409 PROXY_NOT_READY` (\"A\nrenewal or top-up is already in progress - try again in a moment.\")\nand charges nothing. A 4xx response is cached under its\n`Idempotency-Key`, so retry with a new key.\n",
+        "description": "Priced by size, the same on every package whatever plan it was bought\non: 1 GB $3.99, 10 GB $35, 25 GB $81.25, 50 GB $149.50, 100 GB $250.\nAny other size is charged at the per-GB rate of the largest listed\nsize below it, but never more than the next listed size. Your discount\napplies; `proxy.topup_prices` has the exact charges. Accepted on\n`active`, `exhausted`, and `expired` packages within 7 days of expiry;\na successful top-up leaves the package `active` and re-arms the\n`proxy.traffic_low` / `proxy.traffic_exhausted` webhooks. Each GB adds\n3 days to the expiry (10 GB or more adds 30), from the current expiry\nor from now if the package had lapsed.\n\nOn a pool-backed sub-order (`proxy.pool_id` set), the GB is drawn from\nthe pool instead of the wallet and `max_price_cents` is ignored. See\nthe `Proxy pools` tag.\n\nDedicated proxies are unmetered and return `422 NOT_SUPPORTED`.\n\nOne renewal, extend or top-up runs at a time on a proxy, an\nauto-renewal included: a request while another is in progress on it\nreturns `409 PROXY_NOT_READY` (\"A renewal or top-up is already in\nprogress - try again in a moment.\") and charges nothing. A 4xx\nresponse is cached under its `Idempotency-Key`, so retry with a new\nkey.\n",
         "parameters": [
           {
             "name": "id",
@@ -3193,7 +3193,7 @@
             "$ref": "#/components/responses/PROXY_NOT_FOUND"
           },
           "409": {
-            "description": "Conflict - PRICE_MISMATCH (catalog), PROXY_EXPIRED / PROXY_NOT_READY (still provisioning, or another renewal or top-up on a mobile/GB package is in progress - nothing charged, retry with a new Idempotency-Key), or POOL_LAPSED / POOL_INSUFFICIENT_GB (pool-backed).",
+            "description": "Conflict - PRICE_MISMATCH (catalog), PROXY_EXPIRED / PROXY_NOT_READY (still provisioning, or another renewal, extend or top-up is in progress on this proxy - nothing charged, retry with a new Idempotency-Key), or POOL_LAPSED / POOL_INSUFFICIENT_GB (pool-backed).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4045,7 +4045,7 @@
           "Deposits"
         ],
         "summary": "Create a crypto deposit",
-        "description": "Opens a deposit to the caller's own balance and returns the address and\nexact amount to send. Nothing is charged. Needs Manage access; app\nconnections may create deposits too.\n\nSend exactly `crypto_amount` of `asset` on `network` to `address` before\n`expires_at`. Any extra is credited too. Don't send to an expired\ndeposit; create a new one. If a payment arrives anyway, it is credited\nonce it confirms. `url` opens the deposit's payment window in the\ndashboard (QR code, countdown, and the address to check against).\n\nLimits per account, shared with the dashboard: 5 a minute\n(`429 RATE_LIMITED` with `Retry-After`), and a cap on open deposits and\non deposits created per day (`429 DEPOSIT_LIMIT_REACHED`, with\n`details.reason` and `details.limit`). An amount under the coin's\nminimum is `400 VALIDATION_ERROR` with `details.min_amount_cents`; see\n`GET /v1/deposit_coins`.\n\nIdempotent by `Idempotency-Key`: a replay returns the same deposit and\naddress. Every answer is cached under the key, so a retry after a\nrefusal needs a new key. The exception is `503 SERVICE_UNAVAILABLE`:\nno deposit was created, and the same key may retry.\n",
+        "description": "Opens a crypto deposit to the caller's own balance and returns the\naddress and exact amount to send. Nothing is charged. Needs Manage\naccess; app connections may create deposits too, and the money can only\nland in the account's own balance.\n\nSend exactly `crypto_amount` of `asset` on `network` to `address` before\n`expires_at`. Any extra is credited too. Don't send to an expired\ndeposit; create a new one. If a payment arrives anyway, it is credited\nonce it confirms. `url` opens the deposit's payment window in the\ndashboard (QR code, countdown, and the address to check against).\n\nLimits are per account and shared with the dashboard: a short\nper-minute limit (`429 RATE_LIMITED` with `Retry-After`), and a limit on\nopen deposits and on deposits created per day (`429\nDEPOSIT_LIMIT_REACHED`, with `details.reason` and `details.limit`, and\nno `Retry-After`). An amount under the coin's minimum is `400\nVALIDATION_ERROR` with `details.min_amount_cents`; see\n`GET /v1/deposit_coins`.\n\nIdempotent by `Idempotency-Key`: a replay returns the same deposit and\naddress, so a retry never opens a second one. A `429` or `503` created\nno deposit and is not kept under the key: retry with the same key\n(after `Retry-After` for `429 RATE_LIMITED`, once the limit clears for\n`DEPOSIT_LIMIT_REACHED`). A `500` may be retried with the same key too.\nA `400` is kept under the key: fix the request and send it with a new\nkey.\n",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -4112,7 +4112,7 @@
             }
           },
           "429": {
-            "description": "Too many requests - RATE_LIMITED (5 deposits a minute) or DEPOSIT_LIMIT_REACHED (open or daily deposits).",
+            "description": "Too many requests - RATE_LIMITED (the per-minute limit, with `Retry-After`) or DEPOSIT_LIMIT_REACHED (open or daily deposits, no `Retry-After`).",
             "headers": {
               "Retry-After": {
                 "$ref": "#/components/headers/Retry-After"
@@ -4216,6 +4216,7 @@
           "Deposits"
         ],
         "summary": "Get a deposit by id",
+        "description": "One of the caller's deposits, including ones made in the dashboard.\nPoll it until `status` is `credited` (or `underpaid`), or subscribe to\nthe `deposit.credited` webhook event. An unknown id, or one that belongs\nto another account, is `404 NOT_FOUND`.\n",
         "parameters": [
           {
             "name": "id",
@@ -4276,7 +4277,7 @@
           "Deposits"
         ],
         "summary": "List the coins a deposit can be made in",
-        "description": "Every coin `POST /v1/deposits` accepts, with the smallest and largest\ndeposit in each.\n",
+        "description": "Every coin `POST /v1/deposits` accepts, with the smallest and largest\ndeposit in each, in USD cents. Read the limits from here: they differ\nper coin and can change.\n",
         "responses": {
           "200": {
             "description": "The coins.",
@@ -6095,6 +6096,27 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/EsimEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Acknowledged."
+          }
+        }
+      }
+    },
+    "deposit.credited": {
+      "post": {
+        "operationId": "depositCreditedWebhook",
+        "summary": "Fired each time money from a deposit is credited to the balance.",
+        "description": "One event per credit: the first payment, each later payment on the\nsame deposit, and credits added by support, on any of the account's\ndeposits (made through the API or the dashboard).\nNot sent when support records an off-platform balance adjustment, which\nhas no deposit to show.\n\n`data.credit.amount_cents` is this credit and `data.credit.bonus_cents`\nthe welcome or promo bonus paid with it (0 if none). A bonus paid on\nits own arrives with `amount_cents` 0. `data.deposit` is the deposit\nas `GET /v1/deposits/{id}` returns it. The event carries no balance:\nread `GET /v1/me`.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepositCreditedEvent"
               }
             }
           }
@@ -8132,7 +8154,8 @@
           "esim.topup_added",
           "esim.expired",
           "esim.cancelled",
-          "esim.refunded"
+          "esim.refunded",
+          "deposit.credited"
         ]
       },
       "WebhookEndpoint": {
@@ -8975,11 +8998,11 @@
           "trx",
           "btc",
           "xmr",
+          "usdc_sol",
+          "usdc_erc20",
           "usdt_sol",
           "usdt_bep20",
-          "usdt_trc20",
-          "usdc_sol",
-          "usdc_erc20"
+          "usdt_trc20"
         ],
         "description": "A coin a new deposit can be made in. `GET /v1/deposit_coins` lists each with its asset, network and limits.",
         "example": "ltc"
@@ -9055,11 +9078,11 @@
               "trx",
               "btc",
               "xmr",
+              "usdc_sol",
+              "usdc_erc20",
               "usdt_sol",
               "usdt_bep20",
               "usdt_trc20",
-              "usdc_sol",
-              "usdc_erc20",
               "ton"
             ],
             "description": "The deposit's coin: one of the `DepositCoinId` values, or `ton`.\n`ton` is retired: it appears only on deposits made before Toncoin\nwas withdrawn, and a new deposit can't use it.\n",
@@ -9109,7 +9132,7 @@
           },
           "received_cents": {
             "type": "integer",
-            "description": "Confirmed payments in USD cents at the deposit's rate. 0 until a payment confirms."
+            "description": "What arrived, in USD cents at the deposit's rate, and at least what was credited. 0 until a payment confirms or is credited."
           },
           "credited_cents": {
             "type": "integer",
@@ -9187,6 +9210,29 @@
               "null"
             ],
             "description": "Pass as `cursor` in the next request to advance the page. Null on the last page."
+          }
+        }
+      },
+      "DepositCredit": {
+        "type": "object",
+        "description": "The credit that triggered a `deposit.credited` event.",
+        "required": [
+          "amount_cents",
+          "bonus_cents"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "This credit to the balance, in USD cents. 0 when the event is for a bonus paid on its own.",
+            "example": 2500
+          },
+          "bonus_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The welcome or promo bonus credited with it, in USD cents. 0 if none.",
+            "example": 0
           }
         }
       },
@@ -9332,7 +9378,7 @@
               },
               "details": {
                 "type": "object",
-                "description": "Optional structured payload. Present for PRICE_OVER_CAP (available_price_cents, max_price_cents), VALIDATION_ERROR (issues[]), and PROXY_GEO_CONFLICT (issues[]).",
+                "description": "Optional structured payload. Present for PRICE_OVER_CAP (available_price_cents, max_price_cents), VALIDATION_ERROR (issues[], or min_amount_cents on a deposit under the coin's minimum), PROXY_GEO_CONFLICT (issues[]), PERMISSION_DENIED (permission, required_permission, settings_url, or reason: connection_not_allowed), ORDER_LIMIT_EXCEEDED and DAILY_SPEND_CAP_EXCEEDED (limit_cents, remaining_cents, settings_url), DEPOSIT_LIMIT_REACHED (reason: open_deposits or daily_deposits, limit), and SERVICE_UNAVAILABLE (reason: connected_app_purchases_paused).",
                 "additionalProperties": true
               }
             }
@@ -9565,6 +9611,33 @@
             }
           }
         ]
+      },
+      "DepositCreditedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EventBase"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "data": {
+                "type": "object",
+                "required": [
+                  "deposit",
+                  "credit"
+                ],
+                "properties": {
+                  "deposit": {
+                    "$ref": "#/components/schemas/Deposit"
+                  },
+                  "credit": {
+                    "$ref": "#/components/schemas/DepositCredit"
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "headers": {
@@ -9758,13 +9831,39 @@
             "schema": {
               "$ref": "#/components/schemas/ErrorEnvelope"
             },
-            "example": {
-              "success": false,
-              "error": {
-                "code": "PERMISSION_DENIED",
-                "message": "This key's permission level does not allow this action.",
-                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#permission_denied",
-                "request_id": "req_01HXYZ123456789ABCDEFG"
+            "examples": {
+              "permission_level": {
+                "summary": "The key's level is below what the call needs",
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "PERMISSION_DENIED",
+                    "message": "This API key has View access. This action needs Buy access.",
+                    "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#permission_denied",
+                    "request_id": "req_01HXYZ123456789ABCDEFG",
+                    "details": {
+                      "permission": "view",
+                      "required_permission": "buy",
+                      "settings_url": "https://dashboard.voidmob.com/developers/api-keys"
+                    }
+                  }
+                }
+              },
+              "connection_not_allowed": {
+                "summary": "A connected app tried something apps can never do",
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "PERMISSION_DENIED",
+                    "message": "App connections can't turn auto-renew on. Do this in the VoidMob dashboard or with an API key.",
+                    "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#permission_denied",
+                    "request_id": "req_01HXYZ123456789ABCDEFG",
+                    "details": {
+                      "reason": "connection_not_allowed",
+                      "settings_url": "https://dashboard.voidmob.com/account/connected-apps"
+                    }
+                  }
+                }
               }
             }
           }
@@ -9941,13 +10040,33 @@
             "schema": {
               "$ref": "#/components/schemas/ErrorEnvelope"
             },
-            "example": {
-              "success": false,
-              "error": {
-                "code": "SERVICE_UNAVAILABLE",
-                "message": "Service is currently unavailable.",
-                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#service_unavailable",
-                "request_id": "req_01HXYZ123456789ABCDEFG"
+            "examples": {
+              "default": {
+                "summary": "Generic",
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "Service is currently unavailable.",
+                    "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#service_unavailable",
+                    "request_id": "req_01HXYZ123456789ABCDEFG"
+                  }
+                }
+              },
+              "connected_app_purchases_paused": {
+                "summary": "Purchases through connected apps are paused",
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "Purchases through connected apps are paused right now. Try again later.",
+                    "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#service_unavailable",
+                    "request_id": "req_01HXYZ123456789ABCDEFG",
+                    "details": {
+                      "reason": "connected_app_purchases_paused"
+                    }
+                  }
+                }
               }
             }
           }
@@ -10044,7 +10163,7 @@
         }
       },
       "DAILY_SPEND_CAP_EXCEEDED": {
-        "description": "402 - This key has reached its daily spend cap.",
+        "description": "402 - This key has reached its daily spending limit.",
         "headers": {
           "X-RateLimit-Limit": {
             "$ref": "#/components/headers/X-RateLimit-Limit"
@@ -10061,13 +10180,23 @@
             "schema": {
               "$ref": "#/components/schemas/ErrorEnvelope"
             },
-            "example": {
-              "success": false,
-              "error": {
-                "code": "DAILY_SPEND_CAP_EXCEEDED",
-                "message": "This key has reached its daily spend cap.",
-                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#daily_spend_cap_exceeded",
-                "request_id": "req_01HXYZ123456789ABCDEFG"
+            "examples": {
+              "default": {
+                "summary": "The order would take the last 24 hours over the daily limit",
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "DAILY_SPEND_CAP_EXCEEDED",
+                    "message": "This order ($5.00) would go over this API key's daily limit of $10.00 - $3.00 left in the last 24 hours.",
+                    "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#daily_spend_cap_exceeded",
+                    "request_id": "req_01HXYZ123456789ABCDEFG",
+                    "details": {
+                      "limit_cents": 1000,
+                      "remaining_cents": 300,
+                      "settings_url": "https://dashboard.voidmob.com/developers/api-keys"
+                    }
+                  }
+                }
               }
             }
           }
@@ -10091,13 +10220,23 @@
             "schema": {
               "$ref": "#/components/schemas/ErrorEnvelope"
             },
-            "example": {
-              "success": false,
-              "error": {
-                "code": "ORDER_LIMIT_EXCEEDED",
-                "message": "This order is over this key's per-order spending limit.",
-                "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#order_limit_exceeded",
-                "request_id": "req_01HXYZ123456789ABCDEFG"
+            "examples": {
+              "default": {
+                "summary": "The order is over the per-order limit",
+                "value": {
+                  "success": false,
+                  "error": {
+                    "code": "ORDER_LIMIT_EXCEEDED",
+                    "message": "This order ($5.00) is over this API key's per-order limit of $2.00.",
+                    "docs_url": "https://dashboard.voidmob.com/developers/docs?doc=errors#order_limit_exceeded",
+                    "request_id": "req_01HXYZ123456789ABCDEFG",
+                    "details": {
+                      "limit_cents": 200,
+                      "remaining_cents": 200,
+                      "settings_url": "https://dashboard.voidmob.com/developers/api-keys"
+                    }
+                  }
+                }
               }
             }
           }
@@ -11440,9 +11579,6 @@
           },
           "X-RateLimit-Reset": {
             "$ref": "#/components/headers/X-RateLimit-Reset"
-          },
-          "Retry-After": {
-            "$ref": "#/components/headers/Retry-After"
           }
         },
         "content": {

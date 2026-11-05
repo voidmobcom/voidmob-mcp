@@ -19,6 +19,7 @@ import type {
   DedicatedNumber,
 } from "../client/types.js";
 import { formatUsd } from "../utils/format.js";
+import { topupQuote, type TopupPrice } from "../utils/topup-price.js";
 
 // In-memory mock of the VoidMob v1 API. The sandbox registers the SAME live
 // tools (src/tools/*) but with this client injected instead of the real HTTP
@@ -112,6 +113,15 @@ const PROXY_PLANS: ProxyPlan[] = [
 ];
 
 const isDedicatedProxy = (p: Proxy): boolean => p.type === "dedicated_standard" || p.type === "dedicated_premium";
+
+// Shared top-ups are priced by size, like prod: the same list on every package.
+const TOPUP_PRICES: TopupPrice[] = [
+  { additional_gb: 1, price_cents: 399, days_added: 3 },
+  { additional_gb: 10, price_cents: 3500, days_added: 30 },
+  { additional_gb: 25, price_cents: 8125, days_added: 30 },
+  { additional_gb: 50, price_cents: 14950, days_added: 30 },
+  { additional_gb: 100, price_cents: 25000, days_added: 30 },
+];
 
 // Deposit coins, with a fake USD price per coin to work out the amount to send.
 const DEPOSIT_COINS: Array<DepositCoin & { usd: number; decimals: number; confirmations: number }> = [
@@ -772,6 +782,7 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
         expires_at: iso(plan.duration_days * DAY),
         auto_renew: false,
         next_renewal_price_cents: plan.quoted_price_cents,
+        topup_prices: dedicated ? null : TOPUP_PRICES,
         gateway: dedicated
           // A modem's own endpoint (documentation-range IP), HTTP + SOCKS5 ports.
           ? { host: `203.0.113.${rnd(1, 254)}`, port: 8000 + rnd(0, 999), protocol: "http", username: `vm_${alnum(6)}`, password: alnum(12), socks_port: 9000 + rnd(0, 999) }
@@ -825,15 +836,16 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
       }
       if (seg[3] === "topup" && method === "POST") {
         if (isDedicatedProxy(proxy)) return fail(422, "NOT_SUPPORTED", "Not supported for this proxy.");
-        // Priced from the plan's price per GB, like prod.
-        const plan = PROXY_PLANS.find((p) => p.id === proxy.plan_id);
+        // Priced by size and 3 days per GB (10 GB+ = 30), like prod.
         const gb = Number(body.additional_gb ?? 0);
-        const price = plan?.data_gb ? Math.round((plan.quoted_price_cents / plan.data_gb) * gb) : 0;
+        const price = topupQuote(TOPUP_PRICES, gb)?.cents ?? 0;
         if (body.max_price_cents === undefined) return fail(400, "VALIDATION_ERROR", "max_price_cents is required.");
         if (price > Number(body.max_price_cents)) return fail(409, "PRICE_MISMATCH", "Price exceeds the supplied max_price_cents.");
         const paid = charge(price);
         if (paid) return paid;
         proxy.data_gb_total += gb;
+        const base = Math.max(Date.parse(proxy.expires_at), Date.now());
+        proxy.expires_at = new Date(base + Math.min(gb * 3, 30) * DAY).toISOString();
         return ok({ proxy });
       }
       if (seg[3] === "regenerate_password" && method === "POST") {
