@@ -54,7 +54,7 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
 
   it("deposit lifecycle", async () => {
     okResult(await getDepositHandler(ctx)({}));
-    const dep = sc(okResult(await createDepositHandler(ctx)({ coin: "btc", amount_cents: 2000 }))).deposit.id as string;
+    const dep = sc(okResult(await createDepositHandler(ctx)({ coin: "btc", amount_cents: 2500 }))).deposit.id as string;
     expect(sc(okResult(await getDepositHandler(ctx)({ deposit_id: dep }))).deposit.status).toBe("confirming");
     expect(sc(okResult(await getDepositHandler(ctx)({ deposit_id: dep }))).deposit.status).toBe("credited");
   });
