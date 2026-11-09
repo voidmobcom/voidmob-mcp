@@ -125,7 +125,7 @@ const TOPUP_PRICES: TopupPrice[] = [
 
 // Deposit coins, with a fake USD price per coin to work out the amount to send.
 const DEPOSIT_COINS: Array<DepositCoin & { usd: number; decimals: number; confirmations: number }> = [
-  { coin: "btc", asset: "BTC", network: "Bitcoin", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 60_000, decimals: 8, confirmations: 2 },
+  { coin: "btc", asset: "BTC", network: "Bitcoin", min_amount_cents: 2500, max_amount_cents: 1_000_000, usd: 60_000, decimals: 8, confirmations: 2 },
   { coin: "eth", asset: "ETH", network: "Ethereum (ERC-20)", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 3_000, decimals: 6, confirmations: 12 },
   { coin: "ltc", asset: "LTC", network: "Litecoin", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 80, decimals: 6, confirmations: 6 },
   { coin: "sol", asset: "SOL", network: "Solana", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 150, decimals: 6, confirmations: 1 },

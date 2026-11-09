@@ -350,7 +350,7 @@ describe("sandbox deposit flow", () => {
   it("refuses an unknown coin, an amount under the coin's minimum and a ninth open deposit like the API", async () => {
     const ctx = toolContext(createSandboxHttpClient());
     expect(textOf(await createDepositHandler(ctx)({ coin: "doge", amount_cents: 2000 }))).toContain("Unknown coin 'doge'.");
-    expect(textOf(await createDepositHandler(ctx)({ coin: "btc", amount_cents: 499 }))).toContain("minimum deposit of $5.00 (amount_cents 500)");
+    expect(textOf(await createDepositHandler(ctx)({ coin: "btc", amount_cents: 2499 }))).toContain("minimum deposit of $25.00 (amount_cents 2500)");
     expect(textOf(await createDepositHandler(ctx)({ coin: "usdt_trc20", amount_cents: 1499 }))).toContain("minimum deposit of $15.00 (amount_cents 1500)");
     expect(textOf(await createDepositHandler(ctx)({ coin: "usdc_sol", amount_cents: 499 }))).toContain("minimum deposit of $5.00 (amount_cents 500)");
     for (let i = 0; i < 8; i++) {
@@ -366,7 +366,7 @@ describe("sandbox deposit details", () => {
     const created = await createDepositHandler(ctx)({ coin: "ltc", amount_cents: 2000 });
     expect(sc(created).deposit.url).toBe("https://voidmob.com/mcp");
     const coins: Record<string, number> = Object.fromEntries(sc(await getDepositHandler(ctx)({})).coins.map((c: any) => [c.coin, c.min_amount_cents]));
-    expect(coins).toMatchObject({ btc: 500, eth: 500, sol: 500, ltc: 500, usdc_sol: 500, usdt_trc20: 1500 });
+    expect(coins).toMatchObject({ btc: 2500, eth: 500, sol: 500, ltc: 500, usdc_sol: 500, usdt_trc20: 1500 });
   });
 
   it("an unpaid deposit expires when its window ends and stops counting toward the open cap", async () => {
