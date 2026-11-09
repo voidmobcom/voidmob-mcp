@@ -129,8 +129,8 @@ const DEPOSIT_COINS: Array<DepositCoin & { usd: number; decimals: number; confir
   { coin: "eth", asset: "ETH", network: "Ethereum (ERC-20)", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 3_000, decimals: 6, confirmations: 12 },
   { coin: "ltc", asset: "LTC", network: "Litecoin", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 80, decimals: 6, confirmations: 6 },
   { coin: "sol", asset: "SOL", network: "Solana", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 150, decimals: 6, confirmations: 1 },
-  { coin: "usdt_trc20", asset: "USDT", network: "Tron (TRC-20)", min_amount_cents: 5000, max_amount_cents: 1_000_000, usd: 1, decimals: 2, confirmations: 20 },
-  { coin: "usdc_sol", asset: "USDC", network: "Solana", min_amount_cents: 2500, max_amount_cents: 1_000_000, usd: 1, decimals: 2, confirmations: 1 },
+  { coin: "usdt_trc20", asset: "USDT", network: "Tron (TRC-20)", min_amount_cents: 1500, max_amount_cents: 1_000_000, usd: 1, decimals: 2, confirmations: 20 },
+  { coin: "usdc_sol", asset: "USDC", network: "Solana", min_amount_cents: 500, max_amount_cents: 1_000_000, usd: 1, decimals: 2, confirmations: 1 },
 ];
 // Mirrors prod: a deposit's payment window is 60 minutes, and an account can
 // hold 8 deposits that still wait for a payment.
