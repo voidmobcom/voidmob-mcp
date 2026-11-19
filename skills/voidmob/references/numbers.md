@@ -46,6 +46,8 @@ curl -sS -m 30 -H "$H" "$API/dedicated/numbers/ded_abc123?messages_limit=20"
 
 `messages` is empty on the purchase, list and auto-renew responses; use this detail call.
 
+While a renewal is owed (`payment_due` on the number is not `null`), SMS received in that period come back with `text` and `code` `null` and `content_withheld: true`. They are returned in full once the balance covers the amount, which is collected automatically.
+
 ## Keep or stop
 
 - There is no cancel endpoint and no refund. To stop paying, leave auto-renew off; the number stays usable until `expires_at` and then expires.

@@ -55,12 +55,12 @@ Unless the owner set optional spending limits on the key, it can spend the whole
 
 ## Two ways to call
 
-**MCP (preferred).** If tools such as `get_account`, `search_sms_services` or `rent_number` are available, the VoidMob MCP server is configured: use its tools, with the same money rules. It is hosted at `https://mcp.voidmob.com/mcp` (sign in with a VoidMob account), or run locally with `npx -y @voidmob/mcp@2.0.0` (pin a version you have reviewed; source and client configs: https://github.com/voidmobcom/voidmob-mcp) and `VOIDMOB_API_KEY` in the server's environment.
+**MCP (preferred).** If tools such as `get_account`, `search_sms_services` or `rent_number` are available, the VoidMob MCP server is configured: use its tools, with the same money rules. It is hosted at `https://mcp.voidmob.com/mcp` (sign in with a VoidMob account), or run locally with `npx -y @voidmob/mcp@2.1.0` (pin a version you have reviewed; source and client configs: https://github.com/voidmobcom/voidmob-mcp) and `VOIDMOB_API_KEY` in the server's environment.
 
 | Flow | MCP tools |
 |---|---|
 | SMS verification, rental | `search_sms_services`, `rent_number`, `get_rental` (`wait_seconds` waits for the code), `cancel_rental`, `reuse_number`, `re_rent_rental` |
-| Dedicated number | `search_dedicated_countries`, `purchase_dedicated_number`, `get_rental` (reads `ded_` numbers too), `toggle_auto_renew` |
+| Dedicated number | `search_dedicated_countries`, `purchase_dedicated_number`, `get_rental` (reads `ded_` numbers too; `wait_seconds` waits for the next SMS), `toggle_auto_renew` |
 | Proxy | `search_proxies`, `purchase_proxy`, `get_proxy_status` (status, connection URLs, lists), `create_proxy_list`, `update_proxy_list`, `delete_proxy_list`, `rotate_proxy_ip`, `regenerate_proxy_password`, `renew_proxy`, `topup_proxy`, `toggle_auto_renew` |
 | eSIM | `search_esim_plans`, `purchase_esim`, `get_esim_status` (`include_qr` for the QR image), `topup_esim` |
 | Balance, lost results | `get_account`, `list_orders` (`kind`, `status`, `cursor`), `get_geo` |

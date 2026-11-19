@@ -127,7 +127,7 @@ curl -sS -m 60 -X POST "$API/rentals" -H "$H" -H "Content-Type: application/json
 
 - `duration`: `3D`, `7D`, `14D` or `30D`. `auto_renew` defaults to `false`; only set it with the user's approval.
 - `201` returns the rental directly in `data` (no wrapper): `id` (`ren_...`), `phone_number`, `status` (`active`, `expired`, `cancelled`), `expires_at`, `can_cancel`, `cancel_window_expires_at`, `messages`.
-- Read SMS: `GET /rentals/{id}?messages_limit=50`. `messages` is oldest first (newest last): `id`, `code` (or `null`), `text`, `received_at`.
+- Read SMS: `GET /rentals/{id}?messages_limit=50`. `messages` is oldest first (newest last): `id`, `code` (or `null`), `text`, `received_at`. While a renewal is owed (`payment_due` is not `null`), new SMS come back with `text` and `code` `null` and `content_withheld: true` until the balance covers the amount.
 - Cancel with a full refund within 60 minutes of purchase: `DELETE /rentals/{id}` with `Idempotency-Key`. After that it runs to its end date.
 - Auto-renew: `POST /rentals/{id}/auto_renew` with `{"enabled": true|false}` (no key needed). Enabling it means future charges, so ask first.
 - Re-rent an expired number: `POST /rentals/{id}/re_rent` (with `Idempotency-Key`) only when `re_rent_available` is `true`; charges `re_rent_price_cents`.
