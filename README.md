@@ -90,7 +90,7 @@ No sign-in, mock data, a $500 play balance, nothing charged. Make up your own id
 
 No key yet? `VOIDMOB_SANDBOX=1 npx -y @voidmob/mcp@latest` boots in-memory mocks with a $500 play balance; state resets on restart.
 
-The `@latest` in the install commands makes npx check for a new release each time the server starts. Without it, npm 8 and earlier, or a global install, keep running the first version they downloaded. To pin a version you have reviewed, write the version instead (e.g. `@voidmob/mcp@2.0.0`).
+The `@latest` in the install commands makes npx check for a new release each time the server starts. Without it, npm before 9.6.5, or a global install, keeps running the first version it downloaded. To pin a version you have reviewed, write the version instead (e.g. `@voidmob/mcp@2.0.0`).
 
 <details>
 <summary><b>Claude Code</b></summary>
