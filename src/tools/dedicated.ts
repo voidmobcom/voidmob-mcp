@@ -8,7 +8,7 @@ import {
   type DedicatedNumber as DedicatedNumberT,
 } from "../client/types.js";
 import { ToolRefusal } from "../controls/spend-guard.js";
-import { structuredOk, toolError, wrapToolErrors, renderMessages, type ToolResult } from "../utils/render.js";
+import { structuredOk, toolError, wrapToolErrors, renderMessages, renderPaymentDue, type ToolResult } from "../utils/render.js";
 import { formatUsd, formatTimeRemaining, orderSuffix } from "../utils/format.js";
 import { READ_ONLY, SPENDS } from "../utils/annotations.js";
 import { outputObject } from "../utils/output.js";
@@ -117,6 +117,7 @@ export function renderDedicated(d: DedicatedNumberT): string {
     `  Expires:      ${formatTimeRemaining(new Date(d.expires_at).getTime())}`,
   ];
   if (d.nickname) lines.splice(3, 0, `  Nickname:     ${d.nickname}`);
+  if (d.payment_due) lines.push(renderPaymentDue(d.payment_due));
   if (d.messages && d.messages.length > 0) {
     lines.push(...renderMessages(d.messages));
   }

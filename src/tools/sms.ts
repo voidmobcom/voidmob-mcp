@@ -24,6 +24,7 @@ import {
   renderMessages,
   renderUntrustedSms,
   MAX_SHOWN_MESSAGES,
+  renderPaymentDue,
   type ToolExtra,
   type ToolResult,
 } from "../utils/render.js";
@@ -697,6 +698,7 @@ export function registerSmsTools(server: McpServer, ctx: ToolContext) {
     outputSchema: GetRentalOutput,
     annotations: READ_ONLY,
   }, getRentalHandler(ctx));
+  if (r.payment_due) lines.push(renderPaymentDue(r.payment_due));
 
   defineTool(server, ctx, "rent_number", {
     group: "sms",
