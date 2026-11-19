@@ -2,7 +2,7 @@
 // status changes, the window closes, the wait ends or the client cancels; a
 // rental or dedicated number waits for its next SMS.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { HttpClient, HttpResponse } from "../../src/client/http.js";
+import { NetworkError, type HttpClient, type HttpResponse } from "../../src/client/http.js";
 import { getRentalHandler } from "../../src/tools/sms.js";
 import { toolContext } from "../../src/tools/context.js";
 import { dedNumberFixture } from "../fixtures/dedicated.js";
@@ -180,6 +180,16 @@ const sms = (id: string, receivedMs: number) => ({
   received_at: new Date(T0 + receivedMs).toISOString(),
 });
 
+const withheld = (id: string, receivedMs: number) => ({
+  id,
+  code: null,
+  text: null,
+  content_withheld: true,
+  received_at: new Date(T0 + receivedMs).toISOString(),
+});
+
+const paymentDue = { amount_cents: 4899, since: "2026-07-01T12:00:00.000Z" };
+
 const rentalBody = (overrides: Record<string, unknown> = {}) => ({
   id: "ren_wait",
   display_id: "LTR1",
@@ -205,15 +215,29 @@ const rentalBody = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-/** A number whose body is `before` until `flipAtMs`, then `after` (merged over `before`). */
+type Failure = { kind: "http"; status: number; code: string } | { kind: "network" };
+
+/**
+ * A number whose body is `before` until `flipAtMs`, then `after` (merged over
+ * `before`). From the second request on, `failFrom` (a request index) answers
+ * with the given failure instead.
+ */
 function scriptedNumber(
   build: (overrides: Record<string, unknown>) => unknown,
-  opts: { before?: Record<string, unknown>; after?: Record<string, unknown>; flipAtMs?: number } = {},
+  opts: { before?: Record<string, unknown>; after?: Record<string, unknown>; flipAtMs?: number; failFromRequest?: number; failure?: Failure } = {},
 ) {
   const calls: Array<{ path: string; at: number }> = [];
   const http: HttpClient = {
     async request(_method, path) {
       calls.push({ path, at: Date.now() - T0 });
+      if (opts.failFromRequest !== undefined && calls.length > opts.failFromRequest && opts.failure) {
+        if (opts.failure.kind === "network") throw new NetworkError(new Error("socket hang up"));
+        return {
+          status: opts.failure.status,
+          headers: new Headers(),
+          body: { success: false, error: { code: opts.failure.code, message: opts.failure.code, request_id: "req_fail" } },
+        };
+      }
       const flipped = opts.flipAtMs !== undefined && Date.now() - T0 >= opts.flipAtMs;
       return ok(build({ ...opts.before, ...(flipped ? opts.after : {}) }));
     },
@@ -224,17 +248,18 @@ function scriptedNumber(
 describe("get_rental wait_seconds on a dedicated number or rental", () => {
   const dedicated = (o: Record<string, unknown>) => dedNumberFixture(o);
 
-  it("dedicated: a new message ends the wait with backoff 2s then 3s and the SMS fenced", async () => {
+  it("dedicated: a new message ends the wait on the first poll after it arrives, and is fenced", async () => {
     const s = scriptedNumber(dedicated, {
       before: { messages: [sms("msg_old", -60_000)] },
-      after: { messages: [sms("msg_new", 4_000), sms("msg_old", -60_000)] },
+      // The API returns messages oldest first.
+      after: { messages: [sms("msg_old", -60_000), sms("msg_new", 4_000)] },
       flipAtMs: 4_000,
     });
     const pending = getRentalHandler(toolContext(s.http))({ rental_id: "ded_abc123", wait_seconds: 60 }, extra());
     await vi.advanceTimersByTimeAsync(10_000);
     const res = await pending;
     expect(res.isError).toBeFalsy();
-    expect(s.calls.map((c) => c.at)).toEqual([0, 2_000, 5_000]);
+    expect(s.calls.map((c) => c.at)).toEqual([0, 5_000]);
     expect(res.structuredContent).toMatchObject({
       dedicated_number: { id: "ded_abc123" },
       wait: { waited_seconds: 5, outcome: "sms_received" },
@@ -253,12 +278,20 @@ describe("get_rental wait_seconds on a dedicated number or rental", () => {
     const pending = getRentalHandler(toolContext(s.http))({ rental_id: "ded_abc123", wait_seconds: 10 }, extra());
     await vi.advanceTimersByTimeAsync(10_000);
     const res = await pending;
-    expect(s.calls.map((c) => c.at)).toEqual([0, 2_000, 5_000, 10_000]);
+    expect(s.calls.map((c) => c.at)).toEqual([0, 5_000, 10_000]);
     expect(res.structuredContent).toMatchObject({ wait: { waited_seconds: 10, outcome: "wait_ended" } });
     const t = text(res);
     expect(t).toContain("Waited 10s: no new SMS arrived during the wait");
     expect(t).toContain("Call get_rental again with wait_seconds to keep waiting.");
     expect(t).toContain("Code msg_old");
+  });
+
+  it("numbers are polled calmly: 6 reads in a 60 s wait", async () => {
+    const s = scriptedNumber(dedicated);
+    const pending = getRentalHandler(toolContext(s.http))({ rental_id: "ded_abc123", wait_seconds: 60 }, extra());
+    await vi.advanceTimersByTimeAsync(60_000);
+    await pending;
+    expect(s.calls.map((c) => c.at)).toEqual([0, 5_000, 15_000, 30_000, 45_000, 60_000]);
   });
 
   it("dedicated: a number that is not active is read once with no wait key and no note", async () => {
@@ -275,12 +308,26 @@ describe("get_rental wait_seconds on a dedicated number or rental", () => {
     const pending = getRentalHandler(toolContext(s.http))({ rental_id: "ren_wait", wait_seconds: 60 }, extra());
     await vi.advanceTimersByTimeAsync(10_000);
     const res = await pending;
-    expect(s.calls.map((c) => c.at)).toEqual([0, 2_000, 5_000]);
+    expect(s.calls.map((c) => c.at)).toEqual([0, 5_000]);
     expect(res.structuredContent).toMatchObject({ rental: { id: "ren_wait" }, wait: { waited_seconds: 5, outcome: "sms_received" } });
     const lines = text(res).split("\n");
     expect(lines[0]).toBe("Waited 5s: a new SMS arrived.");
     expect(lines[2]).toBe("Rental ren_wait (rental) - order #LTR1");
     expect(text(res)).toContain("Code msg_r1");
+  });
+
+  it("the new SMS shows in the printed block when the number already has more than 10", async () => {
+    const old = Array.from({ length: 12 }, (_, i) => sms(`msg_${String(i).padStart(2, "0")}`, -600_000 + i * 1_000));
+    const s = scriptedNumber(dedicated, { before: { messages: old }, after: { messages: [...old, sms("msg_fresh", 3_000)] }, flipAtMs: 3_000 });
+    const pending = getRentalHandler(toolContext(s.http))({ rental_id: "ded_abc123", wait_seconds: 60 }, extra());
+    await vi.advanceTimersByTimeAsync(10_000);
+    const res = await pending;
+    expect(res.structuredContent).toMatchObject({ wait: { outcome: "sms_received" } });
+    const t = text(res);
+    expect(t).toContain("Messages (latest 10 of 13, newest first)");
+    expect(t).toContain("Code msg_fresh");
+    // Newest first: the fresh one is printed before the previous newest.
+    expect(t.indexOf("Code msg_fresh")).toBeLessThan(t.indexOf("Code msg_11"));
   });
 
   it("honors the request's abort signal after one read", async () => {
@@ -300,7 +347,7 @@ describe("get_rental wait_seconds on a dedicated number or rental", () => {
     const pending = getRentalHandler(toolContext(s.http))({ rental_id: "ded_abc123", wait_seconds: 60 }, extra());
     await vi.advanceTimersByTimeAsync(10_000);
     const res = await pending;
-    expect(s.calls.map((c) => c.at)).toEqual([0, 2_000, 5_000]);
+    expect(s.calls.map((c) => c.at)).toEqual([0, 5_000]);
     expect(res.structuredContent).toMatchObject({ wait: { waited_seconds: 5, outcome: "status_changed" } });
     expect(text(res).split("\n")[0]).toBe("Waited 5s: the number is now expired.");
   });
@@ -308,14 +355,146 @@ describe("get_rental wait_seconds on a dedicated number or rental", () => {
   it("sends progress notifications naming the number, only with a progress token", async () => {
     const sent: Array<{ method: string; params: Record<string, unknown> }> = [];
     const notify = vi.fn(async (n: { method: string; params: Record<string, unknown> }) => { sent.push(n); });
-    const s = scriptedNumber(dedicated, { after: { messages: [sms("msg_p", 3_000)] }, flipAtMs: 3_000 });
+    const s = scriptedNumber(dedicated, { after: { messages: [sms("msg_p", 7_000)] }, flipAtMs: 7_000 });
     const pending = getRentalHandler(toolContext(s.http))(
       { rental_id: "ded_abc123", wait_seconds: 60 },
       extra({ progressToken: "tok-2", notify: notify as unknown as Notify }),
     );
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(20_000);
     await pending;
     expect(sent.map((n) => n.params.message)).toEqual(Array(2).fill("Waiting for an SMS on +4915123456789"));
-    expect(sent[1].params).toMatchObject({ progressToken: "tok-2", progress: 2, total: 60 });
+    expect(sent[1].params).toMatchObject({ progressToken: "tok-2", progress: 5, total: 60 });
+  });
+});
+
+describe("get_rental on a number with withheld SMS", () => {
+  const dedicated = (o: Record<string, unknown>) => dedNumberFixture(o);
+  const owing = { payment_due: paymentDue, messages: [sms("msg_ok", -120_000), withheld("msg_w", -60_000)] };
+
+  for (const [label, id, build, header] of [
+    ["dedicated", "ded_abc123", dedicated, "Dedicated number ded_abc123 - order #DED1"],
+    ["rental", "ren_wait", rentalBody, "Rental ren_wait (rental) - order #LTR1"],
+  ] as const) {
+    it(`${label}: a withheld SMS and the payment due are printed, not a crash`, async () => {
+      const s = scriptedNumber(build, { before: owing });
+      const res = await getRentalHandler(toolContext(s.http))({ rental_id: id }, extra());
+      expect(res.isError).toBeFalsy();
+      const t = text(res);
+      expect(t.split("\n")[0]).toBe(header);
+      expect(t).toContain("  Payment due:  $48.99 since 2026-07-01T12:00:00.000Z - SMS received since then are withheld;");
+      expect(t).toContain("get_account shows the balance and where to add funds");
+      expect(t).toContain(`[${new Date(T0 - 60_000).toISOString()}] withheld until the payment due on this number is paid`);
+      expect(t).not.toMatch(/withheld until the payment due on this number is paid.*code=/);
+      expect(t).toContain("Code msg_ok");
+      // The Payment due line sits before the messages block.
+      expect(t.indexOf("Payment due:")).toBeLessThan(t.indexOf("Messages ("));
+      const key = label === "rental" ? "rental" : "dedicated_number";
+      expect((res.structuredContent as Record<string, any>)[key].payment_due).toEqual(paymentDue);
+      expect((res.structuredContent as Record<string, any>)[key].messages[1]).toMatchObject({ text: null, content_withheld: true });
+    });
+  }
+
+  it("a number without a payment due prints no Payment due line", async () => {
+    const s = scriptedNumber(dedicated, { before: { payment_due: null } });
+    const res = await getRentalHandler(toolContext(s.http))({ rental_id: "ded_abc123" }, extra());
+    expect(text(res)).not.toContain("Payment due");
+  });
+
+  it("a new withheld message ends the wait as sms_received with the withheld summary", async () => {
+    const s = scriptedNumber(dedicated, {
+      before: { payment_due: paymentDue, messages: [sms("msg_ok", -120_000)] },
+      after: { messages: [sms("msg_ok", -120_000), withheld("msg_w", 3_000)] },
+      flipAtMs: 3_000,
+    });
+    const pending = getRentalHandler(toolContext(s.http))({ rental_id: "ded_abc123", wait_seconds: 60 }, extra());
+    await vi.advanceTimersByTimeAsync(10_000);
+    const res = await pending;
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent).toMatchObject({ wait: { waited_seconds: 5, outcome: "sms_received" } });
+    expect(text(res).split("\n")[0]).toBe(
+      "Waited 5s: a new SMS arrived, but its text is withheld until the payment due on this number is paid.",
+    );
+  });
+
+  it("a new readable message next to a withheld one keeps the plain summary", async () => {
+    const s = scriptedNumber(dedicated, {
+      before: { messages: [] },
+      after: { messages: [withheld("msg_w", 2_000), sms("msg_ok", 3_000)] },
+      flipAtMs: 3_000,
+    });
+    const pending = getRentalHandler(toolContext(s.http))({ rental_id: "ded_abc123", wait_seconds: 60 }, extra());
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(text(await pending).split("\n")[0]).toBe("Waited 5s: a new SMS arrived.");
+  });
+});
+
+describe("a failed read in the middle of a wait", () => {
+  const failedLine = (n: number, why: string) =>
+    `Stopped waiting after ${n}s: the next read failed (${why}). Below is the last successful read; call get_rental again to continue.`;
+
+  it("ver_: a 429 on the second read ends the wait with the last good read", async () => {
+    const calls: number[] = [];
+    const http: HttpClient = {
+      async request(_method, path) {
+        calls.push(Date.now() - T0);
+        if (path.endsWith("/messages")) return ok({ messages: [] });
+        if (calls.length > 1) {
+          return { status: 429, headers: new Headers(), body: { success: false, error: { code: "RATE_LIMITED", message: "slow down", request_id: "req_rl" } } };
+        }
+        return ok({ verification: verification() });
+      },
+    };
+    const pending = getRentalHandler(toolContext(http))({ rental_id: "ver_wait", wait_seconds: 60 }, extra());
+    await vi.advanceTimersByTimeAsync(10_000);
+    const res = await pending;
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent).toMatchObject({
+      verification: { id: "ver_wait", status: "waiting_for_code" },
+      wait: { waited_seconds: 2, outcome: "read_failed" },
+    });
+    const lines = text(res).split("\n");
+    expect(lines[0]).toBe(failedLine(2, "Rate limit reached. Wait a few seconds before retrying (request_id: req_rl)"));
+    expect(lines[1]).toBe("");
+    expect(lines[2]).toBe("Verification ver_wait");
+  });
+
+  it("ded_: a 429 on the second read ends the wait with the last good read", async () => {
+    const s = scriptedNumber((o) => dedNumberFixture(o), {
+      before: { messages: [sms("msg_old", -60_000)] },
+      failFromRequest: 1,
+      failure: { kind: "http", status: 429, code: "RATE_LIMITED" },
+    });
+    const pending = getRentalHandler(toolContext(s.http))({ rental_id: "ded_abc123", wait_seconds: 60 }, extra());
+    await vi.advanceTimersByTimeAsync(10_000);
+    const res = await pending;
+    expect(res.isError).toBeFalsy();
+    expect(s.calls.map((c) => c.at)).toEqual([0, 5_000]);
+    expect(res.structuredContent).toMatchObject({
+      dedicated_number: { id: "ded_abc123" },
+      wait: { waited_seconds: 5, outcome: "read_failed" },
+    });
+    const lines = text(res).split("\n");
+    expect(lines[0]).toBe(failedLine(5, "Rate limit reached. Wait a few seconds before retrying (request_id: req_fail)"));
+    expect(lines[2]).toBe("Dedicated number ded_abc123 - order #DED1");
+    expect(text(res)).toContain("Code msg_old");
+  });
+
+  it("a network error mid-wait ends it the same way", async () => {
+    const s = scriptedNumber(rentalBody, { failFromRequest: 1, failure: { kind: "network" } });
+    const pending = getRentalHandler(toolContext(s.http))({ rental_id: "ren_wait", wait_seconds: 60 }, extra());
+    await vi.advanceTimersByTimeAsync(10_000);
+    const res = await pending;
+    expect(res.isError).toBeFalsy();
+    expect(res.structuredContent).toMatchObject({ rental: { id: "ren_wait" }, wait: { outcome: "read_failed" } });
+    expect(text(res).split("\n")[0]).toBe(
+      failedLine(5, "Could not reach dashboard.voidmob.com. Check your connection and retry."),
+    );
+  });
+
+  it("the FIRST read failing is still a tool error", async () => {
+    const s = scriptedNumber((o) => dedNumberFixture(o), { failFromRequest: 0, failure: { kind: "http", status: 429, code: "RATE_LIMITED" } });
+    const res = await getRentalHandler(toolContext(s.http))({ rental_id: "ded_abc123", wait_seconds: 60 }, extra());
+    expect(res.isError).toBe(true);
+    expect(s.calls).toHaveLength(1);
   });
 });
