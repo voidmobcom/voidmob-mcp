@@ -164,4 +164,23 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
     const orders = okResult(await listOrdersHandler(ctx)({ kind: "dedicated" }));
     expect((orders.structuredContent?.orders as unknown[]).length).toBeGreaterThan(0);
   }, 10_000);
+
+  it("get_rental wait_seconds on a fresh dedicated number waits for its first SMS", async () => {
+    const buy = okResult(await purchaseDedicatedNumberHandler(ctx)({ country: "uk", max_price_cents: 1699 }));
+    const id = (buy.structuredContent?.dedicated_number as { id: string }).id;
+    const waited = okResult(await getRentalHandler(ctx)({ rental_id: id, wait_seconds: 10 }));
+    expect(sc(waited).wait).toMatchObject({ outcome: "sms_received" });
+    expect((sc(waited).dedicated_number.messages as unknown[]).length).toBeGreaterThan(0);
+  }, 15_000);
+
+  it("order numbers of new orders look like the real ones", async () => {
+    const shape = /^(SMS|LTR|DED)[0-9A-HJ-NP-Z]{6}$/;
+    const svc = (okResult(await searchSmsServicesHandler(ctx)({})).structuredContent?.services as Array<{ id: string; quoted_price_cents: number }>)[0];
+    const ver = okResult(await rentNumberHandler(ctx)({ service_id: svc.id, max_price_cents: svc.quoted_price_cents }));
+    const ren = okResult(await rentNumberHandler(ctx)({ service_id: svc.id, kind: "rental", duration: "7d", max_price_cents: 100_000 }));
+    const ded = okResult(await purchaseDedicatedNumberHandler(ctx)({ country: "uk", max_price_cents: 1699 }));
+    const ids = [sc(ver).verification.display_id, sc(ren).rental.display_id, sc(ded).dedicated_number.display_id] as string[];
+    expect(ids.map((i) => i.slice(0, 3))).toEqual(["SMS", "LTR", "DED"]);
+    for (const id of ids) expect(id).toMatch(shape);
+  });
 });

@@ -212,6 +212,23 @@ describe("get_rental", () => {
     expect(res.structuredContent?.rental).toMatchObject({ id: "ren_xyz" });
   });
 
+  it("headers show the dashboard order number when set and are unchanged when not", async () => {
+    const ver = (display_id: string | null) => ({ ...verFixture(), display_id });
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/verifications/ver_abc", { status: 200, headers: new Headers(), body: { success: true, data: { verification: ver("SMS1UW0YT") } } });
+    http.expect("GET", "/v1/verifications/ver_abc/messages", noMessages);
+    http.expect("GET", "/v1/verifications/ver_abc", { status: 200, headers: new Headers(), body: { success: true, data: { verification: ver(null) } } });
+    http.expect("GET", "/v1/verifications/ver_abc/messages", noMessages);
+    http.expect("GET", "/v1/rentals/ren_xyz", { status: 200, headers: new Headers(), body: { success: true, data: rntFixture() } });
+    http.expect("GET", "/v1/rentals/ren_xyz", { status: 200, headers: new Headers(), body: { success: true, data: { ...rntFixture(), display_id: null } } });
+    const first = (r: { content: Array<{ type: string; text?: string }> }) => (r.content[0].text ?? "").split("\n")[0];
+    const handler = getRentalHandler(toolContext(http));
+    expect(first(await handler({ rental_id: "ver_abc" }))).toBe("Verification ver_abc - order #SMS1UW0YT");
+    expect(first(await handler({ rental_id: "ver_abc" }))).toBe("Verification ver_abc");
+    expect(first(await handler({ rental_id: "ren_xyz" }))).toBe("Rental ren_xyz (rental) - order #LTR456");
+    expect(first(await handler({ rental_id: "ren_xyz" }))).toBe("Rental ren_xyz (rental)");
+  });
+
   it("rejects bad ID prefix without an HTTP call", async () => {
     const http = createMockHttpClient();
     const res = await getRentalHandler(toolContext(http))({ rental_id: "bad_id" });

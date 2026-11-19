@@ -69,14 +69,22 @@ describe("get_rental with a dedicated number (ded_)", () => {
     expect(res.structuredContent?.rental).toBeUndefined();
   });
 
-  it("reads once: wait_seconds is for verifications only", async () => {
+  it("puts the dashboard order number on the header when there is one", async () => {
     const http = createMockHttpClient();
-    http.expect("GET", "/v1/dedicated/numbers/ded_abc123", okBody(dedNumberFixture()));
-    const res = await getRentalHandler(toolContext(http))({ rental_id: "ded_abc123", wait_seconds: 30 });
-    expect(res.isError).toBeFalsy();
-    expect(http.history).toHaveLength(1);
+    http.expect("GET", "/v1/dedicated/numbers/ded_abc123", okBody(dedNumberFixture({ display_id: "DED8EYVZ2" })));
+    const res = await getRentalHandler(toolContext(http))({ rental_id: "ded_abc123" });
     const t = res.content[0]; if (t.type !== "text") throw new Error("text");
-    expect(t.text).toContain("wait_seconds applies to verifications only");
+    expect(t.text.split("\n")[0]).toBe("Dedicated number ded_abc123 - order #DED8EYVZ2");
+  });
+
+  it("leaves the header unchanged without a dashboard order number", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/dedicated/numbers/ded_abc123", okBody(dedNumberFixture({ display_id: null, nickname: "Work" })));
+    const res = await getRentalHandler(toolContext(http))({ rental_id: "ded_abc123" });
+    const t = res.content[0]; if (t.type !== "text") throw new Error("text");
+    const lines = t.text.split("\n");
+    expect(lines[0]).toBe("Dedicated number ded_abc123");
+    expect(lines[3]).toBe("  Nickname:     Work");
   });
 
   it("rejects an id of another kind without calling the API, naming the three accepted prefixes", async () => {

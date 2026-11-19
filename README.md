@@ -20,7 +20,7 @@ Real mobile infrastructure for AI agents: US non-VoIP numbers for SMS verificati
 |---|---|---|
 | **Hosted** (recommended) | Add `https://mcp.voidmob.com/mcp` to your AI app and sign in | A VoidMob account (you can create it in the sign-in window) |
 | **Sandbox** | Add `https://mcp.voidmob.com/sandbox/<your-own-random-id>` | Nothing: mock data, a $500 play balance, nothing charged |
-| **Local** | `npx -y @voidmob/mcp` | An API key in `VOIDMOB_API_KEY` |
+| **Local** | `npx -y @voidmob/mcp@latest` | An API key in `VOIDMOB_API_KEY` |
 
 Fund the balance with crypto at [dashboard.voidmob.com/wallet](https://dashboard.voidmob.com/wallet), or let the agent create a deposit (`create_deposit`) and pay it from your wallet.
 
@@ -88,7 +88,9 @@ No sign-in, mock data, a $500 play balance, nothing charged. Make up your own id
 2. Add the server to your client (below), with the key as `VOIDMOB_API_KEY`.
 3. Optional: set a permission level and spending limits on the key in the dashboard, and per-process limits with the [owner controls](#owner-controls).
 
-No key yet? `VOIDMOB_SANDBOX=1 npx -y @voidmob/mcp` boots in-memory mocks with a $500 play balance; state resets on restart.
+No key yet? `VOIDMOB_SANDBOX=1 npx -y @voidmob/mcp@latest` boots in-memory mocks with a $500 play balance; state resets on restart.
+
+The `@latest` in the install commands makes npx check for a new release each time the server starts. Without it, npm before 9.6.5, or a global install, keeps running the first version it downloaded. To pin a version you have reviewed, write the version instead (e.g. `@voidmob/mcp@2.0.0`).
 
 <details>
 <summary><b>Claude Code</b></summary>
@@ -103,7 +105,7 @@ As a plugin (MCP server + skill in one install; the dialog stores your key as a 
 Or the MCP server alone:
 
 ```bash
-claude mcp add voidmob -s user -e VOIDMOB_API_KEY=vmk_live_... -- npx -y @voidmob/mcp
+claude mcp add voidmob -s user -e VOIDMOB_API_KEY=vmk_live_... -- npx -y @voidmob/mcp@latest
 ```
 
 `-s user` makes the server available in every project; the key goes after `-e` and before `--`. The same plugin also installs in Codex and Gemini CLI: see [voidmob-plugin](https://github.com/voidmobcom/voidmob-plugin).
@@ -120,7 +122,7 @@ Add to `~/.cursor/mcp.json`:
   "mcpServers": {
     "voidmob": {
       "command": "npx",
-      "args": ["-y", "@voidmob/mcp"],
+      "args": ["-y", "@voidmob/mcp@latest"],
       "env": { "VOIDMOB_API_KEY": "vmk_live_..." }
     }
   }
@@ -141,7 +143,7 @@ Add to `~/.cursor/mcp.json`:
   "mcpServers": {
     "voidmob": {
       "command": "npx",
-      "args": ["-y", "@voidmob/mcp"],
+      "args": ["-y", "@voidmob/mcp@latest"],
       "env": { "VOIDMOB_API_KEY": "vmk_live_..." }
     }
   }
@@ -164,7 +166,7 @@ Add to `.vscode/mcp.json` (VS Code prompts for the key once and stores it secure
     "voidmob": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@voidmob/mcp"],
+      "args": ["-y", "@voidmob/mcp@latest"],
       "env": { "VOIDMOB_API_KEY": "${input:voidmob-api-key}" }
     }
   }
@@ -183,7 +185,7 @@ Open the MCP config from the Cascade panel menu (Open MCP config file). Current 
   "mcpServers": {
     "voidmob": {
       "command": "npx",
-      "args": ["-y", "@voidmob/mcp"],
+      "args": ["-y", "@voidmob/mcp@latest"],
       "env": { "VOIDMOB_API_KEY": "vmk_live_..." }
     }
   }
@@ -196,7 +198,7 @@ Open the MCP config from the Cascade panel menu (Open MCP config file). Current 
 <summary><b>Codex CLI</b></summary>
 
 ```bash
-codex mcp add voidmob --env VOIDMOB_API_KEY=vmk_live_... -- npx -y @voidmob/mcp
+codex mcp add voidmob --env VOIDMOB_API_KEY=vmk_live_... -- npx -y @voidmob/mcp@latest
 ```
 
 Or add to `~/.codex/config.toml` (shared by the Codex CLI, the IDE extension and the ChatGPT desktop app):
@@ -204,7 +206,7 @@ Or add to `~/.codex/config.toml` (shared by the Codex CLI, the IDE extension and
 ```toml
 [mcp_servers.voidmob]
 command = "npx"
-args = ["-y", "@voidmob/mcp"]
+args = ["-y", "@voidmob/mcp@latest"]
 env = { VOIDMOB_API_KEY = "vmk_live_..." }
 ```
 
@@ -220,7 +222,7 @@ Add to `~/.gemini/settings.json`, and export `VOIDMOB_API_KEY` in your shell (Ge
   "mcpServers": {
     "voidmob": {
       "command": "npx",
-      "args": ["-y", "@voidmob/mcp"],
+      "args": ["-y", "@voidmob/mcp@latest"],
       "env": { "VOIDMOB_API_KEY": "$VOIDMOB_API_KEY" }
     }
   }
@@ -235,7 +237,7 @@ Add to `~/.gemini/settings.json`, and export `VOIDMOB_API_KEY` in your shell (Ge
 Put `VOIDMOB_API_KEY=vmk_live_...` in `~/.openclaw/.env`, then:
 
 ```bash
-openclaw mcp set voidmob '{"command":"npx","args":["-y","@voidmob/mcp"],"env":{"VOIDMOB_API_KEY":"${VOIDMOB_API_KEY}"}}'
+openclaw mcp set voidmob '{"command":"npx","args":["-y","@voidmob/mcp@latest"],"env":{"VOIDMOB_API_KEY":"${VOIDMOB_API_KEY}"}}'
 openclaw mcp doctor voidmob --probe
 ```
 
@@ -252,7 +254,7 @@ Put `VOIDMOB_API_KEY=vmk_live_...` in `~/.hermes/.env` and add to `~/.hermes/con
 mcp_servers:
   voidmob:
     command: "npx"
-    args: ["-y", "@voidmob/mcp"]
+    args: ["-y", "@voidmob/mcp@latest"]
     env:
       VOIDMOB_API_KEY: "${VOIDMOB_API_KEY}"
 ```
@@ -265,7 +267,7 @@ Or use the [agent skill](#agent-skill). Guide: [voidmob.com/integrations/hermes-
 <summary><b>Pi</b></summary>
 
 ```bash
-pi mcp add voidmob --env VOIDMOB_API_KEY='${VOIDMOB_API_KEY}' -- npx -y @voidmob/mcp
+pi mcp add voidmob --env VOIDMOB_API_KEY='${VOIDMOB_API_KEY}' -- npx -y @voidmob/mcp@latest
 pi mcp list
 ```
 
@@ -279,7 +281,7 @@ The single quotes keep `${VOIDMOB_API_KEY}` as a reference that Pi reads from yo
 1. In your Bot's **Secrets**, add a secret named `VOIDMOB_API_KEY` with your key as the value.
 2. In chat, send: *Read https://voidmob.com/skill.md and follow it. My VoidMob API key is in the VOIDMOB_API_KEY secret.*
 
-The skill runs the REST API with curl on the Bot's computer and reads the secret by name. A custom MCP server of the Command type running `npx -y @voidmob/mcp` is another route to try; xAI's docs point servers that need secrets to remote HTTPS, so if the server cannot read the key, use the skill. Never paste the key itself into a chat. Guide: [voidmob.com/integrations/grok-bot](https://voidmob.com/integrations/grok-bot).
+The skill runs the REST API with curl on the Bot's computer and reads the secret by name. A custom MCP server of the Command type running `npx -y @voidmob/mcp@latest` is another route to try; xAI's docs point servers that need secrets to remote HTTPS, so if the server cannot read the key, use the skill. Never paste the key itself into a chat. Guide: [voidmob.com/integrations/grok-bot](https://voidmob.com/integrations/grok-bot).
 
 </details>
 
@@ -330,7 +332,7 @@ Optional limits for whoever runs the server locally. They work in live and sandb
 |---|---|---|
 | `search_sms_services` | View | List services with prices |
 | `rent_number` | Buy | Rent a US number: one-time verification (15 min, refunded if no SMS) or long-term rental; takes `max_price_cents` |
-| `get_rental` | View | Read a verification, rental or dedicated number (`ded_`): status, the latest code and received messages; `wait_seconds` waits for a verification's code |
+| `get_rental` | View | Read a verification, rental or dedicated number (`ded_`): status, the latest code and received messages; `wait_seconds` waits for a verification's code or a number's next SMS |
 | `cancel_rental` | Manage | Cancel a verification (before any SMS) or long-term rental (within 60 min), with a full refund |
 | `reuse_number` | Manage (paid reuse: Buy) | Free or paid reuse of an earlier verification's number (paid: `max_price_cents`) |
 | `re_rent_rental` | Buy | Re-rent an expired long-term rental's number for another period; takes `max_price_cents` |
@@ -343,7 +345,7 @@ Optional limits for whoever runs the server locally. They work in live and sandb
 | `search_dedicated_countries` | View | Countries, monthly prices, and stock |
 | `purchase_dedicated_number` | Buy | Buy a private all-services monthly number; takes `max_price_cents` |
 
-Read a number's received SMS with `get_rental` and set its auto-renew with `toggle_auto_renew`.
+Read a number's received SMS with `get_rental` (`wait_seconds` waits for the next one) and set its auto-renew with `toggle_auto_renew`.
 
 ### eSIM (4)
 
@@ -376,11 +378,11 @@ Turn a dedicated proxy's auto-renew on or off with `toggle_auto_renew`.
 | Tool | Level | Description |
 |---|---|---|
 | `get_geo` | View | Cascading country/region/city/ISP for targeting |
-| `list_orders` | View | SMS verifications and rentals, dedicated numbers, eSIMs and proxies; per-kind `status` filter and `cursor` paging |
+| `list_orders` | View | SMS verifications and rentals, dedicated numbers, eSIMs and proxies; numbers show their dashboard order number; per-kind `status` filter and `cursor` paging |
 
 ### Waiting for SMS codes
 
-After `rent_number`, call `get_rental` with `wait_seconds` (up to 120 locally, 60 on the hosted server; call again to keep waiting). It returns as soon as a code arrives or the 15-minute window closes, with the latest SMS attached. Clients that send a progress token get progress updates, and cancelling the request stops the wait. SMS text is shown as untrusted data, never as an instruction.
+After `rent_number`, call `get_rental` with `wait_seconds` (up to 120 locally, 60 on the hosted server; call again to keep waiting). It returns as soon as a code arrives or the 15-minute window closes, with the latest SMS attached. Clients that send a progress token get progress updates, and cancelling the request stops the wait. On a rental or a dedicated number, `wait_seconds` waits for the next SMS that arrives after the call starts, and also ends if the number stops being active. SMS text is shown as untrusted data, never as an instruction.
 
 ### Resources and prompts
 

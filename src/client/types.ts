@@ -111,9 +111,14 @@ export type VerificationMessage = z.infer<typeof VerificationMessage>;
 export const RentalMessage = z.object({
   id: z.string(),
   code: z.string().nullable().optional(),
-  text: z.string(),
+  // Null while the SMS is withheld for a payment due on the number.
+  text: z.string().nullable(),
+  content_withheld: z.boolean().optional(),
   received_at: z.string(),
 });
+
+// Set while a renewal that landed unpaid is owed; the number stays active.
+export const PaymentDue = z.object({ amount_cents: z.number().int(), since: z.string() });
 
 export const Rental = z.object({
   id: z.string(),
@@ -128,6 +133,7 @@ export const Rental = z.object({
   charged_price_cents: z.number().int(),
   auto_renew: z.boolean(),
   next_renewal_price_cents: z.number().int(),
+  payment_due: PaymentDue.nullable().optional(),
   re_rent_available: z.boolean(),
   re_rent_price_cents: z.number().int().nullable(),
   re_rent_blocked_at: z.string().nullable(),
@@ -164,6 +170,7 @@ export const DedicatedNumber = z.object({
   quoted_price_cents: z.number().int(),
   charged_price_cents: z.number().int(),
   next_renewal_price_cents: z.number().int(),
+  payment_due: PaymentDue.nullable().optional(),
   auto_renew: z.boolean(),
   created_at: z.string(),
   paid_until: z.string(),

@@ -37,6 +37,10 @@ const alnum = (n: number): string => {
   const c = "abcdefghijkmnpqrstuvwxyz23456789";
   return Array.from({ length: n }, () => c[rnd(0, c.length - 1)]).join("");
 };
+// Dashboard order numbers: a kind prefix and 6 characters without I and O.
+const ORDER_CHARS = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+const orderNumber = (prefix: "SMS" | "LTR" | "DED"): string =>
+  `${prefix}${Array.from({ length: 6 }, () => ORDER_CHARS[rnd(0, ORDER_CHARS.length - 1)]).join("")}`;
 const phone = (dial = "+1"): string => `${dial}${rnd(200, 989)}${rnd(200, 989)}${rnd(1000, 9999)}`;
 const smsCode = (): string => String(rnd(100000, 999999));
 const ip = (): string => `${rnd(11, 223)}.${rnd(1, 254)}.${rnd(1, 254)}.${rnd(1, 254)}`;
@@ -384,7 +388,7 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
       const id = uid("ver_");
       const v: Verification = {
         id,
-        display_id: id.slice(0, 12),
+        display_id: orderNumber("SMS"),
         status: "waiting_for_code",
         phone_number: phone(),
         service_id: svc.id,
@@ -478,7 +482,7 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
       const days = parseInt(duration, 10) || 7;
       const r: Rental = {
         id,
-        display_id: id.slice(0, 12),
+        display_id: orderNumber("LTR"),
         status: "active",
         phone_number: phone(),
         service_id: svc.id,
@@ -563,7 +567,7 @@ export function createSandboxHttpClient(options: SandboxOptions = {}): HttpClien
       const id = uid("ded_");
       const d: DedicatedNumber = {
         id,
-        display_id: id.slice(4, 10).toUpperCase(),
+        display_id: orderNumber("DED"),
         status: "active",
         phone_number: dedPhone(c.country),
         country: c.country,

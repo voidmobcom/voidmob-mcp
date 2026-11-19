@@ -185,6 +185,40 @@ describe("list_orders overview (no kind)", () => {
   });
 });
 
+describe("list_orders order numbers", () => {
+  it("number rows carry display_id and end with #<id>; a row without one prints no #", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/verifications?limit=100", ok([verificationFixture({ display_id: null })], { next_cursor: null }));
+    http.expect("GET", "/v1/rentals?limit=100", ok([rentalFixture()], { next_cursor: null }));
+    http.expect("GET", "/v1/dedicated/numbers?limit=100", ok([dedNumberFixture({ display_id: "DED8EYVZ2" })], { next_cursor: null }));
+    http.expect("GET", "/v1/esims?limit=100", ok({ esims: [esimFixture()], next_cursor: null }));
+    http.expect("GET", "/v1/proxies?limit=100", ok({ proxies: [proxyFixture()], next_cursor: null }));
+    const res = await listOrdersHandler(toolContext(http))({});
+    const orders = res.structuredContent?.orders as Array<{ kind: string; display_id?: string | null }>;
+    const byKind = (k: string) => orders.find((o) => o.kind === k);
+    expect(byKind("rental")?.display_id).toBe("LTR123");
+    expect(byKind("dedicated")?.display_id).toBe("DED8EYVZ2");
+    expect(byKind("verification")?.display_id ?? null).toBeNull();
+    expect(byKind("esim")).not.toHaveProperty("display_id");
+    expect(byKind("proxy")).not.toHaveProperty("display_id");
+    const lines = text(res).split("\n");
+    const line = (id: string) => lines.find((l) => l.includes(id)) ?? "";
+    expect(line("ren_old")).toMatch(/ {2}#LTR123$/);
+    expect(line("ded_abc123")).toMatch(/ {2}#DED8EYVZ2$/);
+    expect(line("ver_recent")).not.toContain("#");
+    expect(line("esim_mid")).not.toContain("#");
+    expect(line("px_new")).not.toContain("#");
+  });
+
+  it("a single-kind page shows the order number too", async () => {
+    const http = createMockHttpClient();
+    http.expect("GET", "/v1/verifications?limit=20", ok([verificationFixture()], { next_cursor: null }));
+    const res = await listOrdersHandler(toolContext(http))({ kind: "verification" });
+    expect(text(res)).toMatch(/ {2}#SMS1UW0YT\n/);
+    expect(res.structuredContent?.orders).toEqual([expect.objectContaining({ display_id: "SMS1UW0YT" })]);
+  });
+});
+
 describe("list_orders with kind (one paginated list)", () => {
   it("verification: passes limit, status and cursor through and returns next_cursor", async () => {
     const http = createMockHttpClient();
