@@ -39,6 +39,7 @@ const OrderRow = z.object({
   status: z.string(),
   charged_price_cents: z.number().int(),
   created_at: z.string(),
+  display_id: z.string().nullable().optional(),
   summary: z.string(),
 });
 type OrderRow = z.infer<typeof OrderRow>;
@@ -80,7 +81,7 @@ async function fetchKind(ctx: ToolContext, kind: OrderKind, limit: number, statu
       return {
         nextCursor: page.nextCursor,
         rows: z.array(Verification).parse(page.data).map((v) => ({
-          kind, id: v.id, status: v.status, charged_price_cents: v.charged_price_cents, created_at: v.created_at,
+          kind, id: v.id, status: v.status, charged_price_cents: v.charged_price_cents, created_at: v.created_at, display_id: v.display_id,
           summary: `${v.service_name} ${v.phone_number} verification`,
         })),
       };
@@ -90,7 +91,7 @@ async function fetchKind(ctx: ToolContext, kind: OrderKind, limit: number, statu
       return {
         nextCursor: page.nextCursor,
         rows: z.array(Rental).parse(page.data).map((r) => ({
-          kind, id: r.id, status: r.status, charged_price_cents: r.charged_price_cents, created_at: r.created_at,
+          kind, id: r.id, status: r.status, charged_price_cents: r.charged_price_cents, created_at: r.created_at, display_id: r.display_id,
           summary: `${r.service_name} ${r.phone_number} ${r.duration ?? ""}`.trim(),
         })),
       };
@@ -100,7 +101,7 @@ async function fetchKind(ctx: ToolContext, kind: OrderKind, limit: number, statu
       return {
         nextCursor: page.nextCursor,
         rows: z.array(DedicatedNumber).parse(page.data).map((d) => ({
-          kind, id: d.id, status: d.status, charged_price_cents: d.charged_price_cents, created_at: d.created_at,
+          kind, id: d.id, status: d.status, charged_price_cents: d.charged_price_cents, created_at: d.created_at, display_id: d.display_id,
           summary: `${d.country_name} ${d.phone_number} monthly`,
         })),
       };
@@ -132,7 +133,7 @@ async function fetchKind(ctx: ToolContext, kind: OrderKind, limit: number, statu
 
 function rowLine(r: OrderRow): string {
   // 12 = "verification".length, the longest kind
-  return `  [${r.kind.toUpperCase().padEnd(12)}] ${r.id.padEnd(24)} ${r.status.padEnd(16)} ${formatUsd(r.charged_price_cents).padStart(8)} ${r.created_at.slice(0, 16)}  ${r.summary}`;
+  return `  [${r.kind.toUpperCase().padEnd(12)}] ${r.id.padEnd(24)} ${r.status.padEnd(16)} ${formatUsd(r.charged_price_cents).padStart(8)} ${r.created_at.slice(0, 16)}  ${r.summary}${r.display_id ? `  #${r.display_id}` : ""}`;
 }
 
 const newestFirst = (a: OrderRow, b: OrderRow) => b.created_at.localeCompare(a.created_at);
@@ -221,7 +222,7 @@ export function registerOrdersTools(server: McpServer, ctx: ToolContext) {
       "List your orders: SMS verifications (ver_...), long-term rentals (ren_...), dedicated numbers (ded_...), eSIMs (esim_...) and proxies (prx_...), with status and price. " +
       "Without kind: the newest orders of every list. With kind: one page of that list, optionally filtered by status, with a cursor for the next page " +
       "(only verifications are paged newest first). Use it to find an order whose purchase result was lost before buying again (e.g. kind='verification', status='waiting_for_code'), " +
-      "then the matching get tool for details. " +
+      "then the matching get tool for details. Number rows end with the dashboard's order number (#...), so an order the user names by that number can be matched to its id. " +
       `Statuses - verification: ${KIND_STATUSES.verification.join("/")}; rental: ${KIND_STATUSES.rental.join("/")}; dedicated: ${KIND_STATUSES.dedicated.join("/")}; ` +
       `esim: ${KIND_STATUSES.esim.join("/")}; proxy: ${KIND_STATUSES.proxy.join("/")}.`,
     inputSchema: {

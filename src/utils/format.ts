@@ -23,3 +23,8 @@ export function formatTimeRemaining(expiryMs: number): string {
   if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
 }
+
+/** The dashboard's order number as a header suffix; empty when the order has none. */
+export function orderSuffix(displayId: string | null | undefined): string {
+  return displayId ? ` - order #${displayId}` : "";
+}

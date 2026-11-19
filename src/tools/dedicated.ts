@@ -9,7 +9,7 @@ import {
 } from "../client/types.js";
 import { ToolRefusal } from "../controls/spend-guard.js";
 import { structuredOk, toolError, wrapToolErrors, renderMessages, type ToolResult } from "../utils/render.js";
-import { formatUsd, formatTimeRemaining } from "../utils/format.js";
+import { formatUsd, formatTimeRemaining, orderSuffix } from "../utils/format.js";
 import { READ_ONLY, SPENDS } from "../utils/annotations.js";
 import { outputObject } from "../utils/output.js";
 import { newIdempotencyKey } from "../client/idempotency.js";
@@ -106,7 +106,7 @@ export const purchaseDedicatedNumberHandler = (ctx: ToolContext) =>
 /** A dedicated number for purchase_dedicated_number and get_rental (ded_ ids). */
 export function renderDedicated(d: DedicatedNumberT): string {
   const lines = [
-    `Dedicated number ${d.id}`,
+    `Dedicated number ${d.id}${orderSuffix(d.display_id)}`,
     ``,
     `  Phone:        ${d.phone_number}`,
     `  Country:      ${d.country_name} (${d.country})`,
@@ -145,7 +145,7 @@ export function registerDedicatedTools(server: McpServer, ctx: ToolContext) {
     description:
       "Buy a dedicated monthly number in a country from search_dedicated_countries, charged to your balance immediately for the first month. " +
       "Requires max_price_cents: the monthly price you showed the user and they approved; if the price is now higher, nothing is charged and the new price comes back to re-confirm. " +
-      "There is no cancel or refund - to stop paying, leave auto_renew off and let the month run out. Returns a ded_ id - poll get_rental with it to read incoming SMS.",
+      "There is no cancel or refund - to stop paying, leave auto_renew off and let the month run out. Returns a ded_ id - call get_rental with it (and wait_seconds to wait for the next SMS) to read incoming SMS.",
     inputSchema: {
       country: z.string().min(2).max(40).describe("Country code or name from search_dedicated_countries (e.g. 'us', 'uk', 'germany')"),
       auto_renew: z.boolean().default(false).describe(

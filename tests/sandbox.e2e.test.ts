@@ -164,4 +164,12 @@ describe("sandbox e2e (every tool resolves against the mock)", () => {
     const orders = okResult(await listOrdersHandler(ctx)({ kind: "dedicated" }));
     expect((orders.structuredContent?.orders as unknown[]).length).toBeGreaterThan(0);
   }, 10_000);
+
+  it("get_rental wait_seconds on a fresh dedicated number waits for its first SMS", async () => {
+    const buy = okResult(await purchaseDedicatedNumberHandler(ctx)({ country: "uk", max_price_cents: 1699 }));
+    const id = (buy.structuredContent?.dedicated_number as { id: string }).id;
+    const waited = okResult(await getRentalHandler(ctx)({ rental_id: id, wait_seconds: 10 }));
+    expect(sc(waited).wait).toMatchObject({ outcome: "sms_received" });
+    expect((sc(waited).dedicated_number.messages as unknown[]).length).toBeGreaterThan(0);
+  }, 15_000);
 });
